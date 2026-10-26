@@ -1,7 +1,7 @@
 package soloMapling.Environment;
 
-import client.Character;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.ArtificialPlayer.BotGeneration;
 import soloMapling.ArtificialPlayer.BotHelpers;
@@ -468,31 +468,9 @@ public class PlatformPlacement {
         return yDifference * 10 + (xDistanceFromCenter / 10);
     }
 
-    /**
-     * Gets all available platform IDs for a given map by scanning the directory.
-     *
-     * @param mapId The map ID
-     * @return List of platform IDs (e.g., ["m1", "m2", "m3"])
-     */
+    /** Lists recorded platform IDs from either the source tree or packaged movement data. */
     public static List<String> getAvailablePlatformIds(int mapId) {
-        List<String> platformIds = new ArrayList<>();
-        File mapDir = new File(BASE_PATH + "/map" + mapId);
-
-        if (!mapDir.exists() || !mapDir.isDirectory()) {
-            return platformIds;
-        }
-
-        File[] files = mapDir.listFiles((dir, name) -> name.endsWith(".csv"));
-
-        if (files != null) {
-            for (File file : files) {
-                String name = file.getName();
-                // Remove .csv extension to get platform ID
-                platformIds.add(name.substring(0, name.length() - 4));
-            }
-        }
-        //debugprint("MapID", mapId, "Platform ids: ", platformIds);
-        return platformIds;
+        return new ArrayList<>(SoloResources.listBasenames(BASE_PATH + "/map" + mapId, ".csv"));
     }
 
     public static List<String> getMainPlatformIds(int mapId) {

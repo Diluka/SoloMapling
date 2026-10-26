@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.BotGrindSystem;
 
-import constants.id.MapId;
+import org.gms.constants.id.MapId;
 
 import java.awt.Point;
 import java.util.Map;
@@ -26,12 +26,12 @@ public final class DeepHub {
 
     private static final Map<Integer, Info> HUBS = Map.of(
             // Ant Tunnel Park: 58-spawn grind field; restock at the "24 Hr Mobile Store" food cart (NPC 1061001).
-            MapId.ANT_TUNNEL_PARK, new Info(MapId.ANT_TUNNEL_PARK, new Point(333, -249), false),
+            soloMapling.server.SoloMaplingConstants.GameConstants.ANT_TUNNEL_PARK, new Info(soloMapling.server.SoloMaplingConstants.GameConstants.ANT_TUNNEL_PARK, new Point(333, -249), false),
             // Sharp Cliff I: 33-spawn grind field reached one-way from Ice Valley II (Jeff); no on-map vendor.
-            MapId.SHARP_CLIFF_I, new Info(MapId.SHARP_CLIFF_I, null, false),
+            soloMapling.server.SoloMaplingConstants.GameConstants.SHARP_CLIFF_I, new Info(soloMapling.server.SoloMaplingConstants.GameConstants.SHARP_CLIFF_I, null, false),
             // Path of Time Hub: mobless deep-Ludibrium potion junction (grocer "Toly", NPC 2040051) for pros;
             // one-directional — its high-level cohort only trains DEEPER, never back up toward Ludibrium town.
-            MapId.PATH_OF_TIME_HUB, new Info(MapId.PATH_OF_TIME_HUB, new Point(-83, 2918), true));
+            soloMapling.server.SoloMaplingConstants.GameConstants.PATH_OF_TIME_HUB, new Info(soloMapling.server.SoloMaplingConstants.GameConstants.PATH_OF_TIME_HUB, new Point(-83, 2918), true));
 
     // The hub descriptor for a spawn map, or null if the map isn't a registered deep hub.
     public static Info of(int mapId) {

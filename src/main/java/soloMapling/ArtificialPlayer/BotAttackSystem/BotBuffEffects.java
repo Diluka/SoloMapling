@@ -1,13 +1,13 @@
 package soloMapling.ArtificialPlayer.BotAttackSystem;
 
-import client.Character;
-import client.Skill;
-import client.SkillFactory;
-import net.server.Server;
-import net.server.world.Party;
-import server.StatEffect;
+import org.gms.client.Character;
+import org.gms.client.Skill;
+import org.gms.client.SkillFactory;
+import org.gms.net.server.Server;
+import org.gms.net.server.world.Party;
+import org.gms.server.StatEffect;
 import soloMapling.ArtificialPlayer.BotHelpers;
-import tools.PacketCreator;
+import org.gms.util.PacketCreator;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -16,7 +16,7 @@ import java.util.Collections;
 import java.util.List;
 
 /*
- * Buff-visual packet ids here are vanilla Cosmic (server.StatEffect), not GreenCatMS-sourced.
+ * Buff-visual packet ids here are vanilla Cosmic (org.gms.server.StatEffect), not GreenCatMS-sourced.
  * The "show a buff" broadcast for bots. Vanilla StatEffect.applyTo does far more than the
  * visual (HP/MP, consumption, morphs, effect registration) and bails out on many branches,
  * so for cosmetic bots we fire just the two broadcasts that make a buff look like it happened:
@@ -90,7 +90,7 @@ public final class BotBuffEffects {
         StatEffect effect = skill.getEffect(skill.getMaxLevel());
         if (effect == null) return 0;
 
-        if (effect.isPartyBuff()) {
+        if (effect.soloIsPartyBuff()) {
             applyToTargets(bot, effect, skillId, nearbyPartyMembers(bot));
         }
         return effect.getDuration();

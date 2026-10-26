@@ -82,6 +82,11 @@ public final class BotTickService {
         ENTRIES.remove(botId);
     }
 
+    /** Drop callbacks holding the old world's bots; the empty shared wheel stays reusable. */
+    public static void clear() {
+        ENTRIES.clear();
+    }
+
     public static boolean isRegistered(int botId) {
         return ENTRIES.containsKey(botId);
     }

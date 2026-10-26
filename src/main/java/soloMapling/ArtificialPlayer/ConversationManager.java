@@ -1,9 +1,11 @@
 package soloMapling.ArtificialPlayer;
 
-import client.Character;
+import soloMapling.Environment.SoloResources;
+
+import org.gms.client.Character;
 import com.esotericsoftware.yamlbeans.YamlReader;
-import net.server.Server;
-import server.maps.MapleMap;
+import org.gms.net.server.Server;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotTownSystem.TownPresenceConfig;
@@ -11,10 +13,11 @@ import soloMapling.ArtificialPlayer.BotTypes.SocialBot;
 import soloMapling.server.ExecutorServiceManager;
 
 import java.awt.*;
-import java.io.FileReader;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static soloMapling.ArtificialPlayer.BotCommandsPack.SocialCommands.BotEmote;
@@ -31,6 +34,8 @@ public class ConversationManager {
     private ScheduledFuture<?> scheduledTask;
     private final Random random = new Random();
     private boolean running = false;
+    private long generation;
+    private final Set<FutureTask<?>> activeTasks = new HashSet<>();
 
     private static final int MIN_INTERVAL_MS = 20_000;
     private static final int MAX_INTERVAL_MS = 40_000;
@@ -39,7 +44,7 @@ public class ConversationManager {
     private static final int SMALL_MAP_MAX_INTERVAL_MS = 100_000;
     private static final int SMALL_MAP_THRESHOLD = 20;
 
-    private final Map<Integer, Long> lastConversationPerMap = new HashMap<>();
+    private final Map<Integer, Long> lastConversationPerMap = new ConcurrentHashMap<>();
 
     private static final double CLUSTER_RANGE_X = 250;
     private static final int CLUSTER_RANGE_Y = 30;
@@ -64,7 +69,7 @@ public class ConversationManager {
     private final LinkedList<String> recentScriptIds = new LinkedList<>();
     private static final int RECENT_HISTORY_SIZE = 20;
 
-    private List<ConversationScript> allScripts;
+    private volatile List<ConversationScript> allScripts;
 
     private ConversationManager() {}
 
@@ -75,12 +80,13 @@ public class ConversationManager {
         return instance;
     }
 
-    public void start() {
+    public synchronized void start() {
         if (running) return;
         running = true;
+        generation++;
         loadScripts();
         refreshMapScope();
-        scheduleNextTick();
+        scheduleNextTick(generation);
         log("[ConversationManager] Started with " + (allScripts != null ? allScripts.size() : 0) + " scripts.");
     }
 
@@ -100,12 +106,24 @@ public class ConversationManager {
         return ids;
     }
 
-    public void stop() {
+    public static synchronized void stopIfStarted() {
+        if (instance != null) instance.stop();
+    }
+
+    public synchronized void stop() {
         running = false;
+        generation++;
         if (scheduledTask != null) {
             scheduledTask.cancel(false);
+            scheduledTask = null;
         }
+        for (FutureTask<?> task : new ArrayList<>(activeTasks)) task.cancel(true);
+        activeTasks.clear();
         botsInConversation.clear();
+        lastConversationPerMap.clear();
+        recentScriptIds.clear();
+        allScripts = null;
+        ambientMapIds = Set.of();
         log("[ConversationManager] Stopped.");
     }
 
@@ -113,27 +131,49 @@ public class ConversationManager {
         return botsInConversation.contains(characterId);
     }
 
-    private void scheduleNextTick() {
-        if (!running) return;
+    private synchronized boolean isCurrent(long runGeneration) {
+        return running && generation == runGeneration && !Thread.currentThread().isInterrupted();
+    }
+
+    private synchronized void submitTask(long runGeneration, Runnable action) {
+        if (!isCurrent(runGeneration)) return;
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            if (isCurrent(runGeneration)) action.run();
+        }, null) {
+            @Override
+            protected void done() {
+                synchronized (ConversationManager.this) {
+                    activeTasks.remove(this);
+                }
+            }
+        };
+        activeTasks.add(task);
+        ExecutorServiceManager.getVirtualThreadExecutorService().execute(task);
+    }
+
+    private synchronized void scheduleNextTick(long runGeneration) {
+        if (!isCurrent(runGeneration)) return;
         int delay = MIN_INTERVAL_MS + random.nextInt(MAX_INTERVAL_MS - MIN_INTERVAL_MS);
         // Fable Phase 4: run the tick body on a virtual thread - conversation playback
         // sleeps between lines, and that used to pin one of the shared scheduled pool's
         // threads for the whole script. The next tick is still scheduled only after the
         // current one finishes, so conversations never overlap.
         scheduledTask = ExecutorServiceManager.getScheduledExecutorService().schedule(
-                () -> ExecutorServiceManager.runAsync(() -> {
+                () -> submitTask(runGeneration, () -> {
                     try {
-                        tick();
+                        tick(runGeneration);
                     } catch (Exception e) {
                         log("[ConversationManager] Error during tick: " + e.getMessage());
                         e.printStackTrace();
                     }
-                    scheduleNextTick();
+                    scheduleNextTick(runGeneration);
                 }), delay, TimeUnit.MILLISECONDS);
     }
 
-    private void tick() {
-        if (allScripts == null || allScripts.isEmpty()) return;
+    private void tick(long runGeneration) {
+        if (!isCurrent(runGeneration)) return;
+        List<ConversationScript> scripts = allScripts;
+        if (scripts == null || scripts.isEmpty()) return;
 
         Set<Integer> mapsWithRealPlayers = getMapsWithRealPlayers();
         if (mapsWithRealPlayers.isEmpty()) return;
@@ -141,13 +181,17 @@ public class ConversationManager {
         long now = System.currentTimeMillis();
 
         for (int mapId : ambientMapIds) {
+            if (!isCurrent(runGeneration)) return;
             if (!mapsWithRealPlayers.contains(mapId)) continue;
             if (!isMapCooldownReady(mapId, now)) continue;
 
             List<Character> cluster = findClusterOnMap(mapId);
             if (cluster != null && cluster.size() >= 2) {
-                lastConversationPerMap.put(mapId, now);
-                startConversation(cluster, null);
+                synchronized (this) {
+                    if (!isCurrent(runGeneration)) return;
+                    lastConversationPerMap.put(mapId, now);
+                    startConversation(cluster, null, runGeneration);
+                }
                 return;
             }
         }
@@ -182,7 +226,8 @@ public class ConversationManager {
         return maps;
     }
 
-    public void triggerOnMap(Character player) {
+    public synchronized void triggerOnMap(Character player) {
+        if (!running) return;
         if (allScripts == null || allScripts.isEmpty()) {
             loadScripts();
         }
@@ -244,7 +289,12 @@ public class ConversationManager {
         return null;
     }
 
-    private void startConversation(List<Character> cluster, Character debugPlayer) {
+    private synchronized void startConversation(List<Character> cluster, Character debugPlayer) {
+        startConversation(cluster, debugPlayer, generation);
+    }
+
+    private synchronized void startConversation(List<Character> cluster, Character debugPlayer, long runGeneration) {
+        if (!isCurrent(runGeneration)) return;
         int clusterSize = cluster.size();
         ConversationScript script = pickScript(clusterSize);
         if (script == null) {
@@ -276,15 +326,17 @@ public class ConversationManager {
             }
         }
 
-        ExecutorServiceManager.runAsync(() -> {
+        submitTask(runGeneration, () -> {
             try {
-                playConversation(participants, script);
+                playConversation(participants, script, runGeneration);
             } catch (Exception e) {
                 log("[ConversationManager] Conversation playback error: " + e.getMessage());
                 e.printStackTrace();
             } finally {
-                for (Character chr : participants) {
-                    botsInConversation.remove(chr.getId());
+                synchronized (ConversationManager.this) {
+                    if (generation == runGeneration) {
+                        for (Character chr : participants) botsInConversation.remove(chr.getId());
+                    }
                 }
             }
         });
@@ -312,9 +364,9 @@ public class ConversationManager {
     }
 
     // Deliberate synchronous choreography: runs on its own virtual thread (runAsync
-    // above), line delays are YAML data-driven, and the `running` check between
-    // lines is the kill switch. Blocking here is the point - do not de-sleep.
-    private void playConversation(List<Character> participants, ConversationScript script) {
+    // above), line delays are YAML data-driven, and each generation owns cancellable
+    // playback tasks. Blocking here is the point - do not de-sleep.
+    private void playConversation(List<Character> participants, ConversationScript script, long runGeneration) {
         Map<String, Character> roleMap = new HashMap<>();
         String[] roles = {"A", "B", "C", "D"};
         for (int i = 0; i < participants.size(); i++) {
@@ -323,23 +375,27 @@ public class ConversationManager {
 
         Point center = calculateCenter(participants);
         for (Character chr : participants) {
-            botFaceTowardsPoint(chr, center);
+            synchronized (this) {
+                if (!isCurrent(runGeneration)) return;
+                botFaceTowardsPoint(chr, center);
+            }
         }
-        blockingSleep(800);
+        if (!blockingSleep(800)) return;
 
         for (ConversationScript.ConversationLine line : script.getLines()) {
-            if (!running) return;
+            if (!isCurrent(runGeneration)) return;
 
             Character speaker = roleMap.get(line.getSpeaker());
             if (speaker == null) continue;
 
             if (line.getDelayMs() > 0) {
-                blockingSleep((int) line.getDelayMs());
+                if (!blockingSleep((int) line.getDelayMs())) return;
             }
 
-            BotSpeak(speaker, line.getText());
-            if (line.hasEmote()) {
-                BotEmote(speaker, line.getEmote());
+            synchronized (this) {
+                if (!isCurrent(runGeneration)) return;
+                BotSpeak(speaker, line.getText());
+                if (line.hasEmote()) BotEmote(speaker, line.getEmote());
             }
         }
 
@@ -360,8 +416,8 @@ public class ConversationManager {
     @SuppressWarnings("unchecked")
     private void loadScripts() {
         allScripts = new ArrayList<>();
-        try {
-            YamlReader reader = new YamlReader(new FileReader(DIALOGUE_YAML));
+        try (java.io.Reader source = SoloResources.openReader(DIALOGUE_YAML)) {
+            YamlReader reader = new YamlReader(source);
             Map<String, Object> root = (Map<String, Object>) reader.read();
             Map<String, Object> conversations = (Map<String, Object>) root.get("conversations");
             if (conversations == null) return;

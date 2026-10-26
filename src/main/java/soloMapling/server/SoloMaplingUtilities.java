@@ -1,10 +1,10 @@
 package soloMapling.server;
 
-import client.Character;
-import net.server.Server;
-import net.server.channel.Channel;
-import net.server.world.World;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.net.server.Server;
+import org.gms.net.server.channel.Channel;
+import org.gms.net.server.world.World;
+import org.gms.server.maps.MapleMap;
 
 import java.util.List;
 import java.util.Random;
@@ -14,8 +14,14 @@ import java.util.function.Supplier;
 public class SoloMaplingUtilities {
 
     public static Random random = new Random();
-    public static final Channel channel = Server.getInstance().getChannel(SoloMaplingConstants.GameConstants.WORLD_SCANIA, SoloMaplingConstants.GameConstants.CHANNEL_1);
-    public static final World world = Server.getInstance().getWorld(SoloMaplingConstants.GameConstants.WORLD_SCANIA);
+    public static Channel channel() {
+        return Server.getInstance().getChannel(SoloMaplingConstants.GameConstants.WORLD_SCANIA,
+                SoloMaplingConstants.GameConstants.CHANNEL_1);
+    }
+
+    public static World world() {
+        return Server.getInstance().getWorld(SoloMaplingConstants.GameConstants.WORLD_SCANIA);
+    }
 
     // A 1-in-N dice roll, NOT a percent chance: rollChanceInverse(20) is true one time in 20.
     // The bigger the number, the lower the chance. For percent semantics use chance(percent).
@@ -50,14 +56,14 @@ public class SoloMaplingUtilities {
         }
     }
 
-    public static client.Character getChr(int userId) {
-        Character chr = SoloMaplingConstants.mainChannel.getPlayerStorage().getCharacterById(userId);
-        return chr;
+    public static org.gms.client.Character getChr(int userId) {
+        Channel current = channel();
+        return current == null ? null : current.getPlayerStorage().getCharacterById(userId);
     }
 
     public static Character getChr(String name) {
-        Character chr = SoloMaplingConstants.mainChannel.getPlayerStorage().getCharacterByName(name);
-        return chr;
+        Channel current = channel();
+        return current == null ? null : current.getPlayerStorage().getCharacterByName(name);
     }
 
     public static String getTextAfterColon(String input) {
@@ -133,7 +139,7 @@ public class SoloMaplingUtilities {
     }
 
     public static MapleMap getMapleMapById(int id) {
-        MapleMap map = Server.getInstance().getChannel(0, 1).getMapFactory().getMap(id);
+        MapleMap map = channel().getMapFactory().getMap(id);
         return map;
     }
 

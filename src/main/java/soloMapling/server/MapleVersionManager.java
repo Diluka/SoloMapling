@@ -1,6 +1,7 @@
 package soloMapling.server;
 
-import java.io.FileReader;
+import soloMapling.Environment.SoloResources;
+
 import java.util.Map;
 
 import com.esotericsoftware.yamlbeans.YamlReader;
@@ -27,8 +28,8 @@ public class MapleVersionManager {
 
 
     public static void loadNPCVersions(String yamlFilePath) {
-        try {
-            YamlReader reader = new YamlReader(new FileReader(yamlFilePath));
+        try (java.io.Reader source = SoloResources.openReader(yamlFilePath)) {
+            YamlReader reader = new YamlReader(source);
             Map<String, Map<String, String>> data = (Map<String, Map<String, String>>) reader.read();
             npcReleaseVersions = data.get("npc_versions");
         } catch (Exception e) {
@@ -50,8 +51,8 @@ public class MapleVersionManager {
     }
 
     public static void loadPortalVersions(String yamlFilePath) {
-        try {
-            YamlReader reader = new YamlReader(new FileReader(yamlFilePath));
+        try (java.io.Reader source = SoloResources.openReader(yamlFilePath)) {
+            YamlReader reader = new YamlReader(source);
             Map<String, Map<String, String>> data = (Map<String, Map<String, String>>) reader.read();
             portalReleaseVersions = data.get("portal_versions");
         } catch (Exception e) {

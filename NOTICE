@@ -1,0 +1,53 @@
+SoloMapling — BeiDou integration
+===============================
+
+This repository is a derivative integration of SoloMapling with BeiDou.
+The combined application remains under the GNU Affero General Public License
+version 3. See LICENSE. Existing source-file notices and version restrictions
+remain in effect; this notice does not broaden them.
+
+Original SoloMapling
+-------------------
+Project: https://github.com/MadaraGameDev/SoloMapling
+Authors: MadaraGameDev / Richy and the original SoloMapling contributors
+Integration starting point: 47b61b5381118ebdc1064ddbd0b1c32f75778871
+
+SoloMapling is built on Cosmic and contains Cosmic / HeavenMS / OdinMS-derived
+engine code. Existing copyright notices, including those of Patrick Huy,
+Matthias Butz, Jan Christian Meyer, RonanLana and other contributors, are retained
+in their source files.
+
+Cosmic: https://github.com/P0nk/Cosmic
+
+BeiDou
+------
+Project: https://github.com/BeiDouMS/BeiDou-Server
+Authors: BeiDou and its upstream contributors
+The official source is referenced by the upstream/BeiDou-Server submodule.
+The initial integration baseline is release 1.12:
+75a86268738ca8845e06ea9d59ec36d15b22c91b
+
+The submodule source is not edited. Integration and build-time weaving are
+maintained in this repository, and the generated application is a modified
+derivative rather than an unmodified official BeiDou distribution.
+
+Selected plugin improvements
+----------------------------
+Source: https://github.com/zmzeng/solomapling-plugin
+Local maintained source: https://github.com/Diluka/solomapling-plugin
+Copyright (C) 2026 the SoloMapling Plugin contributors
+
+Selected features, including the SocialBot LLM integration, are adapted from
+this AGPL-3.0 plugin port. Source commits and integration changes are recorded
+in the relevant feature commits and tracking issues. Reusing these features
+does not imply that the complete plugin architecture or every plugin feature
+has been adopted.
+
+Additional integration work is maintained by the Diluka/SoloMapling
+contributors under AGPL-3.0. This project is not an official release of
+SoloMapling, Cosmic or BeiDou and does not imply endorsement by their authors.
+
+Dependencies and third-party assets retain their own licenses and notices.
+The complete corresponding source for a distributed or network-served build
+includes the integration sources, weaving and build rules, and the exact
+BeiDou submodule revision used for that build.

@@ -1,7 +1,7 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -70,16 +70,20 @@ final class GCMovementDriver {
             });
 
     static void start(BotMovementState entry) {
-        stop(entry);
-        entry.tickStopped = false;
-        scheduleNext(entry, 0);
+        synchronized (entry) {
+            stop(entry);
+            entry.tickStopped = false;
+            scheduleNext(entry, 0);
+        }
     }
 
     static void stop(BotMovementState entry) {
-        entry.tickStopped = true; // gate the self-reschedule; an in-flight tick may finish once more
-        if (entry.task != null) {
-            entry.task.cancel(false);
-            entry.task = null;
+        synchronized (entry) {
+            entry.tickStopped = true;
+            if (entry.task != null) {
+                entry.task.cancel(false);
+                entry.task = null;
+            }
         }
     }
 
@@ -93,13 +97,16 @@ final class GCMovementDriver {
      * though the physical pool thread may differ.
      */
     private static void scheduleNext(BotMovementState entry, long delayMs) {
-        if (entry.tickStopped) {
-            return;
+        synchronized (entry) {
+            if (entry.tickStopped) return;
+            entry.task = POOL.schedule(() -> {
+                synchronized (entry) {
+                    if (entry.tickStopped) return;
+                    safeTick(entry);
+                    scheduleNext(entry, nextDelayMs(entry));
+                }
+            }, delayMs, TimeUnit.MILLISECONDS);
         }
-        entry.task = POOL.schedule(() -> {
-            safeTick(entry);
-            scheduleNext(entry, nextDelayMs(entry));
-        }, delayMs, TimeUnit.MILLISECONDS);
     }
 
     private static long nextDelayMs(BotMovementState entry) {

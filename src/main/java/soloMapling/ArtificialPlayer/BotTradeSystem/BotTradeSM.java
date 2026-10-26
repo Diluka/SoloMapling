@@ -1,9 +1,9 @@
 package soloMapling.ArtificialPlayer.BotTradeSystem;
 
-import client.Character;
-import client.inventory.Equip;
-import client.inventory.Item;
-import server.Trade;
+import org.gms.client.Character;
+import org.gms.client.inventory.Equip;
+import org.gms.client.inventory.Item;
+import org.gms.server.Trade;
 import soloMapling.ArtificialPlayer.BotBlockList;
 import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.server.BotTiming;
@@ -44,6 +44,10 @@ public class BotTradeSM {
     private boolean tradeComplete = false;
     private TradeMode tradeMode = TradeMode.NULL;
     private Trade.TradeResult lastTradeResult = null;
+    private Trade activeTrade;
+    private Item advertisedEscrow;
+    private int advertisedItemId;
+    private short advertisedQuantity;
 
 
     protected BotTradeSM.TradeState tradeState;
@@ -107,13 +111,18 @@ public class BotTradeSM {
     public void update() {
         switch (getTradeState()) {
             case INITIALIZE:
+                activeTrade = getChr().getTrade();
+                if (activeTrade == null || activeTrade.getPartner() == null) {
+                    abortSale();
+                    break;
+                }
                 startTradeCallback();
                 if (isSelling()) {
                     // Selling flow: Post items first, then wait for response
                     if (postItemsForSale()) {
                         setTradeState(TradeState.RESPONDING);
                     } else {
-                        setTradeState(TradeState.WAITING_RESPONSE);
+                        abortSale();
                     }
                 } else if (isBuying()) {
                     // Buying flow: Show what we're looking for first
@@ -140,6 +149,10 @@ public class BotTradeSM {
                 break;
             case WAITING_RESPONSE:
                 if (isSelling()) {
+                    if (!hasAdvertisedEscrow()) {
+                        abortSale();
+                        break;
+                    }
                     // Selling flow: Wait for partner to offer what we want
                     if (!isSufficientToAccept() && BotTradeCommands.isPartnerLocked(getChr())) {
                         setTradeState(TradeState.DECLINE);
@@ -163,11 +176,23 @@ public class BotTradeSM {
                 }
                 break;
             case CONFIRMING:
-                setTradeStartTime();
-                setOfferAccepted();
-                BotTradeCommands.writeTradeChat(getChr(), "trade looks good to go!");
-                BotTradeCommands.confirmTrade(getChr());
-                setTradeState(TradeState.CONFIRMED_LOCKED);
+                if (isSelling()) {
+                    Trade partner = activeTrade == null ? null : activeTrade.getPartner();
+                    if (partner == null) {
+                        abortSale();
+                        break;
+                    }
+                    Trade handshake = getChr().getId() < partner.getChr().getId() ? activeTrade : partner;
+                    synchronized (handshake) {
+                        if (!hasAdvertisedEscrow() || !isSufficientToAccept()) {
+                            abortSale();
+                            break;
+                        }
+                        confirmAcceptedTrade();
+                    }
+                    break;
+                }
+                confirmAcceptedTrade();
                 break;
             case CONFIRMED_LOCKED:
                 debugprint("CONFIRMED LOCKED");
@@ -214,7 +239,7 @@ public class BotTradeSM {
             default:
                 throw new IllegalStateException("Unexpected state: " + tradeState);
         }
-        if (calculateTimeOut()) {
+        if (!tradeComplete && getTradeState() != TradeState.COMPLETED && calculateTimeOut()) {
             setTradeState(TradeState.TIMED_OUT);
         }
     }
@@ -285,16 +310,53 @@ public class BotTradeSM {
             return false;
         }
 
+        boolean posted;
         if (isEquip(itemForSale)) {
             Equip eqForSale = (Equip) getParent().getTradeInventory().getMainItemForSale();
-            BotTradeCommands.addEquipToTrade(getChr(), eqForSale, 1);
-            BotTradeCommands.writeTradeChat(getChr(), "Here is what I've got. check it out!");
-            return true;
+            posted = BotTradeCommands.addEquipToTrade(getChr(), eqForSale, 1);
         } else {
-            BotTradeCommands.addItemToTrade(getChr(), itemForSale.getItemId(), 1, 1);
-            BotTradeCommands.writeTradeChat(getChr(), "Here is what I've got. check it out!");
-            return true;
+            posted = BotTradeCommands.addItemToTrade(getChr(), itemForSale.getItemId(), 1, 1);
         }
+        if (!posted) return false;
+        advertisedEscrow = BotTradeCommands.readItemInLocalSlot(getChr(), 1);
+        advertisedItemId = itemForSale.getItemId();
+        advertisedQuantity = isEquip(itemForSale) ? itemForSale.getQuantity() : 1;
+        if (!hasAdvertisedEscrow()) return false;
+        BotTradeCommands.writeTradeChat(getChr(), "Here is what I've got. check it out!");
+        return true;
+    }
+
+    private boolean hasAdvertisedEscrow() {
+        if (activeTrade == null || getChr().getTrade() != activeTrade || advertisedEscrow == null) return false;
+        return activeTrade.getItems().stream().anyMatch(item -> item == advertisedEscrow
+                && item.getPosition() == 1 && item.getItemId() == advertisedItemId
+                && item.getQuantity() == advertisedQuantity && advertisedQuantity > 0);
+    }
+
+    private void confirmAcceptedTrade() {
+        setTradeStartTime();
+        setOfferAccepted();
+        BotTradeCommands.writeTradeChat(getChr(), "trade looks good to go!");
+        BotTradeCommands.confirmTrade(getChr());
+        setTradeState(TradeState.CONFIRMED_LOCKED);
+    }
+
+    private void abortSale() {
+        if (activeTrade != null) {
+            Trade partner = activeTrade.getPartner();
+            Trade handshake = partner == null || getChr().getId() < partner.getChr().getId()
+                    ? activeTrade : partner;
+            synchronized (handshake) {
+                if (getChr().getTrade() == activeTrade) {
+                    Trade.cancelTrade(getChr(), Trade.TradeResult.PARTNER_CANCEL);
+                }
+            }
+        }
+        getParent().getTradeInventory().resetItemsForSale();
+        getParent().getTradeWants().resetTradeWants();
+        getParent().setTradeMode(TradeMode.NULL);
+        setTradeCompleted();
+        setTradeState(TradeState.COMPLETED);
     }
 
     /**
@@ -380,6 +442,7 @@ public class BotTradeSM {
 
     public void startTradeCallback() {
         Trade trade = getChr().getTrade(); /* get or create the Trade object */
+        activeTrade = trade;
         getParent().setLastTradedCharacter(BotTradeCommands.getTradePartnerCharacter(getChr()));
         // IMPORTANT: Set the callback IMMEDIATELY after getting the Trade object
         trade.setTradeResultCallback(result -> {

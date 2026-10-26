@@ -1,9 +1,11 @@
 package soloMapling.ArtificialPlayer.BotMovementSystem;
 
+import soloMapling.Environment.SoloResources;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import net.packet.ByteBufInPacket;
-import net.packet.InPacket;
+import org.gms.net.packet.ByteBufInPacket;
+import org.gms.net.packet.InPacket;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.MovementPacket;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.MovementPacketRaw;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.SingleMoveCommand;
@@ -13,9 +15,7 @@ import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.Movemen
 import java.io.BufferedReader;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -49,7 +49,7 @@ public class InPacketReader {
 
     public static List<MovementPacket> readPacketsFromFile(String binaryFileName) {
         List<MovementPacket> packets = new ArrayList<>();
-        try (DataInputStream dis = new DataInputStream(new FileInputStream(binaryFileName))) {
+        try (DataInputStream dis = new DataInputStream(SoloResources.openStream(binaryFileName))) {
             while (dis.available() > 0) {
                 packets.add(readSinglePacket(dis));
             }
@@ -62,7 +62,7 @@ public class InPacketReader {
     public static List<MovementPacketRaw> readRawPacketsFromFile(String csvFileName) {
         List<MovementPacketRaw> packetList = new LinkedList<>();
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(csvFileName))) {
+        try (BufferedReader reader = new BufferedReader(SoloResources.openReader(csvFileName))) {
             LineReader lineReader = new LineReader(reader);
             String line;
 

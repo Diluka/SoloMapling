@@ -1,13 +1,14 @@
 package soloMapling.ArtificialPlayer.BotDecoratorSystem;
 
-import client.Character;
-import client.inventory.InventoryType;
-import net.server.Server;
+import org.gms.client.Character;
+import org.gms.client.inventory.InventoryType;
+import org.gms.net.server.Server;
 import soloMapling.server.ExecutorServiceManager;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static soloMapling.ArtificialPlayer.BotHelpers.isBot;
@@ -16,21 +17,40 @@ import static soloMapling.server.ExecutorServiceManager.runAsync;
 
 public class BotEquipChecker {
 
-    private static ScheduledFuture<?> task;
+    private static volatile ScheduledFuture<?> task;
+    private static volatile long generation;
+    private static final java.util.Set<Thread> workers = ConcurrentHashMap.newKeySet();
     private static final long INTERVAL_MS = 2 * 60 * 1000;
 
     private static final short SLOT_TOP = -5;
     private static final short SLOT_PANTS = -6;
 
-    public static void start() {
+    public static synchronized void start() {
         if (task != null) return;
+        long currentGeneration = ++generation;
         task = ExecutorServiceManager.getScheduledExecutorService().scheduleAtFixedRate(
-                BotEquipChecker::check, INTERVAL_MS, INTERVAL_MS, TimeUnit.MILLISECONDS
+                () -> check(currentGeneration), INTERVAL_MS, INTERVAL_MS, TimeUnit.MILLISECONDS
         );
         System.out.println("[BotEquipChecker] Started — interval=" + (INTERVAL_MS / 60000) + "min");
     }
 
-    private static void check() {
+    public static synchronized void stop() {
+        generation++;
+        ScheduledFuture<?> current = task;
+        task = null;
+        if (current != null) current.cancel(true);
+        workers.forEach(Thread::interrupt);
+        workers.clear();
+    }
+
+    private static boolean isCurrent(long currentGeneration) {
+        ScheduledFuture<?> current = task;
+        return currentGeneration == generation && current != null && !current.isCancelled()
+                && !Thread.currentThread().isInterrupted();
+    }
+
+    private static void check(long currentGeneration) {
+        if (!isCurrent(currentGeneration)) return;
         try {
             long startMs = System.currentTimeMillis();
             List<Character> allChars = new ArrayList<>(
@@ -40,6 +60,7 @@ public class BotEquipChecker {
             int totalBots = 0;
             List<Character> naked = new ArrayList<>();
             for (Character chr : allChars) {
+                if (!isCurrent(currentGeneration)) return;
                 if (!isBot(chr)) continue;
                 // Mapless bots (e.g. the Console bot) can't be dressed - equipping
                 // broadcasts a char-look update to the bot's map.
@@ -58,7 +79,10 @@ public class BotEquipChecker {
                 final int[] failedCount = {0};
                 for (Character chr : naked) {
                     runAsync(() -> {
+                        Thread worker = Thread.currentThread();
+                        workers.add(worker);
                         try {
+                            if (!isCurrent(currentGeneration)) return;
                             BotDecorateEquips.equipTopBottom(chr);
                             fixedCount[0]++;
 //                            System.out.println("[BotEquipChecker] Equipped " + chr.getName()
@@ -69,6 +93,8 @@ public class BotEquipChecker {
                             System.out.println("[BotEquipChecker] FAILED " + chr.getName()
                                     + " (job=" + chr.getJob().name() + " lv=" + chr.getLevel()
                                     + "): " + e.getMessage());
+                        } finally {
+                            workers.remove(worker);
                         }
                     });
                 }

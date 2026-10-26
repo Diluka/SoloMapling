@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.BotDecoratorSystem;
 
-import client.Character;
+import org.gms.client.Character;
 import soloMapling.ArtificialPlayer.BotHelpers;
 
 import java.util.Map;
@@ -25,7 +25,9 @@ public class BotDecorationQueue {
     public static boolean ENABLED = true;
 
     private static final Map<String, ConcurrentLinkedQueue<Integer>> queues = new ConcurrentHashMap<>();
-    private static ScheduledExecutorService scheduler;
+    private static volatile ScheduledExecutorService scheduler;
+    private static volatile long generation;
+    private static final java.util.Set<Thread> workers = ConcurrentHashMap.newKeySet();
 
     // How many bots to process per category per tick. Decoration is an
     // in-memory EquipMetadataCache lookup now, so the queue can drain fast.
@@ -51,10 +53,11 @@ public class BotDecorationQueue {
      * Start the background decoration scheduler.
      * Call once after environment initialization.
      */
-    public static void start() {
+    public static synchronized void start() {
         if (!ENABLED) return;
         if (scheduler != null && !scheduler.isShutdown()) return;
 
+        long currentGeneration = ++generation;
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "BotDecorationQueue");
             t.setDaemon(true);
@@ -62,7 +65,7 @@ public class BotDecorationQueue {
         });
 
         scheduler.scheduleAtFixedRate(
-                BotDecorationQueue::processTick,
+                () -> processTick(currentGeneration),
                 INITIAL_DELAY_MS,
                 TICK_INTERVAL_MS,
                 TimeUnit.MILLISECONDS
@@ -74,40 +77,57 @@ public class BotDecorationQueue {
     /**
      * Stop the decoration scheduler.
      */
-    public static void stop() {
+    public static synchronized void stop() {
+        generation++;
         if (scheduler != null) {
-            scheduler.shutdown();
+            scheduler.shutdownNow();
             scheduler = null;
         }
+        queues.clear();
+        workers.forEach(Thread::interrupt);
+        workers.clear();
     }
 
     /**
      * Process one tick: pull up to BATCH_SIZE bots from each category
      * and decorate them in parallel (one async task per category).
      */
-    private static void processTick() {
+    private static void processTick(long currentGeneration) {
+        if (!isCurrent(currentGeneration)) return;
         for (Map.Entry<String, ConcurrentLinkedQueue<Integer>> entry : queues.entrySet()) {
             ConcurrentLinkedQueue<Integer> queue = entry.getValue();
 
             for (int i = 0; i < BATCH_SIZE; i++) {
+                if (!isCurrent(currentGeneration)) return;
                 Integer botId = queue.poll();
                 if (botId == null) break;
 
-                runAsync(() -> decorateBot(botId));
+                runAsync(() -> decorateBot(botId, currentGeneration));
             }
         }
     }
 
-    private static void decorateBot(int botId) {
+    private static void decorateBot(int botId, long currentGeneration) {
+        Thread worker = Thread.currentThread();
+        workers.add(worker);
         try {
+            if (!isCurrent(currentGeneration)) return;
             Character bot = BotHelpers.getCharFromChannelStorage(botId);
             if (bot == null) return;
 
             // Run the full expensive decoration (WZ lookups, job-specific gear, etc.)
-            BotDecorateEquips.decorateBotEquips(bot);
+            if (isCurrent(currentGeneration)) BotDecorateEquips.decorateBotEquips(bot);
         } catch (Exception e) {
             System.err.println("[BotDecorationQueue] Error decorating bot " + botId + ": " + e.getMessage());
+        } finally {
+            workers.remove(worker);
         }
+    }
+
+    private static boolean isCurrent(long currentGeneration) {
+        ScheduledExecutorService current = scheduler;
+        return currentGeneration == generation && current != null && !current.isShutdown()
+                && !Thread.currentThread().isInterrupted();
     }
 
     /**

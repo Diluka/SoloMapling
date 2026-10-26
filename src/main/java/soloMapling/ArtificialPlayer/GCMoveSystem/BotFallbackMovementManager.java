@@ -1,9 +1,9 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
-import server.maps.Foothold;
-import server.maps.MapleMap;
-import server.maps.Rope;
+import org.gms.client.Character;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Rope;
 
 import java.awt.*;
 
@@ -164,7 +164,7 @@ final class BotFallbackMovementManager {
         // rope.topY (within MAX_SNAP_DROP) so a player standing on a platform
         // whose surface meets the rope's head can transition into climbing
         // without first going airborne — same "press DOWN to grab from top"
-        // motion as the real client. attachY snaps to rope.topY in the caller.
+        // motion as the real org.gms.client. attachY snaps to rope.topY in the caller.
         return botPos != null
                 && rope != null
                 && Math.abs(botPos.x - rope.x()) <= BotPhysicsEngine.cfg.ROPE_GRAB_X

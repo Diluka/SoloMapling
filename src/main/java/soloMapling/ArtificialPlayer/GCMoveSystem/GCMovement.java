@@ -1,8 +1,8 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
-import server.maps.MapleMap;
-import server.maps.Rope;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Rope;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands;
 
 import java.awt.Point;
@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   .move(Character, int, int) — walk/jump/climb to a point on the current map.
  *   .follow(Character, Character) — dynamically tail a character.
  * 
- * Both drive a raw client.Character, so any BotSM subtype calls them via
+ * Both drive a raw org.gms.client.Character, so any BotSM subtype calls them via
  * getChr(), exactly like the recorded-path MovementCommands. The two engines
  * coexist via the shared MovementCommands movement lock (acquired on enable, released on
  * disable).
@@ -33,35 +33,39 @@ public final class GCMovement {
 
     private static final Map<Integer, BotMovementState> STATES = new ConcurrentHashMap<>();
     private static final Map<Integer, Runnable> ARRIVAL_CALLBACKS = new ConcurrentHashMap<>();
+    private static volatile boolean stopping;
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
     /* Put a bot under dynamic control: build its profile, warm the map graph, start the tick. */
     public static void enable(Character bot) {
-        if (bot == null) {
+        if (bot == null || stopping) {
             return;
         }
-        ObserverTracker.ensureStarted(); // LOD observability poll (idempotent)
-        STATES.computeIfAbsent(bot.getId(), id -> {
-            // owner == null by default (no follow anchor, and avoids the nav warmup notice trying to
-            // dropMessage through the shared BotClient). GCFollow sets owner to the followed character.
-            BotMovementState st = new BotMovementState(bot, null);
-            st.movementProfile = BotMovementProfile.fromCharacter(bot);
-            if (bot.getMap() != null) {
-                st.lastMapId = bot.getMapId();
-                st.fhIndex = BotMovementManager.buildFhIndex(bot.getMap());
-                Point cur = bot.getPosition();
-                Point ground = BotPhysicsEngine.findGroundPoint(bot.getMap(), new Point(cur.x, cur.y - 1));
-                BotPhysicsEngine.teleportTo(st, bot, ground != null ? ground : cur);
-                BotMovementManager.resetEntryStateAfterTeleport(st);
-                BotNavigationGraphProvider.warmGraphAsync(bot.getMap(), st.movementProfile);
-            }
-            GCMovementDriver.start(st);
-            // Hold the shared movement lock for the whole dynamic session so the recorded-path
-            // engine can't drive this bot concurrently.
-            MovementCommands.tryAcquireMovementLock(bot);
-            return st;
-        });
+        synchronized (STATES) {
+            if (stopping) return;
+            ObserverTracker.ensureStarted(); // LOD observability poll (idempotent)
+            STATES.computeIfAbsent(bot.getId(), id -> {
+                // owner == null by default (no follow anchor, and avoids the nav warmup notice trying to
+                // dropMessage through the shared BotClient). GCFollow sets owner to the followed character.
+                BotMovementState st = new BotMovementState(bot, null);
+                st.movementProfile = BotMovementProfile.fromCharacter(bot);
+                if (bot.getMap() != null) {
+                    st.lastMapId = bot.getMapId();
+                    st.fhIndex = BotMovementManager.buildFhIndex(bot.getMap());
+                    Point cur = bot.getPosition();
+                    Point ground = BotPhysicsEngine.findGroundPoint(bot.getMap(), new Point(cur.x, cur.y - 1));
+                    BotPhysicsEngine.teleportTo(st, bot, ground != null ? ground : cur);
+                    BotMovementManager.resetEntryStateAfterTeleport(st);
+                    BotNavigationGraphProvider.warmGraphAsync(bot.getMap(), st.movementProfile);
+                }
+                GCMovementDriver.start(st);
+                // Hold the shared movement lock for the whole dynamic session so the recorded-path
+                // engine can't drive this bot concurrently.
+                MovementCommands.tryAcquireMovementLock(bot);
+                return st;
+            });
+        }
     }
 
     /* Remove a bot from dynamic control and release the shared movement lock. */
@@ -82,6 +86,34 @@ public final class GCMovement {
 
     public static boolean isEnabled(Character bot) {
         return bot != null && STATES.containsKey(bot.getId());
+    }
+
+    /** Stop active movement without shutting down the reusable scheduler pools. */
+    public static synchronized void stopAll() {
+        stopping = true;
+        try {
+            List<BotMovementState> states;
+            synchronized (STATES) {
+                states = new ArrayList<>(STATES.values());
+                STATES.clear();
+                ARRIVAL_CALLBACKS.clear();
+            }
+            GCFollow.cancelAll();
+            GCTravel.cancelAll();
+            GCFidget.cancelAll();
+            for (BotMovementState state : states) {
+                GCMovementDriver.stop(state);
+                MovementCommands.releaseMovementLock(state.bot);
+            }
+            ObserverTracker.stop();
+            BotNavigationGraphProvider.cancelPendingLoads();
+        } finally {
+            stopping = false;
+        }
+    }
+
+    static boolean isStopping() {
+        return stopping;
     }
 
     /* Package-private snapshot of the enabled dynamic states (for LodMetrics reporting). */
@@ -811,7 +843,8 @@ public final class GCMovement {
     }
 
     static void fireArrival(BotMovementState entry) {
-        if (entry == null || entry.bot == null) {
+        if (entry == null || entry.bot == null || entry.tickStopped || stopping
+                || STATES.get(entry.bot.getId()) != entry) {
             return;
         }
         Runnable cb = ARRIVAL_CALLBACKS.remove(entry.bot.getId());

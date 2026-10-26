@@ -1,14 +1,15 @@
 package soloMapling.FreeMarket;
 
-import client.inventory.Equip;
-import client.inventory.InventoryType;
-import client.inventory.Item;
-import server.ItemInformationProvider;
-import server.maps.PlayerShopItem;
+import soloMapling.Environment.SoloResources;
+
+import org.gms.client.inventory.Equip;
+import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
+import org.gms.server.ItemInformationProvider;
+import org.gms.server.maps.PlayerShopItem;
 import soloMapling.itemPool.ScrolledItemComparator;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -346,7 +347,7 @@ public class FMShopDescGen {
     private static List<String> loadAndShuffleNames() {
         String filePath = resolveFilePath("ign");
         List<String> names = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+        try (BufferedReader reader = new BufferedReader(SoloResources.openReader(filePath))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (!line.isEmpty() && line.length() <= 12) {
@@ -367,7 +368,7 @@ public class FMShopDescGen {
     protected static String getRandomStoreDescription(String type) {
         String filePath = resolveFilePath(type);
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+        try (BufferedReader reader = new BufferedReader(SoloResources.openReader(filePath))) {
             String line;
             String result = null;
             Random random = new Random();

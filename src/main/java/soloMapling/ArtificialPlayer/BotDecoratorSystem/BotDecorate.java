@@ -1,8 +1,8 @@
 package soloMapling.ArtificialPlayer.BotDecoratorSystem;
 
-import client.Character;
-import client.Job;
-import client.inventory.InventoryType;
+import org.gms.client.Character;
+import org.gms.client.Job;
+import org.gms.client.inventory.InventoryType;
 import soloMapling.ArtificialPlayer.BotTier;
 import soloMapling.itemPool.EquipMetadataCache;
 

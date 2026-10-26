@@ -1,19 +1,19 @@
 package soloMapling.ArtificialPlayer;
 
-import client.Character;
-import net.server.Server;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.net.server.Server;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands;
 import soloMapling.ArtificialPlayer.BotTownSystem.TownPresenceConfig;
 import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.server.ExecutorServiceManager;
-import soloMapling.server.MethodScheduler;
 
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
@@ -35,6 +35,8 @@ public class SocialHotPotatoManager {
     private ScheduledFuture<?> megaScheduledTask;
     private final Random random = new Random();
     private boolean running = false;
+    private long generation;
+    private final Set<ScheduledFuture<?>> delayedTasks = new HashSet<>();
 
     private static final int MIN_INTERVAL_MS = 8_000;
     private static final int MAX_INTERVAL_MS = 20_000;
@@ -93,12 +95,13 @@ public class SocialHotPotatoManager {
         return instance;
     }
 
-    public void start() {
+    public synchronized void start() {
         if (running) return;
         running = true;
+        generation++;
         refreshMapScope();
-        scheduleNextTick();
-        scheduleNextMegaTick();
+        scheduleNextTick(generation);
+        scheduleNextMegaTick(generation);
         log("[SocialHotPotato] Started.");
     }
 
@@ -118,42 +121,58 @@ public class SocialHotPotatoManager {
         return ids;
     }
 
-    public void stop() {
+    public static synchronized void stopIfStarted() {
+        if (instance != null) instance.stop();
+    }
+
+    public synchronized void stop() {
         running = false;
+        generation++;
         if (scheduledTask != null) {
             scheduledTask.cancel(false);
+            scheduledTask = null;
         }
         if (megaScheduledTask != null) {
             megaScheduledTask.cancel(false);
+            megaScheduledTask = null;
         }
+        for (ScheduledFuture<?> task : delayedTasks) task.cancel(false);
+        delayedTasks.clear();
+        ambientMapIds = Set.of();
         log("[SocialHotPotato] Stopped.");
     }
 
-    private void scheduleNextTick() {
-        if (!running) return;
+    private void scheduleNextTick(long runGeneration) {
+        if (!running || generation != runGeneration) return;
         int delay = MIN_INTERVAL_MS + random.nextInt(MAX_INTERVAL_MS - MIN_INTERVAL_MS);
         scheduledTask = ExecutorServiceManager.getScheduledExecutorService().schedule(() -> {
-            try {
-                tick();
-            } catch (Exception e) {
-                log("[SocialHotPotato] Error during tick: " + e.getMessage());
-                e.printStackTrace();
+            synchronized (this) {
+                if (!running || generation != runGeneration) return;
+                try {
+                    tick();
+                } catch (Exception e) {
+                    log("[SocialHotPotato] Error during tick: " + e.getMessage());
+                    e.printStackTrace();
+                }
+                scheduleNextTick(runGeneration);
             }
-            scheduleNextTick();
         }, delay, TimeUnit.MILLISECONDS);
     }
 
-    private void scheduleNextMegaTick() {
-        if (!running) return;
+    private void scheduleNextMegaTick(long runGeneration) {
+        if (!running || generation != runGeneration) return;
         int delay = MEGA_MIN_INTERVAL_MS + random.nextInt(MEGA_MAX_INTERVAL_MS - MEGA_MIN_INTERVAL_MS);
         megaScheduledTask = ExecutorServiceManager.getScheduledExecutorService().schedule(() -> {
-            try {
-                megaTick();
-            } catch (Exception e) {
-                log("[SocialHotPotato] Error during mega tick: " + e.getMessage());
-                e.printStackTrace();
+            synchronized (this) {
+                if (!running || generation != runGeneration) return;
+                try {
+                    megaTick();
+                } catch (Exception e) {
+                    log("[SocialHotPotato] Error during mega tick: " + e.getMessage());
+                    e.printStackTrace();
+                }
+                scheduleNextMegaTick(runGeneration);
             }
-            scheduleNextMegaTick();
         }, delay, TimeUnit.MILLISECONDS);
     }
 
@@ -267,7 +286,13 @@ public class SocialHotPotatoManager {
         String line = getRandomLine(SOCIAL_DIALOGUE_PATH, SOCIAL_BOT_TYPE, "Chalkboard");
         if (line == null) return;
         botSetChalkboard(bot, line);
-        MethodScheduler.runAfterDelay(() -> botClearChalkboard(bot), 5 * 60 * 1000);
+        long runGeneration = generation;
+        delayedTasks.removeIf(ScheduledFuture::isDone);
+        delayedTasks.add(ExecutorServiceManager.getScheduledExecutorService().schedule(() -> {
+            synchronized (this) {
+                if (running && generation == runGeneration) botClearChalkboard(bot);
+            }
+        }, 5, TimeUnit.MINUTES));
     }
 
     private void doMegaphone(Character bot) {

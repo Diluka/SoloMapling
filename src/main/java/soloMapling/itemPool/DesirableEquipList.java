@@ -1,8 +1,9 @@
 package soloMapling.itemPool;
 
+import soloMapling.Environment.SoloResources;
+
 import com.esotericsoftware.yamlbeans.YamlReader;
 
-import java.io.FileReader;
 import java.util.*;
 
 public class DesirableEquipList {
@@ -14,8 +15,8 @@ public class DesirableEquipList {
     public static synchronized void load() {
         if (loaded) return;
         long start = System.currentTimeMillis();
-        try {
-            YamlReader reader = new YamlReader(new FileReader(YAML_PATH));
+        try (java.io.Reader source = SoloResources.openReader(YAML_PATH)) {
+            YamlReader reader = new YamlReader(source);
             @SuppressWarnings("unchecked")
             Map<String, List<String>> categories = (Map<String, List<String>>) reader.read();
             if (categories == null) {

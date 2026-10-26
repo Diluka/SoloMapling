@@ -1,8 +1,8 @@
 package soloMapling.server.EventMessageSystem;
 
-import client.Character;
-import client.inventory.Item;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.client.inventory.Item;
+import org.gms.server.maps.MapleMap;
 
 import static soloMapling.DebugUtilities.debugprint;
 

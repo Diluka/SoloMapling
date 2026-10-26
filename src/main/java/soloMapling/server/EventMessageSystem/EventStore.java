@@ -25,6 +25,17 @@ public class EventStore {
         this.buffer = new GameEvent[capacity];
     }
 
+    public void clear() {
+        lock.writeLock().lock();
+        try {
+            Arrays.fill(buffer, null);
+            head = 0;
+            size = 0;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     public void add(GameEvent event) {
         debugprint("Adding event to EventStore: ", event.getPlayerName(), event.getId(), event.getType());
         lock.writeLock().lock();

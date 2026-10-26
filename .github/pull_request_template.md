@@ -1,11 +1,14 @@
-## Description
-<!-- Describe your changes in detail -->
+## 变化与原因
 
-## Checklist before requesting a review
-<!-- Mark with "x" inside the square brackets -->
-- [ ] I have performed a self-review of my code
-- [ ] I have tested my changes
-- [ ] I have added unit tests that prove my changes work
+说明用户可见的结果、涉及的 Solo 功能和北斗接入点。移植上游代码时记录来源提交。
 
-## Screenshots
-<!-- If applicable, add screenshots to help explain your changes -->
+## 验证
+
+- 北斗 submodule 提交及干净状态：
+- 构建与所选测试结果：
+- 隔离数据库或部署冒烟结果（如涉及）：
+- 尚未验证的客户端与玩法行为：
+
+## 跟踪
+
+关联 Issue 与 Milestone；仅在验收证据齐全后关闭对应事项。

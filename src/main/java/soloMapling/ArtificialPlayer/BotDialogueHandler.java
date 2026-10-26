@@ -1,16 +1,17 @@
 package soloMapling.ArtificialPlayer;
 
+import soloMapling.Environment.SoloResources;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import client.Character;
+import org.gms.client.Character;
 import com.esotericsoftware.yamlbeans.YamlReader;
 import soloMapling.ArtificialPlayer.BotTypes.DiceBot;
 
 import java.util.Map;
-import java.io.FileReader;
 import java.io.IOException;
 
 import static soloMapling.ArtificialPlayer.BotCommandsPack.SocialCommands.BotDialogue;
@@ -133,8 +134,8 @@ public class BotDialogueHandler {
         String filePath = String.format("%s%s", dialoguePackBase, dialoguePack);
 
         Map<String, Object> dialogueConstructorNode = null;
-        try {
-            YamlReader reader = new YamlReader(new FileReader(filePath));
+        try (java.io.Reader source = SoloResources.openReader(filePath)) {
+            YamlReader reader = new YamlReader(source);
 
             // Read the root node
             Map<String, Object> root = (Map<String, Object>) reader.read();

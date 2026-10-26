@@ -1,20 +1,48 @@
-# This workflow will build a Java project with Maven
+name: BeiDou integration
 
-name: Run build
-on:
+"on":
   pull_request:
-    branches:
-      - master
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up JDK 21
-      uses: actions/setup-java@v3
-      with:
-        java-version: '21'
-        distribution: 'corretto'
-    - name: Build with Maven (compile -> test -> package)
-      run: mvn -B package --file pom.xml
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+          cache-dependency-path: |
+            beidou-integration/pom.xml
+            upstream/BeiDou-Server/pom.xml
+            upstream/BeiDou-Server/gms-server/pom.xml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and test the integrated server
+        run: python3 beidou-integration/scripts/build.py
+      - name: Check the immutable engine and working tree
+        run: |
+          test "$(git -C upstream/BeiDou-Server rev-parse HEAD)" = 75a86268738ca8845e06ea9d59ec36d15b22c91b
+          test -z "$(git -C upstream/BeiDou-Server status --porcelain --untracked-files=all)"
+          git diff --exit-code
+      - name: Preserve the integration build report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beidou-integration-report
+          path: |
+            beidou-integration/target/build-report.json
+            beidou-integration/target/test-reports/
+          if-no-files-found: ignore

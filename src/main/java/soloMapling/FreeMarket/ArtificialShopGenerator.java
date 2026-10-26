@@ -1,9 +1,9 @@
 package soloMapling.FreeMarket;
 
-import client.Job;
-import client.inventory.InventoryType;
-import client.inventory.Item;
-import server.maps.PlayerShopItem;
+import org.gms.client.Job;
+import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
+import org.gms.server.maps.PlayerShopItem;
 import soloMapling.server.MapleVersionManager;
 import soloMapling.itemPool.ItemNode;
 import soloMapling.itemPool.QuantitySelector;
@@ -345,7 +345,7 @@ public class ArtificialShopGenerator {
     private static void addItemToShop(HiredMerchantArtificial merchant, Item sellItem, int quantity, int price) {
         short bundles = (short) adjustFMQuantity(merchant, quantity);
         int adjustedPrice = adjustFMPrices(merchant, price);
-        PlayerShopItem shopItem = new PlayerShopItem(sellItem, bundles, adjustedPrice);
+        PlayerShopItem shopItem = new ArtificialShopItem(sellItem, bundles, adjustedPrice);
         merchant.addItem(shopItem);
     }
 
@@ -369,7 +369,7 @@ public class ArtificialShopGenerator {
 
     public static void setOneMesoShop(HiredMerchantArtificial merchant) {
         for (PlayerShopItem psItem : merchant.getItems()) {
-            psItem.setPrice(1);
+            ArtificialShopItem.reprice(psItem, 1);
         }
     }
 
@@ -383,7 +383,7 @@ public class ArtificialShopGenerator {
 
     public static void applyDiscountWholeStore(HiredMerchantArtificial merchant, double percentage) {
         for (PlayerShopItem psItem : merchant.getItems()) {
-            psItem.setPrice((int) (psItem.getPrice() * percentage));
+            ArtificialShopItem.reprice(psItem, (int) (psItem.getPrice() * percentage));
         }
     }
 

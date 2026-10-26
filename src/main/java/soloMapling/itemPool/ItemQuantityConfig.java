@@ -1,5 +1,6 @@
 package soloMapling.itemPool;
-import java.io.FileReader;
+
+import soloMapling.Environment.SoloResources;
 import java.io.IOException;
 import java.util.Map;
 import com.esotericsoftware.yamlbeans.YamlReader;
@@ -19,8 +20,8 @@ public class ItemQuantityConfig {
 
 
     public static ItemQuantityConfig readYaml(String filePath) {
-        try {
-            YamlReader reader = new YamlReader(new FileReader(filePath));
+        try (java.io.Reader source = SoloResources.openReader(filePath)) {
+            YamlReader reader = new YamlReader(source);
             return reader.read(ItemQuantityConfig.class);
         } catch (IOException e) {
             e.printStackTrace();
