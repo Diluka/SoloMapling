@@ -7,6 +7,7 @@ import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.Movemen
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.StartEndPair;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.TimeCoordinatePair;
 import soloMapling.server.SoloMaplingUtilities;
+import soloMapling.server.BotTickService;
 
 import soloMapling.ArtificialPlayer.BotLogic;
 import soloMapling.ArtificialPlayer.BotMovementSystem.PlayerReaction;
@@ -20,9 +21,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 import static soloMapling.ArtificialPlayer.BotMovementSystem.InPacketReader.getMovementRecordingRaw;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands.MidMovementCheck;
+import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands.checkMovementCancellation;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands.executeMovement;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem.NavigationElement.parseNavigationType;
 import static soloMapling.DebugUtilities.debugprint;
@@ -215,6 +218,7 @@ public class PathFinder {
     }
 
     public void executePath(int mapId, List<NavigationElement> elements) {
+        checkMovementCancellation(this.character);
         if (elements == null || elements.isEmpty()) {
 //            debugprint("No navigation elements provided");
             return;
@@ -229,9 +233,10 @@ public class PathFinder {
                 if (interrupted) {
                     break;
                 }
-            } catch (Exception e) {
-                debugprint(e);
-                debugprint("Failed to execute navigation element at index current: " + currentElement.getRecordingName());
+            } catch (CancellationException cancelled) {
+                throw cancelled;
+            } catch (Exception failure) {
+                BotTickService.reportFailure(failure);
             }
         }
     }
@@ -250,6 +255,7 @@ public class PathFinder {
     public void executePathAware(int mapId, List<NavigationElement> elements,
                                   int detectWidth, int detectHeight,
                                   int ignoreWeight, int stopWeight, int walkWeight) {
+        checkMovementCancellation(this.character);
         if (elements == null || elements.isEmpty()) {
 //            debugprint("No navigation elements provided");
             return;
@@ -259,6 +265,7 @@ public class PathFinder {
 
         // This callback runs inside the packet loop every N packets
         MidMovementCheck awarenessCheck = (bot) -> {
+            checkMovementCancellation(bot);
             List<org.gms.client.Character> nearbyPlayers = BotLogic.getRealPlayersInRange(
                     bot, detectWidth, detectHeight);
 
@@ -304,6 +311,7 @@ public class PathFinder {
                                             int detectWidth, int detectHeight,
                                             int ignoreWeight, int stopWeight, int walkWeight,
                                             Set<Integer> reactedPlayerIds) {
+        checkMovementCancellation(this.character);
         for (int i = 0; i < elements.size(); i++) {
             NavigationElement currentElement = elements.get(i);
             NavigationElement nextElement = (i < elements.size() - 1) ? elements.get(i + 1) : null;
@@ -311,6 +319,7 @@ public class PathFinder {
             try {
                 boolean interrupted = executeElementAware(mapId, currentElement, nextElement, awarenessCheck);
                 if (interrupted) {
+                    checkMovementCancellation(this.character);
                     // Stop-react happened — re-pathfind from current position to original endpoint
                     Point currentPos = this.character.getPosition();
                     debugprint("Re-pathfinding from " + currentPos + " to " + this.endPt);
@@ -322,23 +331,28 @@ public class PathFinder {
                             detectWidth, detectHeight, ignoreWeight, stopWeight, walkWeight, reactedPlayerIds);
                     return; // the recursive call handled the rest
                 }
-            } catch (Exception e) {
-                debugprint(e);
-                debugprint("Failed to execute navigation element at index: " + currentElement.getRecordingName());
+            } catch (CancellationException cancelled) {
+                throw cancelled;
+            } catch (Exception failure) {
+                BotTickService.reportFailure(failure);
             }
         }
     }
 
     private boolean executeElementAware(int mapId, NavigationElement currentElement,
                                          NavigationElement nextElement, MidMovementCheck midCheck) {
+        checkMovementCancellation(this.character);
+        boolean interrupted;
         if (currentElement instanceof MainArea) {
-            return executeMainAreaAware(mapId, (MainArea) currentElement, nextElement, midCheck);
+            interrupted = executeMainAreaAware(mapId, (MainArea) currentElement, nextElement, midCheck);
         } else if (currentElement instanceof Connector) {
-            return executeConnectorAware((Connector) currentElement, midCheck);
+            interrupted = executeConnectorAware((Connector) currentElement, midCheck);
         } else {
             debugprint("Unknown navigation element type: {}");
-            return false;
+            interrupted = false;
         }
+        checkMovementCancellation(this.character);
+        return interrupted;
     }
 
     private boolean executeMainAreaAware(int mapId, MainArea mainArea,
@@ -368,14 +382,18 @@ public class PathFinder {
     }
 
     private boolean executeElement(int mapId, NavigationElement currentElement, NavigationElement nextElement) {
+        checkMovementCancellation(this.character);
+        boolean interrupted;
         if (currentElement instanceof MainArea) {
-            return executeMainArea(mapId, (MainArea) currentElement, nextElement);
+            interrupted = executeMainArea(mapId, (MainArea) currentElement, nextElement);
         } else if (currentElement instanceof Connector) {
-            return executeConnector((Connector) currentElement);
+            interrupted = executeConnector((Connector) currentElement);
         } else {
             debugprint("Unknown navigation element type: {}");
-            return false;
+            interrupted = false;
         }
+        checkMovementCancellation(this.character);
+        return interrupted;
     }
 
     private boolean executeMainArea(int mapId, MainArea mainArea, NavigationElement nextElement) {

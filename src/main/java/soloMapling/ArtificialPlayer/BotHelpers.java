@@ -8,10 +8,12 @@ import org.gms.server.ItemInformationProvider;
 import org.gms.server.maps.MapItem;
 import org.gms.server.maps.MapObject;
 import soloMapling.beidou.BotRegistry;
+import soloMapling.server.BotTickService;
 
 import java.awt.*;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CancellationException;
 
 public class BotHelpers {
 
@@ -105,13 +107,30 @@ public class BotHelpers {
     // Returns true if the sleep completed, false if the thread was interrupted
     // (interrupt flag restored so the caller can bail).
     public static boolean blockingSleep(long milliseconds) {
+        if (BotTickService.isCurrentTickCancelled()) throw new CancellationException("Macro callback stopped");
         try {
             Thread.sleep(milliseconds);
+            if (BotTickService.isCurrentTickCancelled()) throw new CancellationException("Macro callback stopped");
             return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (BotTickService.isCurrentTickCancelled()) throw interruptedCancellation(e);
             return false;
         }
+    }
+
+    /** Do not convert lifecycle cancellation into the replay's normal stop-react boolean. */
+    public static void checkCancellation() {
+        if (Thread.currentThread().isInterrupted() || BotTickService.isCurrentTickCancelled()) {
+            throw new CancellationException("Movement execution cancelled");
+        }
+    }
+
+    private static CancellationException interruptedCancellation(InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        CancellationException cancelled = new CancellationException("Movement wait interrupted");
+        cancelled.initCause(interrupted);
+        return cancelled;
     }
 
     public static Rectangle createRectangle(Point center, int width, int height) {
@@ -148,20 +167,21 @@ public class BotHelpers {
 
     // Blocks the replaying thread for the gap between two recorded packet timestamps.
     // Deliberately blocking: recording replay is data-driven synchronous choreography
-    // and runs on a virtual thread. Returns false if the thread was interrupted
-    // (interrupt flag restored) so the replay loop can bail; true if the wait completed.
+    // and runs on a virtual thread. Interruption remains a cancellation exception
+    // (with its flag preserved), distinct from a normal awareness stop/repath.
     // Diff is clamped at 0 so an out-of-order timestamp can't throw from Thread.sleep.
     public static boolean waitBetweenTwoLong(long timestamp1, long timestamp2) {
+        checkCancellation();
         long diff = Math.max(0, timestamp2 - timestamp1);
         if (diff > 2000) {
             System.out.println("More than 2 seconds waiting");
         }
         try {
             Thread.sleep(diff);
+            checkCancellation();
             return true;
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
+            throw interruptedCancellation(e);
         }
     }
 

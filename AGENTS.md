@@ -47,6 +47,7 @@ python3 beidou-integration/scripts/build.py --help
 
 - `origin` 为自己的 `Diluka/SoloMapling`，允许提交和推送。
 - Madara 原版与插件仓库只作为拉取来源，不向任何上游推送或提交 PR；上游 remote 的 push URL 应禁用。
+- GitHub CLI 的写操作始终显式指定 `--repo Diluka/SoloMapling`，避免 Fork 网络的默认目标指向上游；本机可另用 `gh repo set-default Diluka/SoloMapling`。
 - 原版更新正常合并并保留历史，不使用 rebase、强制推送或 hard reset。插件改进按功能审查，记录来源提交；插件仓库另起历史，不直接整树合并其平台和宿主改动。
 - 创建工作分支前先检查本地改动并以 `git pull --ff-only` 对齐自己的远端基线。
 - Issues/Milestone 跟踪工作与验收；仅在对应证据齐全时关闭。PR 只开到自己的仓库，用户已授权代理验收后自行合并。

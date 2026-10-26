@@ -167,7 +167,7 @@ public final class BotTickService {
     public static boolean isCurrentTickCancelled() {
         Entry entry = CURRENT.get();
         synchronized (LIFECYCLE) {
-            return entry != null && entry.generation != generation;
+            return entry != null && (entry.generation != generation || ENTRIES.get(entry.botId) != entry);
         }
     }
 

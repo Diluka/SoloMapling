@@ -1,6 +1,7 @@
 package soloMapling.ArtificialPlayer.BotMovementSystem;
 
 import org.gms.client.Character;
+import org.gms.client.BotClient;
 import org.gms.net.packet.InPacket;
 import org.gms.server.maps.Foothold;
 import org.gms.server.maps.Portal;
@@ -11,6 +12,7 @@ import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.Movemen
 import soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem.NavigationElement;
 import soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem.PathFinder;
 import soloMapling.ArtificialPlayer.GCMoveSystem.LodCounts;
+import soloMapling.beidou.BotRegistry;
 import org.gms.util.PacketCreator;
 import org.gms.exception.EmptyMovementException;
 
@@ -20,6 +22,7 @@ import java.awt.*;
 import java.util.Map;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -51,6 +54,13 @@ import static soloMapling.ArtificialPlayer.BotCommandsPack.WarpCommands.botWarpM
 import static soloMapling.DebugUtilities.debugprint;
 
 public class MovementCommands {
+
+    public static void checkMovementCancellation(Character character) {
+        BotHelpers.checkCancellation();
+        if (character.getClient() instanceof BotClient && !BotRegistry.isCurrent(character)) {
+            throw new CancellationException("Headless character is no longer in the active world");
+        }
+    }
 
     private static final ConcurrentHashMap<Integer, Boolean> movementInterruptFlags = new ConcurrentHashMap<>();
 
@@ -107,9 +117,11 @@ public class MovementCommands {
     public static boolean BotMoveStreamHelper(MovementRecording mvr, Character fakechar,
                                            boolean useOffset, Point stopPoint,
                                            MidMovementCheck midCheck) {
+        checkMovementCancellation(fakechar);
         List<MovementPacket> fullRecording = mvr.getMovementPacketList();
         fullInPacket:
         for (int i = 0; i < fullRecording.size(); i++) {
+            checkMovementCancellation(fakechar);
             if (isBotMovementInterrupted(fakechar)) {
                 clearBotMovementInterrupt(fakechar);
                 injectArtificialStopPacket(fakechar);
@@ -143,13 +155,10 @@ public class MovementCommands {
 
             MovementPacket nextMvp = (i + 1 < fullRecording.size()) ? fullRecording.get(i + 1) : null; // Next element
             if (nextMvp != null) {
-                if (!BotHelpers.waitBetweenTwoLong(mvp.getTimestamp(), nextMvp.getTimestamp())) {
-                    // thread interrupted (e.g. Future.cancel(true)) - stop the replay cleanly
-                    injectArtificialStopPacket(fakechar);
-                    return true;
-                }
+                BotHelpers.waitBetweenTwoLong(mvp.getTimestamp(), nextMvp.getTimestamp());
             }
         }
+        checkMovementCancellation(fakechar);
         return false;
     }
 
@@ -271,13 +280,17 @@ public class MovementCommands {
 //    }
 
     public static void injectArtificialStopPacket(Character fakechar) {
+        checkMovementCancellation(fakechar);
         if (isWalking(fakechar)) {
             try {
                 InPacket stopPacket = createArtificialStopPacket(fakechar);
                 BotMove(stopPacket, fakechar);
                 Thread.sleep(100);
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                Thread.currentThread().interrupt();
+                CancellationException cancelled = new CancellationException("Artificial stop animation interrupted");
+                cancelled.initCause(e);
+                throw cancelled;
             }
         }
     }
@@ -599,6 +612,7 @@ public class MovementCommands {
     }
 
     public static void BotMove(InPacket p, Character chr) {
+        checkMovementCancellation(chr);
         p.skip(9);
         try {
             int movementDataStart = p.getPosition();
