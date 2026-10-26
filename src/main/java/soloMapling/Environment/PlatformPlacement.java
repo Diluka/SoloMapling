@@ -339,7 +339,7 @@ public class PlatformPlacement {
         return null;
     }
 
-    public static void botMoveToPlatformAnyUnoccupiedSpot(Character fakechar, String platform) {
+    public static boolean botMoveToPlatformAnyUnoccupiedSpot(Character fakechar, String platform) {
         int mapId = fakechar.getMapId();
 
         // todo verify platform name exists in mapId
@@ -347,16 +347,16 @@ public class PlatformPlacement {
         List<Point> occupiedPointsOnPlatform = getListOfCharacterCoordinates(getAllCharsOnPlatform(mapId, platform));
         Platform flatPlatform = PlatformParser.parsePlatform(mapId, platform);
         Point unoccupiedPt = findUnoccupiedPoint(flatPlatform, occupiedPointsOnPlatform);
-        MovementCommands.pathFinderBeta(fakechar, unoccupiedPt);
+        return MovementCommands.pathFinderBeta(fakechar, unoccupiedPt);
     }
 
-    public static void botMoveToPlatformAnyUnoccupiedSpotAware(Character fakechar, String platform) {
+    public static boolean botMoveToPlatformAnyUnoccupiedSpotAware(Character fakechar, String platform) {
         int mapId = fakechar.getMapId();
 
         List<Point> occupiedPointsOnPlatform = getListOfCharacterCoordinates(getAllCharsOnPlatform(mapId, platform));
         Platform flatPlatform = PlatformParser.parsePlatform(mapId, platform);
         Point unoccupiedPt = findUnoccupiedPoint(flatPlatform, occupiedPointsOnPlatform);
-        MovementCommands.pathFinderAware(fakechar, unoccupiedPt);
+        return MovementCommands.pathFinderAware(fakechar, unoccupiedPt);
     }
 
     // Dynamic-engine sibling of botMoveToPlatformAnyUnoccupiedSpot: same occupancy-aware target

@@ -300,7 +300,9 @@ public class OPQBot extends BotSM {
             List<String> platforms = PlatformPlacement.getMainPlatformIds(getChr().getMapId());
             if (!platforms.isEmpty()) {
                 String target = platforms.get(new Random().nextInt(platforms.size()));
-                PlatformPlacement.botMoveToPlatformAnyUnoccupiedSpot(getChr(), target);
+                if (!PlatformPlacement.botMoveToPlatformAnyUnoccupiedSpot(getChr(), target)) {
+                    debugLogf("No recorded recruitment route; staying available until the next target selection.");
+                }
             }
         }
     }

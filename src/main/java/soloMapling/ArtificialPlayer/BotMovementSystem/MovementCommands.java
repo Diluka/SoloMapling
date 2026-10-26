@@ -346,30 +346,30 @@ public class MovementCommands {
         return interrupted;
     }
 
-    public static void pathFinderBeta(Character fakechar, Point endPt) {
-        if (!tryAcquireMovementLock(fakechar)) return;
+    public static boolean pathFinderBeta(Character fakechar, Point endPt) {
+        if (!tryAcquireMovementLock(fakechar)) return false;
         try {
-            pathFinderBetaUnlocked(fakechar, endPt);
+            return pathFinderBetaUnlocked(fakechar, endPt);
         } finally {
             releaseMovementLock(fakechar);
         }
     }
 
-    private static void pathFinderBetaUnlocked(Character fakechar, Point endPt) {
+    private static boolean pathFinderBetaUnlocked(Character fakechar, Point endPt) {
         int mapId = fakechar.getMapId();
         Point start = fakechar.getPosition();
         PathFinder pf = new PathFinder(fakechar, endPt);
         List<String> path = createPath(mapId, start, endPt, PathFinder.PathType.RANDOM);
         List<NavigationElement> elements = getNavElements(mapId, path);
-        pf.executePath(mapId, elements);
+        return pf.executePath(mapId, elements);
     }
 
     /**
      * Aware pathfinder: walks the bot to endPt while checking for real players
      * between each navigation segment. Uses default detection range and weights.
      */
-    public static void pathFinderAware(Character fakechar, Point endPt) {
-        pathFinderAware(fakechar, endPt, 300, 200, 20, 60, 20);
+    public static boolean pathFinderAware(Character fakechar, Point endPt) {
+        return pathFinderAware(fakechar, endPt, 300, 200, 20, 60, 20);
     }
 
     /**
@@ -381,17 +381,17 @@ public class MovementCommands {
      * @param stopWeight    weight for stopping and reacting
      * @param walkWeight    weight for reacting while continuing to walk
      */
-    public static void pathFinderAware(Character fakechar, Point endPt,
+    public static boolean pathFinderAware(Character fakechar, Point endPt,
                                         int detectWidth, int detectHeight,
                                         int ignoreWeight, int stopWeight, int walkWeight) {
-        if (!tryAcquireMovementLock(fakechar)) return;
+        if (!tryAcquireMovementLock(fakechar)) return false;
         try {
             int mapId = fakechar.getMapId();
             Point start = fakechar.getPosition();
             PathFinder pf = new PathFinder(fakechar, endPt);
             List<String> path = createPath(mapId, start, endPt, PathFinder.PathType.RANDOM);
             List<NavigationElement> elements = getNavElements(mapId, path);
-            pf.executePathAware(mapId, elements, detectWidth, detectHeight,
+            return pf.executePathAware(mapId, elements, detectWidth, detectHeight,
                     ignoreWeight, stopWeight, walkWeight);
         } finally {
             releaseMovementLock(fakechar);
@@ -417,7 +417,7 @@ public class MovementCommands {
             PathFinder pf = new PathFinder(fakechar, snapped);
             List<String> path = createPath(mapId, start, snapped, PathFinder.PathType.RANDOM);
             List<NavigationElement> elements = getNavElements(mapId, path);
-            pf.executePath(mapId, elements);
+            if (!pf.executePath(mapId, elements)) return null;
             return result;
         } finally {
             releaseMovementLock(fakechar);
