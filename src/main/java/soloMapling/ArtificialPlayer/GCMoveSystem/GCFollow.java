@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
+import org.gms.client.Character;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,6 +37,7 @@ final class GCFollow {
         final Character bot;
         final Character target;
         ScheduledFuture<?> task;
+        boolean cancelled;
         int travelDest = -1; // map the current follow-travel is heading to (-1 = not traveling)
 
         Session(Character bot, Character target) {
@@ -46,21 +47,27 @@ final class GCFollow {
     }
 
     static void start(Character bot, Character target) {
-        if (bot == null || target == null) {
+        if (bot == null || target == null || GCMovement.isStopping()) {
             return;
         }
         cancel(bot);
         GCMovement.enable(bot);
         Session s = new Session(bot, target);
-        s.task = POOL.scheduleAtFixedRate(
-                () -> {
-                    try {
-                        tick(s);
-                    } catch (Throwable ignored) {
-                        // a thrown poll would cancel the periodic task
-                    }
-                }, 0, POLL_MS, TimeUnit.MILLISECONDS);
-        SESSIONS.put(bot.getId(), s);
+        synchronized (SESSIONS) {
+            if (GCMovement.isStopping()) return;
+            SESSIONS.put(bot.getId(), s);
+            s.task = POOL.scheduleAtFixedRate(
+                    () -> {
+                        synchronized (s) {
+                            if (s.cancelled) return;
+                            try {
+                                tick(s);
+                            } catch (Throwable ignored) {
+                                // a thrown poll would cancel the periodic task
+                            }
+                        }
+                    }, 0, POLL_MS, TimeUnit.MILLISECONDS);
+        }
     }
 
     static void cancel(Character bot) {
@@ -68,8 +75,22 @@ final class GCFollow {
             return;
         }
         Session s = SESSIONS.remove(bot.getId());
-        if (s != null && s.task != null) {
-            s.task.cancel(false);
+        if (s != null) cancelSession(s);
+    }
+
+    static void cancelAll() {
+        java.util.List<Session> sessions;
+        synchronized (SESSIONS) {
+            sessions = new java.util.ArrayList<>(SESSIONS.values());
+            SESSIONS.clear();
+        }
+        for (Session session : sessions) cancelSession(session);
+    }
+
+    private static void cancelSession(Session session) {
+        synchronized (session) {
+            session.cancelled = true;
+            if (session.task != null) session.task.cancel(false);
         }
     }
 

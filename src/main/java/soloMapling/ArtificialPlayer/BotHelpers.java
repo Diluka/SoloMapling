@@ -1,29 +1,27 @@
 package soloMapling.ArtificialPlayer;
 
-import client.Character;
-import client.Client;
-import net.server.Server;
-import net.server.channel.Channel;
-import server.ItemInformationProvider;
-import server.maps.MapItem;
-import server.maps.MapObject;
+import org.gms.client.Character;
+import org.gms.client.Client;
+import org.gms.net.server.Server;
+import org.gms.net.server.channel.Channel;
+import org.gms.server.ItemInformationProvider;
+import org.gms.server.maps.MapItem;
+import org.gms.server.maps.MapObject;
+import soloMapling.beidou.BotRegistry;
+import soloMapling.server.BotTickService;
 
 import java.awt.*;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CancellationException;
 
 public class BotHelpers {
 
     // BotHelpers - bot related stuff with regards to programming (object manipulation, etc)
 
-    public static client.Character getCharFromChannelStorage(int cid) {
-        // just as a catch incacse i enter the cid without 20000
-        if (cid < 1000) {
-            cid = cid + 20000;
-        }
-
+    public static org.gms.client.Character getCharFromChannelStorage(int cid) {
         Channel channel = Server.getInstance().getChannel(0, 1);
-        client.Character fakechar = channel.getPlayerStorage().getCharacterById(cid);
+        org.gms.client.Character fakechar = channel.getPlayerStorage().getCharacterById(cid);
         if (isBot(fakechar)) {
             return (fakechar);
         }
@@ -31,19 +29,7 @@ public class BotHelpers {
     }
 
     public static boolean isBot(Character chr) {
-        return isBot(chr.getId());
-    }
-
-    private static boolean isBot(int id) {
-        return isArtificial(id) || isConsole(id);
-    }
-
-    private static boolean isArtificial(int id) {
-        return id > 20000;
-    }
-
-    private static boolean isConsole(int id) {
-        return id == 999;
+        return BotRegistry.isBot(chr);
     }
 
     public static String convertItemIdToName(int itemId) {
@@ -121,13 +107,30 @@ public class BotHelpers {
     // Returns true if the sleep completed, false if the thread was interrupted
     // (interrupt flag restored so the caller can bail).
     public static boolean blockingSleep(long milliseconds) {
+        if (BotTickService.isCurrentTickCancelled()) throw new CancellationException("Macro callback stopped");
         try {
             Thread.sleep(milliseconds);
+            if (BotTickService.isCurrentTickCancelled()) throw new CancellationException("Macro callback stopped");
             return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (BotTickService.isCurrentTickCancelled()) throw interruptedCancellation(e);
             return false;
         }
+    }
+
+    /** Do not convert lifecycle cancellation into the replay's normal stop-react boolean. */
+    public static void checkCancellation() {
+        if (Thread.currentThread().isInterrupted() || BotTickService.isCurrentTickCancelled()) {
+            throw new CancellationException("Movement execution cancelled");
+        }
+    }
+
+    private static CancellationException interruptedCancellation(InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        CancellationException cancelled = new CancellationException("Movement wait interrupted");
+        cancelled.initCause(interrupted);
+        return cancelled;
     }
 
     public static Rectangle createRectangle(Point center, int width, int height) {
@@ -164,20 +167,21 @@ public class BotHelpers {
 
     // Blocks the replaying thread for the gap between two recorded packet timestamps.
     // Deliberately blocking: recording replay is data-driven synchronous choreography
-    // and runs on a virtual thread. Returns false if the thread was interrupted
-    // (interrupt flag restored) so the replay loop can bail; true if the wait completed.
+    // and runs on a virtual thread. Interruption remains a cancellation exception
+    // (with its flag preserved), distinct from a normal awareness stop/repath.
     // Diff is clamped at 0 so an out-of-order timestamp can't throw from Thread.sleep.
     public static boolean waitBetweenTwoLong(long timestamp1, long timestamp2) {
+        checkCancellation();
         long diff = Math.max(0, timestamp2 - timestamp1);
         if (diff > 2000) {
             System.out.println("More than 2 seconds waiting");
         }
         try {
             Thread.sleep(diff);
+            checkCancellation();
             return true;
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
+            throw interruptedCancellation(e);
         }
     }
 

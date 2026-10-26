@@ -1,10 +1,10 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
-import net.server.Server;
-import net.server.world.World;
-import server.maps.MapleMap;
-import server.maps.Portal;
+import org.gms.client.Character;
+import org.gms.net.server.Server;
+import org.gms.net.server.world.World;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Portal;
 import soloMapling.ArtificialPlayer.BotHelpers;
 
 import java.awt.Point;
@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /*
  * Observability tracker for the GCMoveSystem LOD layer. A single ~1s poll over the online real
- * players (id ≤ 20000) maintains two sets of map ids:
+ * players (excluding registered bots) maintains two sets of map ids:
  * 
  *   fullMaps — a real player is on the map (FULL tier: physics + broadcast).
  *   haloMaps — a portal-adjacent map a real player is standing near the entrance to (HALO: pre-warm
@@ -61,6 +61,8 @@ final class ObserverTracker {
     private static final TierDwell DWELL = new TierDwell(DWELL_MS);
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
+    private static ScheduledExecutorService scheduler;
+    private static long generation;
 
     // Transient promotion override: when a bot ENTERS a map that already has a real player, we mark
     // that map observed immediately so FULL behaviour (visible spawn, broadcast, combat) starts the
@@ -99,16 +101,30 @@ final class ObserverTracker {
     }
 
     /* Start the poll once (idempotent). Called from GCMovement.enable(Character). */
-    static void ensureStarted() {
+    static synchronized void ensureStarted() {
         if (!STARTED.compareAndSet(false, true)) {
             return;
         }
-        ScheduledExecutorService pool = Executors.newSingleThreadScheduledExecutor(r -> {
+        long session = ++generation;
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "gcmove-observer");
             t.setDaemon(true);
             return t;
         });
-        pool.scheduleAtFixedRate(ObserverTracker::safeRefresh, 0, POLL_MS, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(() -> safeRefresh(session), 0, POLL_MS, TimeUnit.MILLISECONDS);
+    }
+
+    static synchronized void stop() {
+        STARTED.set(false);
+        generation++;
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+            scheduler = null;
+        }
+        fullMaps = Set.of();
+        haloMaps = Set.of();
+        forcedFull.clear();
+        DWELL.clear();
     }
 
     /* Whether the observer poll is running (started by the first GCMovement.enable). */
@@ -157,7 +173,8 @@ final class ObserverTracker {
         return haloMaps;
     }
 
-    private static void safeRefresh() {
+    private static synchronized void safeRefresh(long session) {
+        if (!STARTED.get() || session != generation) return;
         try {
             refresh();
         } catch (Throwable ignored) {
@@ -172,7 +189,7 @@ final class ObserverTracker {
         }
         Set<Integer> full = new HashSet<>();
         List<Character> realPlayers = new ArrayList<>();
-        for (World world : server.getWorlds()) {
+        for (World world : Server.getInstance().getWorlds()) {
             if (world == null) {
                 continue;
             }

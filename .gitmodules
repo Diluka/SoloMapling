@@ -1,0 +1,3 @@
+[submodule "upstream/BeiDou-Server"]
+	path = upstream/BeiDou-Server
+	url = git@github.com:BeiDouMS/BeiDou-Server.git

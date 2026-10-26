@@ -50,4 +50,9 @@ final class TierDwell {
     int size() {
         return active.size();
     }
+
+    void clear() {
+        stickyUntil.clear();
+        active = Set.of();
+    }
 }

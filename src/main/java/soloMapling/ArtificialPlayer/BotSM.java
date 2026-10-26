@@ -1,9 +1,9 @@
 package soloMapling.ArtificialPlayer;
 
-import client.Character;
-import server.Trade;
-import server.maps.MapObject;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.server.Trade;
+import org.gms.server.maps.MapObject;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotAttackSystem.ThrowingStarSelector;
 import soloMapling.ArtificialPlayer.BotCommandsPack.SocialCommands;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.ChatMessage;
@@ -50,7 +50,7 @@ public abstract class BotSM implements EventSubscriber {
     // Level-appropriate throwing star chosen once at creation for claw-thief bots (0 = not a claw
     // thrower). Cosmetic packet projectile only; lives here so we never touch the Cosmic Character.
     private final int chosenStarId;
-    private boolean running;
+    private volatile boolean running;
     protected BotState state;
     private BotDebugHandler debugger;
     private BotInteractorsHandler interactors = new BotInteractorsHandler();
@@ -78,7 +78,7 @@ public abstract class BotSM implements EventSubscriber {
             soloMapling.server.BotPerfStats.MACRO_TICKS.increment();
             updateState();
         } catch (Exception e) {
-            e.printStackTrace(); // Handle exceptions to ensure the scheduler doesn't stop unexpectedly
+            BotTickService.reportFailure(e);
         }
     };
 
@@ -153,7 +153,7 @@ public abstract class BotSM implements EventSubscriber {
         return this.state == expectedState;
     }
 
-    public client.Character getChr() {
+    public org.gms.client.Character getChr() {
         return this.character;
     }
 
@@ -386,9 +386,11 @@ public abstract class BotSM implements EventSubscriber {
         return 2000 + random.nextInt(4000); // 2000 to 3000 ms
     }
 
-    // Method to stop the scheduled task. An in-flight tick is allowed to finish
-    // (the old cancel(true) interrupt is gone); the wheel entry is simply removed.
+    // Stop future ticks and publish local stop flags. Global runtime shutdown
+    // also interrupts and drains real macro bodies before removing the world.
     public synchronized void stopScheduledTask() {
+        setRunning(false);
+        interruptMovement();
         log("Shutting down scheduler: " + this.getChr().getName());
         EventBus.getInstance().unsubscribeAll(this);
         botClearChalkboard(this.getChr());

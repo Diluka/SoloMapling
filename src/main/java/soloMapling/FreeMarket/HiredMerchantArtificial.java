@@ -1,7 +1,7 @@
 package soloMapling.FreeMarket;
 
-import client.Character;
-import server.maps.HiredMerchant;
+import org.gms.client.Character;
+import org.gms.server.maps.HiredMerchant;
 
 import java.awt.*;
 
@@ -30,10 +30,13 @@ public class HiredMerchantArtificial extends HiredMerchant {
     private shopTypes tertiary = null;
 
     public HiredMerchantArtificial(Character owner, String desc, int itemId, int id, String name) {
-        super(owner, desc, itemId);
+        super(prepareOwner(owner, id, name), desc, itemId);
+    }
 
-        this.ownerId = id;
-        this.ownerName = name;
+    private static Character prepareOwner(Character owner, int id, String name) {
+        owner.setId(id);
+        owner.setName(name);
+        return owner;
     }
 
     public Point getPos() {

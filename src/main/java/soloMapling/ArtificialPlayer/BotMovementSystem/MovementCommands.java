@@ -1,9 +1,10 @@
 package soloMapling.ArtificialPlayer.BotMovementSystem;
 
-import client.Character;
-import net.packet.InPacket;
-import server.maps.Foothold;
-import server.maps.Portal;
+import org.gms.client.Character;
+import org.gms.client.BotClient;
+import org.gms.net.packet.InPacket;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.Portal;
 import soloMapling.ArtificialPlayer.BotHelpers;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.MovementPacket;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.SingleMoveCommand;
@@ -11,20 +12,22 @@ import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.Movemen
 import soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem.NavigationElement;
 import soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem.PathFinder;
 import soloMapling.ArtificialPlayer.GCMoveSystem.LodCounts;
-import tools.PacketCreator;
-import tools.exceptions.EmptyMovementException;
+import soloMapling.beidou.BotRegistry;
+import org.gms.util.PacketCreator;
+import org.gms.exception.EmptyMovementException;
 
-import server.maps.MapleMap;
+import org.gms.server.maps.MapleMap;
 
 import java.awt.*;
 import java.util.Map;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.lang.Math.abs;
-import static net.server.channel.handlers.AbstractMovementPacketHandler.updatePositionBot;
+import static org.gms.net.server.channel.handlers.AbstractMovementPacketHandler.updatePositionBot;
 import static soloMapling.ArtificialPlayer.BotLogic.isPointNear;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.InPacketReader.getMovementRecording;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementPacketConstructor.createArtificialStopPacket;
@@ -51,6 +54,13 @@ import static soloMapling.ArtificialPlayer.BotCommandsPack.WarpCommands.botWarpM
 import static soloMapling.DebugUtilities.debugprint;
 
 public class MovementCommands {
+
+    public static void checkMovementCancellation(Character character) {
+        BotHelpers.checkCancellation();
+        if (character.getClient() instanceof BotClient && !BotRegistry.isCurrent(character)) {
+            throw new CancellationException("Headless character is no longer in the active world");
+        }
+    }
 
     private static final ConcurrentHashMap<Integer, Boolean> movementInterruptFlags = new ConcurrentHashMap<>();
 
@@ -107,9 +117,11 @@ public class MovementCommands {
     public static boolean BotMoveStreamHelper(MovementRecording mvr, Character fakechar,
                                            boolean useOffset, Point stopPoint,
                                            MidMovementCheck midCheck) {
+        checkMovementCancellation(fakechar);
         List<MovementPacket> fullRecording = mvr.getMovementPacketList();
         fullInPacket:
         for (int i = 0; i < fullRecording.size(); i++) {
+            checkMovementCancellation(fakechar);
             if (isBotMovementInterrupted(fakechar)) {
                 clearBotMovementInterrupt(fakechar);
                 injectArtificialStopPacket(fakechar);
@@ -143,13 +155,10 @@ public class MovementCommands {
 
             MovementPacket nextMvp = (i + 1 < fullRecording.size()) ? fullRecording.get(i + 1) : null; // Next element
             if (nextMvp != null) {
-                if (!BotHelpers.waitBetweenTwoLong(mvp.getTimestamp(), nextMvp.getTimestamp())) {
-                    // thread interrupted (e.g. Future.cancel(true)) - stop the replay cleanly
-                    injectArtificialStopPacket(fakechar);
-                    return true;
-                }
+                BotHelpers.waitBetweenTwoLong(mvp.getTimestamp(), nextMvp.getTimestamp());
             }
         }
+        checkMovementCancellation(fakechar);
         return false;
     }
 
@@ -271,13 +280,17 @@ public class MovementCommands {
 //    }
 
     public static void injectArtificialStopPacket(Character fakechar) {
+        checkMovementCancellation(fakechar);
         if (isWalking(fakechar)) {
             try {
                 InPacket stopPacket = createArtificialStopPacket(fakechar);
                 BotMove(stopPacket, fakechar);
                 Thread.sleep(100);
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                Thread.currentThread().interrupt();
+                CancellationException cancelled = new CancellationException("Artificial stop animation interrupted");
+                cancelled.initCause(e);
+                throw cancelled;
             }
         }
     }
@@ -333,30 +346,30 @@ public class MovementCommands {
         return interrupted;
     }
 
-    public static void pathFinderBeta(Character fakechar, Point endPt) {
-        if (!tryAcquireMovementLock(fakechar)) return;
+    public static boolean pathFinderBeta(Character fakechar, Point endPt) {
+        if (!tryAcquireMovementLock(fakechar)) return false;
         try {
-            pathFinderBetaUnlocked(fakechar, endPt);
+            return pathFinderBetaUnlocked(fakechar, endPt);
         } finally {
             releaseMovementLock(fakechar);
         }
     }
 
-    private static void pathFinderBetaUnlocked(Character fakechar, Point endPt) {
+    private static boolean pathFinderBetaUnlocked(Character fakechar, Point endPt) {
         int mapId = fakechar.getMapId();
         Point start = fakechar.getPosition();
         PathFinder pf = new PathFinder(fakechar, endPt);
         List<String> path = createPath(mapId, start, endPt, PathFinder.PathType.RANDOM);
         List<NavigationElement> elements = getNavElements(mapId, path);
-        pf.executePath(mapId, elements);
+        return pf.executePath(mapId, elements);
     }
 
     /**
      * Aware pathfinder: walks the bot to endPt while checking for real players
      * between each navigation segment. Uses default detection range and weights.
      */
-    public static void pathFinderAware(Character fakechar, Point endPt) {
-        pathFinderAware(fakechar, endPt, 300, 200, 20, 60, 20);
+    public static boolean pathFinderAware(Character fakechar, Point endPt) {
+        return pathFinderAware(fakechar, endPt, 300, 200, 20, 60, 20);
     }
 
     /**
@@ -368,17 +381,17 @@ public class MovementCommands {
      * @param stopWeight    weight for stopping and reacting
      * @param walkWeight    weight for reacting while continuing to walk
      */
-    public static void pathFinderAware(Character fakechar, Point endPt,
+    public static boolean pathFinderAware(Character fakechar, Point endPt,
                                         int detectWidth, int detectHeight,
                                         int ignoreWeight, int stopWeight, int walkWeight) {
-        if (!tryAcquireMovementLock(fakechar)) return;
+        if (!tryAcquireMovementLock(fakechar)) return false;
         try {
             int mapId = fakechar.getMapId();
             Point start = fakechar.getPosition();
             PathFinder pf = new PathFinder(fakechar, endPt);
             List<String> path = createPath(mapId, start, endPt, PathFinder.PathType.RANDOM);
             List<NavigationElement> elements = getNavElements(mapId, path);
-            pf.executePathAware(mapId, elements, detectWidth, detectHeight,
+            return pf.executePathAware(mapId, elements, detectWidth, detectHeight,
                     ignoreWeight, stopWeight, walkWeight);
         } finally {
             releaseMovementLock(fakechar);
@@ -404,7 +417,7 @@ public class MovementCommands {
             PathFinder pf = new PathFinder(fakechar, snapped);
             List<String> path = createPath(mapId, start, snapped, PathFinder.PathType.RANDOM);
             List<NavigationElement> elements = getNavElements(mapId, path);
-            pf.executePath(mapId, elements);
+            if (!pf.executePath(mapId, elements)) return null;
             return result;
         } finally {
             releaseMovementLock(fakechar);
@@ -450,7 +463,7 @@ public class MovementCommands {
     }
 
     public static void botSitChair(Character fakechar, Integer chairId) {
-        fakechar.setChair(chairId);
+        fakechar.soloSetChair(chairId);
         int stance = fakechar.getStance();
         InPacket sitPacket = createSitPacket(fakechar);
         BotMove(sitPacket, fakechar);
@@ -459,7 +472,7 @@ public class MovementCommands {
     }
 
     public static void botCancelChair(Character fakechar) {
-        fakechar.setChair(-1);
+        fakechar.soloSetChair(-1);
         int stance = fakechar.getStance();
         fakechar.getMap().broadcastMessage(fakechar, PacketCreator.showChair(fakechar.getId(), 0), false);
         InPacket unsitPacket = createUnsitPacket(fakechar);
@@ -599,6 +612,7 @@ public class MovementCommands {
     }
 
     public static void BotMove(InPacket p, Character chr) {
+        checkMovementCancellation(chr);
         p.skip(9);
         try {
             int movementDataStart = p.getPosition();

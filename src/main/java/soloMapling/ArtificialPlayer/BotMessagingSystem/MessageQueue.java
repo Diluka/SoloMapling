@@ -36,11 +36,7 @@ public class MessageQueue {
 
     private final Map<QueueType, BlockingQueue<ChatMessage>> queues;
     private static final MessageQueue messageQueue = new MessageQueue();
-
-    static {
-        QueueCleaner.getInstance();
-        Dispatcher.getInstance();
-    }
+    private static boolean workersStarted;
 
     private MessageQueue() {
         queues = new HashMap<>();
@@ -53,6 +49,25 @@ public class MessageQueue {
         return messageQueue;
     }
 
+    /** Start workers explicitly when the world is ready; reading the queue never starts them. */
+    public static synchronized void start() {
+        if (!workersStarted) {
+            workersStarted = true;
+            QueueCleaner.startIfNeeded(messageQueue);
+            Dispatcher.startIfNeeded(messageQueue);
+        }
+    }
+
+    /** Stop only existing workers and release messages belonging to the old world. */
+    public static synchronized void stopIfStarted() {
+        if (workersStarted) {
+            workersStarted = false;
+            Dispatcher.stopIfStarted();
+            QueueCleaner.stopIfStarted();
+        }
+        messageQueue.queues.values().forEach(BlockingQueue::clear);
+    }
+
     public void addMessage(ChatMessage message) {
         addMessage(QueueType.SECONDARY, message);
     }
@@ -62,7 +77,9 @@ public class MessageQueue {
     }
 
     public void addMessage(QueueType queueType, ChatMessage message) {
-        queues.get(queueType).add(message);
+        synchronized (MessageQueue.class) {
+            if (workersStarted) queues.get(queueType).add(message);
+        }
     }
 
     public ChatMessage getMessage() throws InterruptedException {
@@ -138,7 +155,9 @@ public class MessageQueue {
     }
 
     public boolean requeueMessage(QueueType queueType, ChatMessage message) {
-        return queues.get(queueType).offer(message);
+        synchronized (MessageQueue.class) {
+            return workersStarted && message != null && queues.get(queueType).offer(message);
+        }
     }
 
 //    public void printAllMessages(String queueName) {

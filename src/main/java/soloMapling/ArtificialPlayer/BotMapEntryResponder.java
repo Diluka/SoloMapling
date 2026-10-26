@@ -1,7 +1,7 @@
 package soloMapling.ArtificialPlayer;
 
-import client.Character;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.server.ExecutorServiceManager;
@@ -41,6 +41,12 @@ public final class BotMapEntryResponder implements EventSubscriber {
     public static void register() {
         if (REGISTERED.compareAndSet(false, true)) {
             EventBus.getInstance().subscribe(EventType.MAP_ENTERED, INSTANCE);
+        }
+    }
+
+    public static void unregister() {
+        if (REGISTERED.getAndSet(false)) {
+            EventBus.getInstance().unsubscribe(EventType.MAP_ENTERED, INSTANCE);
         }
     }
 

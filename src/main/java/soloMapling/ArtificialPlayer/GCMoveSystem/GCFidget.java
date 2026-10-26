@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
+import org.gms.client.Character;
 
 import java.awt.Point;
 import java.util.Map;
@@ -41,6 +41,7 @@ final class GCFidget {
     private static final class Session {
         final Character bot;
         ScheduledFuture<?> task;
+        boolean cancelled;
         Point base;                 // rest anchor (null = re-anchor at the next idle position)
         long nextActionAtMs;
         boolean fidgetMoveActive;   // our own nudge/return move is in flight (vs a user command)
@@ -51,20 +52,26 @@ final class GCFidget {
     }
 
     static void start(Character bot) {
-        if (bot == null) {
+        if (bot == null || GCMovement.isStopping()) {
             return;
         }
         cancel(bot);
         Session s = new Session(bot);
-        s.task = POOL.scheduleAtFixedRate(
-                () -> {
-                    try {
-                        tick(s);
-                    } catch (Throwable ignored) {
-                        // a thrown poll would cancel the periodic task
-                    }
-                }, POLL_MS, POLL_MS, TimeUnit.MILLISECONDS);
-        SESSIONS.put(bot.getId(), s);
+        synchronized (SESSIONS) {
+            if (GCMovement.isStopping()) return;
+            SESSIONS.put(bot.getId(), s);
+            s.task = POOL.scheduleAtFixedRate(
+                    () -> {
+                        synchronized (s) {
+                            if (s.cancelled) return;
+                            try {
+                                tick(s);
+                            } catch (Throwable ignored) {
+                                // a thrown poll would cancel the periodic task
+                            }
+                        }
+                    }, POLL_MS, POLL_MS, TimeUnit.MILLISECONDS);
+        }
     }
 
     static void cancel(Character bot) {
@@ -72,8 +79,22 @@ final class GCFidget {
             return;
         }
         Session s = SESSIONS.remove(bot.getId());
-        if (s != null && s.task != null) {
-            s.task.cancel(false);
+        if (s != null) cancelSession(s);
+    }
+
+    static void cancelAll() {
+        java.util.List<Session> sessions;
+        synchronized (SESSIONS) {
+            sessions = new java.util.ArrayList<>(SESSIONS.values());
+            SESSIONS.clear();
+        }
+        for (Session session : sessions) cancelSession(session);
+    }
+
+    private static void cancelSession(Session session) {
+        synchronized (session) {
+            session.cancelled = true;
+            if (session.task != null) session.task.cancel(false);
         }
     }
 

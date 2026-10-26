@@ -8,6 +8,7 @@ import org.jgrapht.graph.DirectedMultigraph;
 import org.jgrapht.nio.DefaultAttribute;
 import org.jgrapht.nio.dot.DOTExporter;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.MovementRecordingRaw;
+import soloMapling.Environment.SoloResources;
 
 import java.awt.*;
 import java.io.File;
@@ -34,11 +35,11 @@ public class MapGraph {
     private Graph<String, NamedEdge> graph;
     private List<String> mainAreas = new ArrayList<>();
     private List<String> connectors = new ArrayList<>();
-    File directory;
+    private final String recordingDirectory;
 
     public MapGraph(int mapId) {
         this.mapId = mapId; // convertFMMapDirectoryID(mapId);
-        this.directory = new File("src/main/java/soloMapling/ArtificialPlayer/BotMovementSystem/movementDataPackets/map" + this.mapId);
+        this.recordingDirectory = "ArtificialPlayer/BotMovementSystem/movementDataPackets/map" + this.mapId;
         this.setMainAreas();
         this.setConnectors();
         this.buildGraph();
@@ -145,49 +146,23 @@ public class MapGraph {
     }
 
     public void setMainAreas() {
-        if (!directory.exists()) {
-            debugprint("MapGraph: no movement-packet dir for map " + mapId);
-            return;
-        }
-
-        File[] files = directory.listFiles();
         HashSet<String> uniqueMainAreas = new HashSet<>();
-
-        for (File file : files) {
-            String fileName = file.getName();
-            // Check if the file is a main area file (e.g., m1.bin, m2.csv)
+        for (String fileName : SoloResources.listFileNames(recordingDirectory, null)) {
             if (fileName.startsWith("m") && fileName.contains(".")) {
-                int dotIndex = fileName.indexOf('.');
-                String mainArea = fileName.substring(0, dotIndex);
-                uniqueMainAreas.add(mainArea);
+                uniqueMainAreas.add(fileName.substring(0, fileName.indexOf('.')));
             }
         }
-
-        // Convert the set to a list and clear the existing list before adding
         mainAreas.clear();
         mainAreas.addAll(uniqueMainAreas);
     }
 
     public void setConnectors() {
-        if (!directory.exists()) {
-            debugprint("MapGraph: no movement-packet dir for map " + mapId);
-            return;
-        }
-
-        File[] files = directory.listFiles();
         HashSet<String> uniqueConnectors = new HashSet<>();
-
-        for (File file : files) {
-            String fileName = file.getName();
-            // Check if the file is a connector file (e.g., c1-4.bin, c4-1.csv)
-            if (fileName.startsWith("c") && fileName.contains("-")) {
-                int dotIndex = fileName.indexOf('.');
-                String connector = fileName.substring(0, dotIndex);
-                uniqueConnectors.add(connector);
+        for (String fileName : SoloResources.listFileNames(recordingDirectory, null)) {
+            if (fileName.startsWith("c") && fileName.contains("-") && fileName.contains(".")) {
+                uniqueConnectors.add(fileName.substring(0, fileName.indexOf('.')));
             }
         }
-
-        // Convert the set to a list and clear the existing list before adding
         connectors.clear();
         connectors.addAll(uniqueConnectors);
     }

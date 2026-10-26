@@ -2,11 +2,11 @@ package soloMapling.ArtificialPlayer.GCMoveSystem;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import server.maps.Foothold;
-import server.maps.MapManager;
-import server.maps.MapleMap;
-import server.maps.Portal;
-import server.maps.Rope;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.MapManager;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Portal;
+import org.gms.server.maps.Rope;
 
 import java.awt.*;
 import java.io.IOException;
@@ -21,8 +21,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -73,16 +76,25 @@ final class BotNavigationGraphProvider {
     private static final Map<Integer, Set<Integer>> COLLIDABLE_WALL_IDS_BY_MAP_ID = new ConcurrentHashMap<>();
     private static final Map<Integer, Set<Integer>> COLLIDABLE_FROM_BELOW_IDS_BY_MAP_ID = new ConcurrentHashMap<>();
     private static final ThreadLocal<BuildProfileBuilder> ACTIVE_BUILD_PROFILE = new ThreadLocal<>();
-    private static final ExecutorService GRAPH_WARMUP_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+    private static volatile long runtimeGeneration;
+    private static final ExecutorService GRAPH_WARMUP_EXECUTOR = Executors.newFixedThreadPool(1, r -> {
         Thread thread = new Thread(r, "bot-nav-graph-warmup");
         thread.setDaemon(true);
         return thread;
     });
-    private static final ExecutorService FAST_GRAPH_WARMUP_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+    private static final ExecutorService FAST_GRAPH_WARMUP_EXECUTOR = Executors.newFixedThreadPool(1, r -> {
         Thread thread = new Thread(r, "bot-nav-graph-warmup-fast");
         thread.setDaemon(true);
         return thread;
     });
+
+    static synchronized void cancelPendingLoads() {
+        runtimeGeneration++;
+        for (CompletableFuture<BotNavigationGraph> future : PENDING_GRAPHS.values()) future.cancel(false);
+        PENDING_GRAPHS.clear();
+        ((java.util.concurrent.ThreadPoolExecutor) GRAPH_WARMUP_EXECUTOR).getQueue().clear();
+        ((java.util.concurrent.ThreadPoolExecutor) FAST_GRAPH_WARMUP_EXECUTOR).getQueue().clear();
+    }
 
     private record GraphCacheKey(int mapId, int totalSpeedStat, int totalJumpStat, boolean snowShoes) {
         static GraphCacheKey from(int mapId, BotMovementProfile profile) {
@@ -465,6 +477,8 @@ final class BotNavigationGraphProvider {
                                                                              BotMovementProfile movementProfile,
                                                                              GraphCacheKey key,
                                                                              boolean async) {
+        long session = runtimeGeneration;
+        if (GCMovement.isStopping()) return CompletableFuture.failedFuture(new java.util.concurrent.CancellationException());
         BotNavigationGraph cached = GRAPHS.get(key);
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
@@ -483,20 +497,50 @@ final class BotNavigationGraphProvider {
 
         Runnable task = () -> {
             try {
+                if (session != runtimeGeneration || future.isCancelled()) {
+                    // A stop may have cleared the registry before this old load
+                    // was inserted, so cancellation must also settle this promise.
+                    future.cancel(false);
+                    return;
+                }
                 BotNavigationGraph graph = loadOrBuildGraph(map, movementProfile, key);
-                GRAPHS.put(key, graph);
-                future.complete(graph);
+                synchronized (BotNavigationGraphProvider.class) {
+                    if (session != runtimeGeneration || future.isCancelled()) {
+                        future.cancel(false);
+                        return;
+                    }
+                    GRAPHS.put(key, graph);
+                    future.complete(graph);
+                }
             } catch (Throwable t) {
-                future.completeExceptionally(t);
-                log.warn("Failed to warm bot nav graph for map {} speed={} jump={}",
-                        key.mapId(), key.totalSpeedStat(), key.totalJumpStat(), t);
+                Throwable cause = t;
+                while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                        && cause.getCause() != null) {
+                    cause = cause.getCause();
+                }
+                if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
+                if (session != runtimeGeneration
+                        && (cause instanceof CancellationException || cause instanceof InterruptedException)) {
+                    future.cancel(false);
+                } else {
+                    future.completeExceptionally(t);
+                    log.warn("Failed to warm bot nav graph for map {} speed={} jump={}",
+                            key.mapId(), key.totalSpeedStat(), key.totalJumpStat(), t);
+                }
             } finally {
                 PENDING_GRAPHS.remove(key, future);
             }
         };
 
         if (async) {
-            selectWarmupExecutor(map).execute(task);
+            synchronized (BotNavigationGraphProvider.class) {
+                if (GCMovement.isStopping() || session != runtimeGeneration || future.isCancelled()) {
+                    future.cancel(false);
+                    PENDING_GRAPHS.remove(key, future);
+                } else {
+                    selectWarmupExecutor(map).execute(task);
+                }
+            }
         } else {
             task.run();
         }

@@ -2,7 +2,6 @@ package soloMapling.Environment;
 
 import java.awt.Point;
 import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -41,7 +40,7 @@ public class PlatformParser {
         List<Point> coordinates = new ArrayList<>();
         Path filePath = Paths.get(BASE_PATH, "map" + mapId, fileName + ".csv");
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath.toFile()))) {
+        try (BufferedReader reader = new BufferedReader(SoloResources.openReader(filePath.toString()))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();

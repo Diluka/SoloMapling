@@ -1,14 +1,16 @@
 package soloMapling.FreeMarket;
 
-import client.Client;
-import client.Character;
-import client.Job;
-import net.server.Server;
-import server.maps.HiredMerchant;
-import server.maps.PlayerShop;
-import server.maps.PlayerShopItem;
+import org.gms.client.Client;
+import org.gms.client.Character;
+import org.gms.client.BotClient;
+import soloMapling.beidou.BotRegistry;
+import org.gms.client.Job;
+import org.gms.net.server.Server;
+import org.gms.server.maps.HiredMerchant;
+import org.gms.server.maps.PlayerShop;
+import org.gms.server.maps.PlayerShopItem;
 import soloMapling.server.ExecutorServiceManager;
-import tools.PacketCreator;
+import org.gms.util.PacketCreator;
 
 import java.awt.*;
 import java.util.Arrays;
@@ -119,13 +121,17 @@ public class ArtificialFreeMarket {
         int world = 0;
         int channel = 1;
 
-        int ownerId = 20000 + random.nextInt(10001);
+        int ownerId = BotRegistry.allocateId();
         String ownerName = getRandomShopOwnerIGN();
         String description = "";
 
         int shop_item_id = hiredMerchantsList.get(random.nextInt(hiredMerchantsList.size())); // 5030000;
-        Client cm = Client.createMock();
+        Client cm = new BotClient(world, channel);
         Character newchar = Character.getDefault(cm);
+        newchar.setId(ownerId);
+        newchar.setName(ownerName);
+        cm.setPlayer(newchar);
+        BotRegistry.register(newchar);
         newchar.setPosition(position);
         newchar.setMap(Server.getInstance().getChannel(world, channel).getMapFactory().getMap(mapId));
 
@@ -372,8 +378,8 @@ public class ArtificialFreeMarket {
     // doesnt work
     public static void destroyAllShops(Client c) {
         debugprint("Destroy all shops");
-        c.getWorldServer().getChannel(1).closeAllMerchants();
-//        c.getChannelServer().closeAllMerchants();
+        c.getWorldServer().getChannel(1).soloCloseAllMerchants();
+//        c.getChannelServer().soloCloseAllMerchants();
     }
 
     private static void repeatAction(int times, Runnable action) {

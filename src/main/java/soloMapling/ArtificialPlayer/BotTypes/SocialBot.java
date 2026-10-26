@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.BotTypes;
 
-import client.Character;
+import org.gms.client.Character;
 import soloMapling.ArtificialPlayer.BotChatterSystem.BotChatter;
 import soloMapling.ArtificialPlayer.ConversationManager;
 import soloMapling.ArtificialPlayer.BotDialogueHandler;
@@ -14,18 +14,22 @@ import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotTownSystem.TownStation;
 import soloMapling.ArtificialPlayer.BotTypeManager;
 import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
+import soloMapling.ArtificialPlayer.LlmSystem.SocialChatSessionStore;
+import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmConfig;
+import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
 import soloMapling.server.BotTiming;
 import soloMapling.server.EventMessageSystem.EventBus;
 import soloMapling.server.EventMessageSystem.EventType;
 import soloMapling.server.EventMessageSystem.GameEvent;
 import soloMapling.server.MethodScheduler;
-import tools.PacketCreator;
+import org.gms.util.PacketCreator;
 
 import java.awt.Point;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static soloMapling.ArtificialPlayer.BotCommandsPack.SocialCommands.*;
 import static soloMapling.ArtificialPlayer.BotHelpers.isBot;
@@ -44,6 +48,7 @@ public class SocialBot extends BotSM {
 
     // Written from Dispatcher/chain virtual threads, read on the tick — keep volatile.
     private volatile SocialBotState socialState = SocialBotState.IDLE_AMBIENT;
+    private final AtomicLong conversationRevision = new AtomicLong();
     private final SocialBotVariant variant;
     private final Map<Integer, InteractionTracker> interactionTrackers = new ConcurrentHashMap<>();
 
@@ -372,18 +377,22 @@ public class SocialBot extends BotSM {
             return;
         }
 
-        if (category == null) {
-            category = "WhatsUp";
+        if (category == null && SocialLlmService.isEnabled()) {
+            handleFreeformLlm(content, player);
+            return;
         }
+        respondWithYamlCategory(category == null ? "WhatsUp" : category, player);
+    }
 
+    private void respondWithYamlCategory(String category, Character player) {
+        long revision = conversationRevision.get();
         if (random.nextDouble() < RARE_LINE_CHANCE) {
             category = "Rare";
         }
-
         String line = getRandomLine(category, player);
         int emote = getRandomEmote(category);
         BotTiming.Chain chain = BotTiming.chain()
-                .stopUnless(() -> isConversationWith(player))
+                .stopUnless(() -> isCurrentLlmTurn(player, revision))
                 .pauseRandom(2000, 4000)
                 .run(() -> botFaceTowardsPoint(getChr(), player.getPosition()));
         if (line != null) {
@@ -392,8 +401,55 @@ public class SocialBot extends BotSM {
                 chain.pause(400).run(() -> BotEmote(getChr(), emote));
             }
         }
-        chain.run(() -> showInteractiveOptions(player));
+        chain.run(() -> {
+            socialState = SocialBotState.AWAITING_CHOICE;
+            showInteractiveOptions(player);
+        });
         chain.start();
+    }
+
+    private void handleFreeformLlm(String content, Character player) {
+        socialState = SocialBotState.RESPONDING;
+        long revision = conversationRevision.incrementAndGet();
+        int botId = getChr().getId();
+        int playerId = player.getId();
+        SocialLlmService.completeAsync(getChr(), player, content,
+                reply -> {
+                    if (!isCurrentLlmTurn(player, revision)) {
+                        return;
+                    }
+                    BotTiming.chain()
+                            .stopUnless(() -> isCurrentLlmTurn(player, revision))
+                            .pauseRandom(1500, 3000)
+                            .run(() -> botFaceTowardsPoint(getChr(), player.getPosition()))
+                            .run(() -> {
+                                BotSpeak(getChr(), reply);
+                                SocialChatSessionStore.addAssistant(botId, playerId, reply);
+                                socialState = SocialBotState.AWAITING_CHOICE;
+                                showInteractiveOptions(player);
+                            })
+                            .start();
+                },
+                () -> {
+                    if (!isCurrentLlmTurn(player, revision)) {
+                        return;
+                    }
+                    if (SocialLlmConfig.fallbackToYaml()) {
+                        respondWithYamlCategory("WhatsUp", player);
+                    } else {
+                        BotTiming.chain()
+                                .stopUnless(() -> isCurrentLlmTurn(player, revision))
+                                .run(() -> {
+                                    socialState = SocialBotState.AWAITING_CHOICE;
+                                    showInteractiveOptions(player);
+                                })
+                                .start();
+                    }
+                });
+    }
+
+    private boolean isCurrentLlmTurn(Character player, long revision) {
+        return conversationRevision.get() == revision && isConversationWith(player);
     }
 
     // --- Party recruiting ---
@@ -565,8 +621,10 @@ public class SocialBot extends BotSM {
     }
 
     private void resetConversation() {
+        conversationRevision.incrementAndGet();
         Character respondant = getInteractors().getRespondant();
         if (respondant != null) {
+            SocialChatSessionStore.clear(getChr().getId(), respondant.getId());
             expirePlayerChatCommands(respondant);
         }
         getInteractors().resetRespondant();

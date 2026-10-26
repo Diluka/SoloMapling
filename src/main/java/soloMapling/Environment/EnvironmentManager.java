@@ -1,9 +1,10 @@
 package soloMapling.Environment;
 
-import client.Character;
-import client.Job;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.client.Job;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotGeneration;
+import soloMapling.ArtificialPlayer.BotMessagingSystem.MessageQueue;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands;
 import soloMapling.ArtificialPlayer.BotDecoratorSystem.BotDecorate;
 import soloMapling.ArtificialPlayer.BotDecoratorSystem.BotDecorationQueue;
@@ -21,9 +22,11 @@ import soloMapling.ArtificialPlayer.ConversationManager;
 import soloMapling.ArtificialPlayer.SocialHotPotatoManager;
 import soloMapling.Casino.CasinoChipConfig;
 import soloMapling.server.ExecutorServiceManager;
+import soloMapling.server.BotTickService;
+import soloMapling.server.EventMessageSystem.EventBus;
 import soloMapling.server.NpcSpawner;
-import constants.id.MapId;
-import constants.id.NpcId;
+import org.gms.constants.id.MapId;
+import org.gms.constants.id.NpcId;
 
 import java.awt.*;
 import java.io.File;
@@ -55,16 +58,62 @@ import static soloMapling.FreeMarket.ArtificialFreeMarket.populateFreeMarketRegi
 import static soloMapling.server.SoloMaplingUtilities.getMapleMapById;
 
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 public class EnvironmentManager {
+
+    private static final AtomicLong generation = new AtomicLong();
+    private static final Set<ScheduledFuture<?>> delayedTasks = ConcurrentHashMap.newKeySet();
+
+    /** Stop this world's background work while preserving the process-wide executor pools. */
+    public static void stop() {
+        generation.incrementAndGet();
+        delayedTasks.forEach(task -> task.cancel(true));
+        delayedTasks.clear();
+        RuntimeException failure = null;
+        for (Runnable cleanup : List.<Runnable>of(
+                SocialHotPotatoManager::stopIfStarted,
+                ConversationManager::stopIfStarted,
+                MessageQueue::stopIfStarted,
+                BotDecorationQueue::stop,
+                BotEquipChecker::stop,
+                GCMovement::stopAll,
+                BotTickService::clear,
+                BotMapEntryResponder::unregister,
+                EventBus::clearIfCreated)) {
+            try {
+                cleanup.run();
+            } catch (RuntimeException cleanupFailure) {
+                if (failure == null) failure = cleanupFailure;
+                else failure.addSuppressed(cleanupFailure);
+            }
+        }
+        if (failure != null) throw failure;
+    }
+
+    private static void scheduleInEnvironment(Runnable action, long delay, TimeUnit unit) {
+        long currentGeneration = generation.get();
+        ScheduledFuture<?> task = ExecutorServiceManager.getScheduledExecutorService().schedule(() -> {
+            if (currentGeneration == generation.get()) action.run();
+        }, delay, unit);
+        delayedTasks.removeIf(ScheduledFuture::isDone);
+        delayedTasks.add(task);
+        if (currentGeneration != generation.get()) {
+            task.cancel(true);
+            delayedTasks.remove(task);
+        }
+    }
 
     private static final String BASE_PATH = "src/main/java/soloMapling/ArtificialPlayer/BotMovementSystem/movementDataPackets";
 
@@ -92,7 +141,38 @@ public class EnvironmentManager {
     private static final int MAPLE_ISLAND_TUTORIAL = 10000;
     private static final int OPQ_LOBBY = 200080101;
 
+    /** Warm channel-1 MapManager for hubs bots stampede first (avoids cold-load + DB under lock). */
+    private static void preloadStartupMaps() {
+        int[] hubs = {
+                FM_ENTRANCE, HENESYS, HENESYS_MARKET, HENESYS_PARK,
+                HENESYS_POTION_SHOP, HENESYS_GAME_ZONE, HENESYS_PET_PARK,
+                MAPLE_ISLAND_TUTORIAL, OPQ_LOBBY,
+                // FM rooms commonly used by populateFreeMarketRegion
+                910000001, 910000002, 910000003, 910000004, 910000005,
+                910000006, 910000007, 910000008, 910000009, 910000010,
+                910000011, 910000012, 910000013, 910000014, 910000015,
+                910000016, 910000017, 910000018, 910000019, 910000020,
+                910000021, 910000022
+        };
+        long t0 = System.currentTimeMillis();
+        int ok = 0;
+        for (int mapId : hubs) {
+            try {
+                if (getMapleMapById(mapId) != null) {
+                    ok++;
+                }
+            } catch (Throwable t) {
+                debugprint(fmt("preload map {} failed: {}", mapId, t.toString()));
+            }
+        }
+        System.out.println(String.format(
+                "[EnvironmentManager] Preloaded %d/%d hub maps in %.1fs",
+                ok, hubs.length, (System.currentTimeMillis() - t0) / 1000.0));
+    }
+
     public static void environmentLoadStartup() {
+        generation.incrementAndGet();
+        MessageQueue.start();
         // EquipMetadataCache + DesirableEquipList are server data, loaded during
         // Server.init() alongside the other WZ-derived data - guaranteed ready
         // before any player can trigger this.
@@ -102,110 +182,180 @@ public class EnvironmentManager {
         // directions - a player entering a populated map, or a bot returning to the player's map.
         BotMapEntryResponder.register();
 
-        runWave(1, "Essentials", List.of(
-                () -> spawnCasinoNpcs(),
-                () -> spawnTutorialBot(),
-                () -> spawnHenesysBotsBatch(10, 0, 0, 0),
-                () -> populateFreeMarketRegion("henesys"),
-                () -> spawnFMEntranceBotsBatch(5, 5, 5)
-        ));
+        // Warm MapManager for hub maps before parallel waves stampede getMap+DB.
+        preloadStartupMaps();
 
-        runWave(2, "FM buildout", List.of(
-                () -> populateFreeMarketRegion("ludi"),
-                () -> spawnFMEntranceBotsBatch(5, 5, 5),
-                () -> spawnMerchBotsBatch("m1", 2, 2, 1),
-                () -> spawnMerchBotsBatch("m2", 2, 2, 0),
-                () -> spawnMerchBotsBatch("m5", 2, 2, 0),
-                () -> spawnGachaBotsHenesys()
-        ));
+        // Counts / toggles from EnvironmentPopulation.yaml (see EnvironmentPopulationConfig).
+        EnvironmentPopulationConfig.PopulationPlan pop = EnvironmentPopulationConfig.plan();
+        System.out.println(String.format(
+                "[EnvironmentManager] Population plan source=%s scale=%.2f trainingCohorts=%d (scaled total=%d)",
+                pop.loadedFrom(), pop.scale(), pop.training().cohorts().size(), pop.trainingCohortTotal()));
 
-        runWave(3, "Henesys population", List.of(
-                () -> spawnJQBotsPetPark(),
-                () -> spawnHenesysBotsBatch(10, 10, 0, 5),
-                () -> spawnFillerBotsHenesys()
-        ));
-        SocialHotPotatoManager.getInstance().start();
-        ConversationManager.getInstance().start();
-
-        runWave(4, "Expand FM + Henesys Market", List.of(
-                () -> populateFreeMarketRegion("perion"),
-                () -> spawnFMEntranceBotsBatch(5, 5, 5),
-                () -> spawnMerchBotsBatch("m1", 3, 3, 0),
-                () -> spawnMerchBotsBatch("m2", 2, 2, 1),
-                () -> spawnMerchBotsBatch("m5", 3, 3, 1),
-                () -> spawnFillerBotsHenesysMarket()
-        ));
-
-        runWave(5, "Henesys sub-areas", List.of(
-                () -> populateFreeMarketRegion("elnath"),
-                () -> spawnHenesysBotsBatch(10, 10, 10, 4),
-                () -> spawnFillerBotsHenesysPark(),
-                () -> spawnFillerBotsPotionShop(),
-                () -> spawnFillerBotsGameZone(),
-                () -> spawnGameZoneHostBots()
-        ));
-
-        runWave(6, "Specialty areas", List.of(
-                () -> spawnBlackjackTables(),
-                () -> spawnDropGameBotPotionShop(),
-                () -> spawnDropGameSpectatorsPotionShop(),
-                () -> spawnSocialBotsPetPark(),
-                () -> convertRandomFillersToScrollBots()
-        ));
-
-        runWave(7, "Late arrivals", List.of(
-                () -> spawnOPQBotsInLobby(),
-                () -> spawnMerchBotsBatch("m1", 2, 2, 0),
-                () -> spawnMerchBotsBatch("m2", 2, 2, 1),
-                () -> spawnMerchBotsBatch("m5", 2, 2, 1)
-        ));
-
-        // Roaming training grinders. Each cohort = N job-coherent bots at a town's spawn portal; they
-        // discover nearby level-appropriate field maps via WZ and fan out on their own. DIAL THESE
-        // COUNTS DOWN (e.g. 2 each) for a first-boot pilot, then restore. Sub-level-10 cohorts spawn
-        // Beginners (job 0): the decorator dresses them with a sword and they fight with a basic
-        // skill-0 swing (BotAttackConfig basic-swing fallback), so a 1..9 band is fine - they hunt
-        // snails / shrooms on the low fields each town discovers nearby.
-        //
-        // DEEP-HUB cohorts: map discovery is hop-capped by level (hopsForLevel), so a long dungeon's far
-        // end is out of a town-spawned bot's reach until it's high enough level. To populate the deep maps
-        // with appropriately-levelled bots we also spawn a cohort at a deep mid-dungeon junction:
-        // Sleepywood's Ant Tunnel runs ~9 hops to Ant Tunnel Park (a lv45-70 bot's radius doesn't span
-        // that); Ludibrium's deep high-level end is the Path of Time / Clocktower (Forgotten Path of Time →
-        // Papulatus), past what the Ludi-town cohort reaches. A non-town spawn is handled gracefully:
-        // homeMapId becomes that junction, GO_TOWN returns there, and the unlisted map just skips shop
-        // trips (TrainingBot.doInit / TOWN_SHOPS).
-        runWave(8, "Training bots", List.of(
-                () -> GCMovement.mapsWithinHops(MapId.HENESYS, 1),          // prewarm the portal graph once
-                () -> spawnTrainingBotsAt(MapId.LITH_HARBOUR,  20,  1, 15),
-                () -> spawnTrainingBotsAt(MapId.HENESYS,       225, 10, 95),
-                () -> spawnTrainingBotsAt(MapId.KERNING_CITY,  225, 10, 65),
-                () -> spawnTrainingBotsAt(MapId.PERION,        225, 10, 65),
-                () -> spawnTrainingBotsAt(MapId.ELLINIA,       225, 10, 65),
-                () -> spawnTrainingBotsAt(MapId.SLEEPYWOOD,     225, 25, 95),  // town: Sleepy Dungeon + Ant Tunnel I-IV + Forest of Golem
-                () -> spawnTrainingBotsAt(MapId.ANT_TUNNEL_PARK, 180, 40, 95), // deep hub (~9 hops in): Cave of Evil Eye / Grave of Mushmom
-                () -> spawnTrainingBotsAt(MapId.ORBIS,         220, 30, 86),
-                () -> spawnTrainingBotsAt(MapId.LUDIBRIUM,     200, 25, 95),
-                () -> spawnTrainingBotsAt(MapId.PATH_OF_TIME_HUB, 160, 70, 95), // deep hub: Forgotten Path of Time / Clocktower (Platoon Chronos, Papa Pixie → Papulatus)
-                () -> spawnTrainingBotsAt(MapId.EL_NATH,       200, 50, 80),  // town: shops at El Nath Market (potion / equip); grinds Ice Valley + cloud maps
-                () -> spawnTrainingBotsAt(MapId.SHARP_CLIFF_I, 200, 60, 90), // deep hub (Jeff one-way from Ice Valley II): Sharp Cliff II / Wolf Territory / Forest of Dead Trees / Dead Mine
-
-                () -> spawnTrainingBotsAt(MapId.HENESYS,       25,  1,  9),  // beginner sword grinders
-                () -> spawnTrainingBotsAt(MapId.KERNING_CITY,  20,  1,  9),  // beginner sword grinders
-                () -> spawnTrainingBotsAt(MapId.PERION,        20,  1,  9),  // beginner sword grinders
-                () -> spawnTrainingBotsAt(MapId.ELLINIA,       20,  1,  9)  // beginner sword grinders
-
-        ));
-
-        // Ambient town population: SocialBots scattered at anchor-weighted spots across the seven towns
-        // that until now had only grinders passing through, plus roaming wanderers. Runs after wave 8 so the
-        // town nav graphs are already baked by the training cohorts spawned there. Counts are fixed per town
-        // in TownPresence.yaml. One task per town so the cohorts spawn in parallel across the pool (like wave 8).
-        List<Runnable> townTasks = new ArrayList<>();
-        for (TownPresenceConfig.TownEntry town : TownPresenceConfig.towns()) {
-            townTasks.add(() -> spawnTown(town));
+        var w1 = pop.essentials();
+        if (w1.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w1.casinoNpcs()) {
+                tasks.add(() -> spawnCasinoNpcs());
+            }
+            if (w1.tutorial()) {
+                tasks.add(() -> spawnTutorialBot());
+            }
+            var h = w1.henesys();
+            tasks.add(() -> spawnHenesysBotsBatch(pop.scaled(h.main()), pop.scaled(h.market()),
+                    pop.scaled(h.park()), pop.scaled(h.social())));
+            if (w1.fmRegion() != null && !w1.fmRegion().isBlank()) {
+                tasks.add(() -> populateFreeMarketRegion(w1.fmRegion()));
+            }
+            var fm = w1.fmEntrance();
+            tasks.add(() -> spawnFMEntranceBotsBatch(pop.scaled(fm.m1()), pop.scaled(fm.m2()), pop.scaled(fm.m5())));
+            runWave(1, "Essentials", tasks);
         }
-        runWave(9, "Town presence", townTasks);
+
+        var w2 = pop.fmBuildout();
+        if (w2.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w2.fmRegion() != null && !w2.fmRegion().isBlank()) {
+                tasks.add(() -> populateFreeMarketRegion(w2.fmRegion()));
+            }
+            var fm = w2.fmEntrance();
+            tasks.add(() -> spawnFMEntranceBotsBatch(pop.scaled(fm.m1()), pop.scaled(fm.m2()), pop.scaled(fm.m5())));
+            for (var m : w2.merchants()) {
+                tasks.add(() -> spawnMerchBotsBatch(m.platform(),
+                        pop.scaled(m.selling()), pop.scaled(m.buying()), pop.scaled(m.nx())));
+            }
+            if (w2.gacha()) {
+                tasks.add(() -> spawnGachaBotsHenesys());
+            }
+            runWave(2, "FM buildout", tasks);
+        }
+
+        var w3 = pop.henesysPopulation();
+        if (w3.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w3.jqPetPark()) {
+                tasks.add(() -> spawnJQBotsPetPark());
+            }
+            var h = w3.henesys();
+            tasks.add(() -> spawnHenesysBotsBatch(pop.scaled(h.main()), pop.scaled(h.market()),
+                    pop.scaled(h.park()), pop.scaled(h.social())));
+            if (w3.fillersHenesys()) {
+                tasks.add(() -> spawnFillerBotsHenesys());
+            }
+            runWave(3, "Henesys population", tasks);
+        }
+        if (w3.startSocialSystems()) {
+            SocialHotPotatoManager.getInstance().start();
+            ConversationManager.getInstance().start();
+        }
+
+        var w4 = pop.expandFmMarket();
+        if (w4.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w4.fmRegion() != null && !w4.fmRegion().isBlank()) {
+                tasks.add(() -> populateFreeMarketRegion(w4.fmRegion()));
+            }
+            var fm = w4.fmEntrance();
+            tasks.add(() -> spawnFMEntranceBotsBatch(pop.scaled(fm.m1()), pop.scaled(fm.m2()), pop.scaled(fm.m5())));
+            for (var m : w4.merchants()) {
+                tasks.add(() -> spawnMerchBotsBatch(m.platform(),
+                        pop.scaled(m.selling()), pop.scaled(m.buying()), pop.scaled(m.nx())));
+            }
+            if (w4.fillersHenesysMarket()) {
+                tasks.add(() -> spawnFillerBotsHenesysMarket());
+            }
+            runWave(4, "Expand FM + Henesys Market", tasks);
+        }
+
+        var w5 = pop.henesysSubAreas();
+        if (w5.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w5.fmRegion() != null && !w5.fmRegion().isBlank()) {
+                tasks.add(() -> populateFreeMarketRegion(w5.fmRegion()));
+            }
+            var h = w5.henesys();
+            tasks.add(() -> spawnHenesysBotsBatch(pop.scaled(h.main()), pop.scaled(h.market()),
+                    pop.scaled(h.park()), pop.scaled(h.social())));
+            if (w5.fillersHenesysPark()) {
+                tasks.add(() -> spawnFillerBotsHenesysPark());
+            }
+            if (w5.fillersPotionShop()) {
+                tasks.add(() -> spawnFillerBotsPotionShop());
+            }
+            if (w5.fillersGameZone()) {
+                tasks.add(() -> spawnFillerBotsGameZone());
+            }
+            if (w5.gameZoneHosts()) {
+                tasks.add(() -> spawnGameZoneHostBots());
+            }
+            runWave(5, "Henesys sub-areas", tasks);
+        }
+
+        var w6 = pop.specialty();
+        if (w6.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w6.blackjack()) {
+                tasks.add(() -> spawnBlackjackTables());
+            }
+            if (w6.dropGame()) {
+                tasks.add(() -> spawnDropGameBotPotionShop());
+            }
+            if (w6.dropGameSpectators()) {
+                tasks.add(() -> spawnDropGameSpectatorsPotionShop());
+            }
+            if (w6.socialPetPark()) {
+                tasks.add(() -> spawnSocialBotsPetPark());
+            }
+            if (w6.convertScrollBots()) {
+                tasks.add(() -> convertRandomFillersToScrollBots());
+            }
+            runWave(6, "Specialty areas", tasks);
+        }
+
+        var w7 = pop.lateArrivals();
+        if (w7.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            if (w7.opqLobby()) {
+                tasks.add(() -> spawnOPQBotsInLobby());
+            }
+            for (var m : w7.merchants()) {
+                tasks.add(() -> spawnMerchBotsBatch(m.platform(),
+                        pop.scaled(m.selling()), pop.scaled(m.buying()), pop.scaled(m.nx())));
+            }
+            runWave(7, "Late arrivals", tasks);
+        }
+
+        // Training grinders: cohorts from YAML. Each cohort spawns at a hub map; bots discover nearby
+        // level-appropriate field maps via TrainingMapFinder and fan out. Deep hubs (Ant Tunnel Park,
+        // Path of Time, Sharp Cliff) populate far dungeons the town hop-radius cannot reach.
+        var w8 = pop.training();
+        if (w8.enabled()) {
+            List<Runnable> tasks = new ArrayList<>();
+            var warm = w8.warmNav();
+            if (warm != null && warm.hops() > 0 && warm.mapId() > 0) {
+                tasks.add(() -> GCMovement.mapsWithinHops(warm.mapId(), warm.hops()));
+            }
+            for (var cohort : w8.cohorts()) {
+                int n = pop.scaled(cohort.count());
+                if (n <= 0) {
+                    continue;
+                }
+                int mapId = cohort.mapId();
+                int lo = cohort.levelLo();
+                int hi = cohort.levelHi();
+                tasks.add(() -> spawnTrainingBotsAt(mapId, n, lo, hi));
+            }
+            runWave(8, "Training bots", tasks);
+        }
+
+        // Ambient town population from EnvironmentPopulation.yaml waves.town_presence.towns.
+        var w9 = pop.townPresence();
+        if (w9.enabled()) {
+            List<Runnable> townTasks = new ArrayList<>();
+            for (TownPresenceConfig.TownEntry town : TownPresenceConfig.towns()) {
+                townTasks.add(() -> spawnTown(town));
+            }
+            runWave(9, "Town presence", townTasks);
+        }
 
         BotDecorationQueue.start();
         BotEquipChecker.start();
@@ -257,10 +407,8 @@ public class EnvironmentManager {
         return ids;
     }
 
-    // Ambient town population: for each town in TownPresence.yaml, scatter its per-map stationed SocialBot
-    // headcounts plus its town-level roaming TownWandererBot count at anchor-weighted spots, so the seven
-    // towns beyond Henesys read as lived-in instead of only having grinders pass through. Fixed counts
-    // (YAML-tunable). Called from wave 9; also driven live by !env townpresence.
+    // Ambient town population: for each town in EnvironmentPopulation.yaml (town_presence.towns), scatter
+    // its per-map stationed SocialBot headcounts plus its town-level roaming TownWandererBot count.
     public static void spawnTownPresence() {
         for (TownPresenceConfig.TownEntry town : TownPresenceConfig.towns()) {
             spawnTown(town);
@@ -570,7 +718,7 @@ public class EnvironmentManager {
         ExecutorServiceManager.runAsync(() -> {
             Character fakechar = createBotWithRetry(spawn, HENESYS_POTION_SHOP, 5);
             if (fakechar != null) {
-                ExecutorServiceManager.getScheduledExecutorService().schedule(() -> {
+                scheduleInEnvironment(() -> {
                     setAndStartBots(List.of(fakechar.getId()), BotTypeManager.BotType.DROP_GAME_BOT);
                     debugprint("Drop Game Bot started in Henesys Potion Shop.");
                 }, 5, TimeUnit.SECONDS);
@@ -806,7 +954,7 @@ public class EnvironmentManager {
                 bjDealer.getTable().addPlayer(playerChar);
                 bjDealer.getInteractors().setRespondant(playerChar);
             }
-            ExecutorServiceManager.getScheduledExecutorService().schedule(() -> {
+            scheduleInEnvironment(() -> {
                 for (Character playerChar : playerChars) {
                     botFaceTowardsPoint(playerChar, seats[0]);
                 }

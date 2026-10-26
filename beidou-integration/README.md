@@ -1,0 +1,83 @@
+# 北斗单 JAR 集成构建
+
+本目录将原版 SoloMapling 适配到官方北斗 `1.12`。北斗由
+`upstream/BeiDou-Server` submodule 提供，固定在
+`75a86268738ca8845e06ea9d59ec36d15b22c91b`；它的源码、POM 和工作区保持原样。
+所有适配代码、AspectJ 切面和打包规则均由 SoloMapling 工程维护。
+
+构建先把北斗的已提交源码按原样导出到 `target/engine-source`，正常编译出
+Spring Boot JAR，再对其应用类执行二进制织入。最终产物为仓库根目录的
+`target/SoloMapling-BeiDou.jar`。北斗仓库没有修改，但派生产物中的部分北斗
+字节码会改变，具体类清单、源码指纹和 SHA256 记录在
+`beidou-integration/target/build-report.json`。构建期间源码、测试或运行资源变化时会失败，
+需等待编辑完成后重试。
+
+## 构建
+
+要求 Python 3.12+、JDK 21、Git，以及 Maven 3.9+ 或 Docker。没有本机 Maven
+时，脚本自动使用 `maven:3.9.11-eclipse-temurin-21` 容器；容器仅挂载本仓库
+和 Maven 缓存，不挂载真实数据库目录。
+
+```bash
+git submodule update --init
+python3 beidou-integration/scripts/build.py --settings /path/to/maven-settings.xml
+```
+
+`--settings` 可省略；中国大陆环境建议使用本地已验证的 Maven 镜像配置。
+容器 Maven 缓存默认位于 `$HOME/.cache/solomapling-maven`，可通过
+`SOLO_MAVEN_CACHE` 指定。已有本机 Maven 时直接使用，也可用 `MAVEN_COMMAND`
+显式指定 Maven 启动命令。
+
+若要保留官方发布包附带的管理页面，可追加：
+
+```bash
+python3 beidou-integration/scripts/build.py \
+  --settings /path/to/maven-settings.xml \
+  --ui-jar /path/to/official-BeiDou.jar
+```
+
+管理页保留北斗原版权入口，并添加可见的 SoloMapling AGPL 源码链接。
+源码仓库、构建时 Git 状态、源码指纹及北斗基线同时写入
+`META-INF/solomapling/source.json`；本项目 LICENSE 与 NOTICE 放在同一命名空间下，
+不覆盖北斗原有声明。
+
+增量调试可在首轮成功准备后使用 `--skip-engine-build --skip-dependencies`。
+这两项仍检查北斗版本、工作区及依赖 POM，不能用于跳过输入变更。
+`--prepare-only` 只准备北斗原样编译结果及额外依赖；`--skip-tests` 仅供调试，
+构建报告会明确记录没有执行测试。
+
+## 本地镜像交付
+
+先在宿主执行上述构建和验证，再由部署目录的 Dockerfile 把生成的服务 JAR
+及构建报告复制进派生镜像；WZ、脚本、JRE 和管理页面继续复用匹配版本的官方资源。
+运行时不从宿主挂载 JAR。本地配置继续以独立文件只读挂载，不打入镜像。
+
+构建脚本需要 Git 元数据来核对 submodule 和导出其已提交源码，因此不在排除了
+`.git` 的 Docker 构建上下文中重复编译。镜像构建只消费已验证产物，不自动拉取上游。
+
+## 验证边界
+
+构建会验证 submodule 始终干净；默认执行独立的 LLM 与集成 JUnit 测试，
+不执行北斗仓库中会连接数据库的开发工具。打包验证保留北斗原始主入口、
+配置与 Flyway 迁移；迁移文件集合和内容、原始配置均逐字节比较。嵌套依赖按
+Spring Boot 要求使用 STORED；额外的 Jackson
+依赖重定位到 Solo 自有包，避免覆盖北斗的版本。
+
+构建与打包测试可单独运行：
+
+```bash
+python3 -m unittest discover -s beidou-integration/scripts -p 'test_*.py'
+```
+
+服务仍需按北斗原有运行目录提供 WZ、脚本和本地 `application.yml`，并从同一
+配置文件完成预建库与 Spring 启动。例如：
+
+```bash
+java -jar target/SoloMapling-BeiDou.jar --spring.config.location=./application.yml
+```
+
+本构建不打包原版 Cosmic 引擎或其数据库迁移，不生成或替换正式部署配置。
+构建过程不会连接游戏数据库；单元测试和故障注入使用内存、临时数据库或副本。
+部署冒烟按用户授权沿用实际配置及数据库执行正常应用读写，开始前应保留可恢复备份。
+测试建库、故障注入和清理逻辑不得指向实际游戏数据。
+构建成功不等于数据与玩法全部兼容，报告需区分构建、隔离验证及实际部署检查。

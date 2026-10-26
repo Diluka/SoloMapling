@@ -1,188 +1,70 @@
-# SoloMapling
+# SoloMapling 北斗集成版
 
-An artificial player simulation framework for MapleStory v83, built on the [Cosmic](https://github.com/P0nk/Cosmic) server emulator. Spawns hundreds of autonomous bots that populate the game world — wandering towns, running shops, playing minigames, chatting, and interacting with real players as if they were real.
+本项目从 [MadaraGameDev/SoloMapling](https://github.com/MadaraGameDev/SoloMapling) 原版历史建立，目标是在官方北斗服务端上运行 SoloMapling 机器人，并持续吸收原版及插件来源的改进。
 
-The framework is purely server-side — no client modifications required. Bots are real character objects in the game engine, indistinguishable from player-controlled characters at the network level.
+**当前处于集成与验证阶段。** 构建、机器人行为、数据兼容和实际服务验收分别记录在 [Milestone：北斗源码零修改集成试验](https://github.com/Diluka/SoloMapling/milestone/1) 与 [总跟踪任务 #1](https://github.com/Diluka/SoloMapling/issues/1)。未关闭的任务不代表已经验证完成。
 
-## 📸 Showcase
+## 集成方式
 
-### 🎬 Full demo (video)
+- `src/main/java/soloMapling/` 保存机器人框架和功能改进。
+- `upstream/BeiDou-Server/` 是官方北斗的 Git submodule，当前兼容基线为发布标签 `1.12`。
+- `beidou-integration/` 保存北斗适配、AspectJ 构建时织入和打包规则。
+- 北斗 submodule 的源码、POM 和资源保持原样；构建在暂存目录进行。
+- 最终目标产物是可执行的 `SoloMapling-BeiDou.jar`。其中少量北斗字节码会经过织入，因此“源码不修改”不表示运行时行为完全未扩展。
 
-| Part 1 | Part 2 |
-|:------:|:------:|
-| [![SoloMapling — Full Demo Part 1](https://img.youtube.com/vi/9extNWkkTeM/hqdefault.jpg)](https://youtu.be/9extNWkkTeM) | [![SoloMapling — Full Demo Part 2](https://img.youtube.com/vi/PMfWSx-m_7o/hqdefault.jpg)](https://youtu.be/PMfWSx-m_7o) |
-| **[▶️ Watch Part 1](https://youtu.be/9extNWkkTeM)** | **[▶️ Watch Part 2](https://youtu.be/PMfWSx-m_7o)** |
+原版仓库还包含 Cosmic 引擎。北斗集成构建使用官方北斗引擎，不将这套 Cosmic 引擎及其数据库迁移混入北斗服务。
 
-- **[Image Showcase](src/main/java/soloMapling/Documents/SHOWCASE.md)** — a captioned visual tour of the framework in action: Free Market, Blackjack, Drop Game, dialogue, Henesys bots, OPQ Rush, and more.
-- **[How to Record Movement](src/main/java/soloMapling/Documents/Movement-Recording.md)** — diagrams and walkthrough videos for capturing movement recordings and the pathfinding system.
-- **[Dev Diary](src/main/java/soloMapling/Documents/DEV-DIARY.md)** — work-in-progress shots from development.
+## 构建与运行
 
-## Documentation
+初始化源码及固定的北斗子模块：
 
-| Document | What it covers |
-|----------|----------------|
-| [Claude Summary](src/main/java/soloMapling/Documents/Claude%20Summary.txt) | Full architecture overview — every subsystem, design patterns, concurrency model |
-| [Artificial Player Framework Architecture](src/main/java/soloMapling/Documents/Artificial%20Player%20Framework%20Architecture.md) | Deep dive on the bot framework — identity, lifecycle, state machine, decoration pipeline, extension guide |
-| [Dev Commands Cheat Sheet](src/main/java/soloMapling/Documents/Dev%20Commands%20Cheat%20Sheet.md) | All in-game GM dev commands (`!bot`, `!move`, `!env`, `!opq`, …) |
-| [FreeMarket and ItemPool Architecture](src/main/java/soloMapling/Documents/FreeMarket%20and%20ItemPool%20Architecture.txt) | Shop generation pipeline, tier/version system, economy engine, haggling |
-| [Environment and World Startup](src/main/java/soloMapling/Documents/Environment%20and%20World%20Startup.md) | 7-wave world initialization, spawn choreography, platform system, casino setup |
-| [Movement Recording & Pathfinding](src/main/java/soloMapling/Documents/Movement-Recording.md) | How to record bot movement, path diagrams, and pathfinder walkthrough videos |
-| [Logging and Observability](src/main/java/soloMapling/Documents/Logging%20and%20Observability.md) | BotLog, debug utilities, the in-game MMC operator console, queue/event monitors |
-| [Cosmic README](Cosmic_README.md) | The original readme for the underlying Cosmic server emulator |
-
-## Why
-
-Private servers feel dead without players, and players don't stay on dead servers. SoloMapling breaks that cycle by filling the world with bots that look, move, trade, chat, and play like real people. Every bot has its own appearance, equipment, level, personality, and behavioral loop. From a player's perspective, the server just looks alive.
-
-## What It Does
-
-Bots don't just stand around — they:
-
-- **Populate towns** — Henesys bots wander between Main, Market, Park, and Pet Park. Filler bots sit on benches, stand at shops, and chat with each other. Social bots hold conversations and react to players who approach them.
-- **Run the Free Market** — Merchant bots operate Hired Merchants and Player Shops across Henesys, Ludibrium, Perion, and Elnath FM rooms with procedurally generated inventories and dynamic pricing.
-- **Host minigames** — Blackjack tables with AI dealers, drop-item racing games with tiered entry fees, dice games, and Gachapon machines with reactor-based prize sprays.
-- **Simulate social life** — Ambient chat system (SocialHotPotatoManager) fires off contextual dialogue, emotes, megaphones, and chalkboard messages. Multi-bot conversations (ConversationManager) detect nearby bot clusters and play scripted dialogue with proper timing and emotes.
-- **Attempt jump quests** — JQ bots in Pet Park replay pre-recorded movement attempts at weighted difficulty tiers, fail/succeed realistically, chat about their progress, and convert back to town bots when done.
-- **Run party quests** — OPQ (Orbis Party Quest) bots recruit, party up, navigate stages, attack cloud reactors, and complete objectives via a centralized orchestrator.
-- **Onboard new players** — A Tutorial Bot on Maple Island greets newcomers, offers admin powers (GM level 6, Night Lord, starter gear, NX code), teaches chat mechanics, upgrades their weapon, and escorts them to the exit.
-- **Scroll and trade** — Scrolling bots use scrolls on items and react via the event bus. Trade bots handle full 9-state trade lifecycles with fair pricing logic.
-
-## Architecture at a Glance
-
-Everything revolves around **BotSM** (Bot State Machine) — an abstract FSM ticked every 2-6 seconds with adaptive speed (faster when players are nearby). Fifteen bot types extend it, each with their own state machine and behavioral loop. Adding a new bot personality means extending one base class and overriding the update loop. Configuration is YAML-driven — dialogue lines, item pools, movement recordings, and pricing all live in data files rather than hardcoded logic.
-
-## By the Numbers
-
-A ~31,500-line framework that touches the host engine in only ~1,100 lines across 33 files — the simulation lives almost entirely in its own package, with the Cosmic base left nearly untouched.
-
-| Layer | Stat |
-|-------|------|
-| Framework code | 168 Java files · ~31,500 lines |
-| Footprint on the Cosmic base | 33 files modified · +1,104 / −146 lines |
-| Standalone GM commands | 11 new command classes · ~2,850 lines |
-| Bot dialogue | 15 packs · ~4,000 lines |
-| Free Market names & descriptions | ~2,950 entries (incl. 1,636 player-style IGNs) |
-| Item pool configs | 14 YAML configs |
-| Movement recordings | ~440 pre-recorded paths across 26 maps |
-
-The framework code is pure logic (no config or generated data), and the content packs — dialogue, names, item pools, and movement recordings — are all data-driven, so behavior expands by editing data files rather than code.
-
-### Bot Types
-
-| Bot | What It Does |
-|-----|-------------|
-| FMBot | Free Market wanderer, shops and trades |
-| HenesysBot | Town wanderer across 4 Henesys maps via portals |
-| HenesysJQBot | Jump quest attempts with tier-weighted difficulty progression |
-| SocialBot | Interactive NPC with dialogue trees and anti-spam escalation |
-| ScrollingBot | Scrolls items, reacts to results via EventBus |
-| GachaBot | Operates Gachapon with reactor VFX prize sprays |
-| DiceBot | Dice-rolling social game |
-| TutorialBot | 18-state onboarding flow with admin grant and item trade |
-| SellingMerchantBot | Runs Hired Merchants selling items |
-| BuyingMerchantBot | Purchases items from players |
-| NXMerchantBot | Cash Shop item specialist |
-| GameZoneHostBot | Hosts game zone events |
-| BlackjackDealerBot | Full blackjack table with AI strategy |
-| DropGameBot | 8-state drop racing minigame with tiered loot |
-| OPQBot | Orchestrated Orbis Party Quest participant |
-
-### Key Subsystems
-
-- **Movement** — Three modes: replay from ~440 pre-recorded movement paths across 26 maps, JGraphT Dijkstra pathfinding (ground/aware/aerial variants), and portal-based cross-map navigation.
-- **Decoration** — Procedural appearance generation, driven entirely by an in-memory equip metadata cache (no WZ reads at spawn time). Tier system (S/A/B/C/D) controls gear quality. Bots arrive fully dressed: body + quick generic equips at spawn, full class-aware decoration deferred to a background queue. Three layers: body (face/hair/skin), equips (job-specific), NX overlay (20% gate, tier-scaled intensity).
-- **Free Market** — Four FM regions with economy simulation. Regional multipliers, entrance premiums, day-of-week modifiers, procedural shop inventories.
-- **Trade** — 9-state sub-FSM handling the full trade lifecycle with fair pricing evaluation.
-- **Social Simulation** — SocialHotPotatoManager (ambient actions every 8-20s) + ConversationManager (scripted multi-bot dialogues every 60-120s with spatial cluster detection).
-- **Event Bus** — Decoupled pub/sub system. Bots subscribe to game events (LEVEL_UP, SCROLL, MAP_ENTERED, etc.) filtered by world/channel/map.
-- **Dialogue** — YAML-driven per-bot dialogue with randomized selection, emote IDs, timing, and variable substitution. 15 dialogue files.
-- **Item Pool** — YAML-driven item registry with per-class configs, scroll metadata, upgrade simulation, and weighted selection.
-- **Party System** — Full party lifecycle for OPQ and DropGameBot.
-- **Environment** — 7-wave phased world startup; waves run their tasks in parallel and block until complete (~650 bots in roughly 10 seconds).
-
-## World Startup (7 Waves)
-
-The world populates in phases to keep startup stable and observable:
-
-1. **Essentials** — Casino NPCs, Tutorial Bot, 10 Henesys wanderers, Henesys FM
-2. **FM Buildout** — Ludi FM, merchant bots, gacha bots
-3. **Henesys Population** — JQ bots, more wanderers, filler bots; social simulation systems start
-4. **Expand FM** — Perion FM, more merchants, Market fillers
-5. **Sub-areas** — Elnath FM, Park/Potion Shop/Game Zone fillers + hosts
-6. **Specialty** — Blackjack tables, Drop Game + spectators, Pet Park social bots, scroll bot conversions
-7. **Late Arrivals** — OPQ lobby bots, final merchant batch
-
-After the waves, the deferred decoration queue and a periodic equip checker start. Bot spawn animations (portal drop-down, turn-around) play asynchronously on virtual threads so mass spawning never blocks on choreography.
-
-## Dev Commands
-
-Nine GM-level-4 command suites for testing and control. All have `help` subcommands.
-
-| Command | Purpose |
-|---------|---------|
-| `!bot` | Bot lifecycle, type assignment, loot, appearance, party, chat |
-| `!move` | Movement, pathfinding, recording, chairs, interrupts |
-| `!betafmshop` | Free Market population and shop management |
-| `!env` | World init, filler bots, NPCs, platforms, social systems |
-| `!fmbot` | FM-bot-specific (mostly stubs) |
-| `!tradebot` | Trade FSM driving and inspection |
-| `!test` | Reactors, VFX, events, gacha, messenger |
-| `!opq` | OPQ orchestration and lifecycle |
-| `!reactor` | Reactor inspection and bot-attack testing |
-
-Full reference: [Dev Commands Cheat Sheet](src/main/java/soloMapling/Documents/Dev%20Commands%20Cheat%20Sheet.md)
-
-## Relationship to Cosmic
-
-[Cosmic](https://github.com/P0nk/Cosmic) handles all the foundational game logic — client networking, packet handling, map loading, NPC scripts, quests, combat, and persistence. SoloMapling is a layer built on top that uses Cosmic's character and map systems to inject autonomous bot behavior.
-
-The SoloMapling code lives primarily in its own package (`soloMapling/`) with minimal modifications to the Cosmic base — mainly hook points for bot registration, command dispatching, and event observation. Concretely, integrating the framework touched only **33 existing Cosmic files for a net +1,104 / −146 lines** — surgical hooks rather than a rewrite. The bulk of the additions to Cosmic's own packages are **11 self-contained GM command classes** (`!bot`, `!move`, `!env`, `!opq`, …, ~2,850 lines) under `client/command/commands/gm4/`, which are standalone dev tooling that *uses* the framework rather than modifying the engine. The original Cosmic readme is preserved at [Cosmic_README.md](Cosmic_README.md).
-
-## Requirements & Setup
-
-- Java 21 (Amazon Corretto recommended)
-- MySQL 8+
-- MapleStory v83 WZ XML files (in `wz/` directory)
-- Maven for building
-
-1. Follow the standard [Cosmic setup](https://github.com/P0nk/Cosmic) for database and client configuration.
-2. Configure `config.yaml` with your database credentials.
-3. Build: `mvn clean package`
-4. Run: `launch.bat` (Windows) or via IDE with main class `net.server.Server`.
-
-The SoloMapling environment starts automatically on server boot and populates the world with bots. The first real player that logs in after a fresh server start must re-log (5-second detour) because the bots need a Client address to use. There is currently no workaround for this.
-
-## Project Structure
-
-```
-src/main/java/
-  soloMapling/            <- SoloMapling framework
-    ArtificialPlayer/     <- Bot state machines, types, movement, trade, party, commands
-      BotTypes/           <- 15 concrete bot implementations + Blackjack/ and OPQ/ subsystems
-      BotMovementSystem/  <- Movement replay, pathfinding, navigation, recording
-      BotTradeSystem/     <- 9-state trade FSM, inventory, pricing
-      BotMessagingSystem/ <- Async pub/sub message broker, character storage
-      BotCommandsPack/    <- 7 command packs (social, megaphone, drop, warp, VFX, messenger, attack)
-      BotPartySystem/     <- Party lifecycle management
-      BotDecoratorSystem/ <- Procedural appearance generation (body, equips, NX, decoration queue)
-      BotDialoguePack/    <- 15 YAML dialogue files + drop game loot pool
-    Casino/               <- Casino chip system and WZ patching
-    Environment/          <- World initialization, platform system
-    FreeMarket/           <- FM economy simulation, shop generation, haggling
-    MapVFX/               <- Reactor-based visual effects
-    itemPool/             <- YAML-driven item registry, scroll system, equip metadata cache
-    server/               <- Utilities, event bus, executor management, NX codes
-    Documents/            <- Architecture notes and design documents
-  client/                 <- Cosmic base (client handling, GM commands)
-  net/                    <- Cosmic base (networking)
-  server/                 <- Cosmic base (game logic)
+```bash
+git clone --recurse-submodules https://github.com/Diluka/SoloMapling.git
+cd SoloMapling
 ```
 
-## Tech Stack
+构建入口、依赖和参数见 [北斗构建说明](beidou-integration/README.md)。版本更新与验收流程见 [维护说明](beidou-integration/MAINTENANCE.md)。不要在仓库根运行原版的 `mvn package` 来代替北斗集成构建。
 
-- **Java 21** (Amazon Corretto) on **Cosmic** MapleStory v83 server emulator
-- **Maven** build with fat jar assembly
-- **MySQL 8+** for persistence
-- **JGraphT** for pathfinding graph algorithms
-- **YAML** for all configuration data (dialogue, items, equips, versions)
-- Movement replay from pre-recorded binary/CSV packet data
+运行保留北斗的 `org.gms.ServerApplication` 入口及原有配置读取顺序。应用业务参数维护在本地 `application.yml`，人口配置维护在本地 YAML；这些配置不打入 JAR。WZ、脚本和运行目录继续按北斗要求提供。
+
+## 功能与验证范围
+
+本轮先完成原版机器人框架接入和 SocialBot LLM 对话。插件来源中的持久伙伴、职业成长、装备赠送等功能需要分别确认宿主能力和数据行为，不因复用部分代码就视为全部完成。
+
+数据使用北斗的数据结构，但这不能自动证明机器人身份、模板角色、存档和迁移完全兼容。变更前备份配置及一致的数据库副本，迁移先在隔离环境验证；通过后再执行已授权的正常迁移、模板角色创建和存档读写。不删除、清空或覆盖真实游戏数据。
+
+构建成功、测试通过、隔离服务启动、实际本地服务启动和游戏客户端玩法验收是不同结果。对应证据记录在 [适配与数据兼容任务 #3](https://github.com/Diluka/SoloMapling/issues/3)。
+
+## 与 SocialBot 聊天
+
+在普通地图聊天的正文中包含机器人的准确名字，例如“机器人名，你好”。开头的 `@` 属于北斗原生玩家命令入口，不作为机器人点名语法；不要用 `@机器人名` 开头来测试普通聊天。
+
+LLM 由本地 `application.yml` 的 `solomapling.llm.*` 配置启用，密钥不提交到仓库、不打入 JAR，也不写入日志。已用桩客户端跑通 `GeneralChatHandler → Dispatcher → SocialBot → LLM 桩客户端 → CHATTEXT 广播` 的完整探针链路；尚未调用实际模型，也不代表已完成真实游戏客户端的聊天验收。
+
+## 当前模板数据前提
+
+当前集成按 `name = fmbot` 且 `world = 0` 查找既有模板角色，并要求匹配唯一。它不使用 Cosmic 固定的角色 ID，也不以某个预设 ID 覆盖真实角色。
+
+这是当前试验的数据前提，不表示所有全新空库都能自动初始化机器人模板。全新库模板初始化仍属于后续工作。
+
+## 人口与市场验收
+
+市场沿用原版随机选择商店类型的行为，生成过程还包含二级异步任务和延时。九波加载日志或累计创建计数不能直接当作最终在线人口，某一种商店的数量也不能仅按批次总数推算。
+
+验收时通过正常管理端鉴权查询实际在线角色，以实际机器人 ID 集合和连续稳定采样为依据；分开记录已调度批次、累计生成数与当前进入世界的机器人集合。
+
+## 来源与许可
+
+本项目整体继续采用 **AGPL-3.0**，见 [LICENSE](LICENSE)，不能把复用的 AGPL 代码改标为 MIT。原始文件头、版权和来源声明保留；依赖和第三方素材仍遵守各自的许可证。
+
+原版 SoloMapling、Cosmic/OdinMS、北斗和实际复用的插件改进，见 [NOTICE](NOTICE)。分发或提供网络服务时，应向使用者提供实际运行版本的对应源码，包含适配、织入、构建规则及固定的北斗子模块内容。仅指向与运行版本无关的上游源码，不能替代这一要求。
+
+上游仓库只用于拉取更新；本项目提交仅推送到自己的仓库，不向原版 Solo、插件或北斗上游推送。
+
+## 原版资料
+
+- [原版 README 快照](README.upstream.md)
+- [原版 SoloMapling 说明](SoloMapling_README.md)
+- [Cosmic 原始说明](Cosmic_README.md)
+
+这些资料描述原版 Cosmic 集成环境。北斗集成的构建、配置与验收以本项目说明为准。

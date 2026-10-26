@@ -1,8 +1,8 @@
 package soloMapling.ArtificialPlayer.BotTypes.OPQ;
 
-import client.Character;
-import server.maps.MapleMap;
-import server.maps.Reactor;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Reactor;
 import soloMapling.ArtificialPlayer.BotTypes.OPQ.OPQSharedContext.OPQPhase;
 import soloMapling.server.ExecutorServiceManager;
 
@@ -379,7 +379,7 @@ public class OPQOrchestrator {
 
     /**
      * Resolve the live leader Character from any registered bot's channel
-     * server. Returns null if there's no leader yet, no bots registered, or
+     * org.gms.server. Returns null if there's no leader yet, no bots registered, or
      * the leader has logged out / changed channels.
      */
     private Character resolveLeader() {

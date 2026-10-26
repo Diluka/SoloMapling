@@ -1,8 +1,8 @@
 package soloMapling.ArtificialPlayer.BotDecoratorSystem;
 
-import client.Character;
-import client.Job;
-import constants.inventory.EquipType;
+import org.gms.client.Character;
+import org.gms.client.Job;
+import soloMapling.itemPool.EquipType;
 import soloMapling.ArtificialPlayer.BotCustomization;
 
 import java.util.ArrayList;
@@ -200,7 +200,7 @@ public class BotDecorateEquips {
         Random random = new Random();
         Job jobType = character.getJobStyle();
         int jobId = character.getJob().getId(); // Specific job ID
-        int jobLevel = character.getJob().getJobTier(); // 0 for beginner, 1 for first job, etc.
+        int jobLevel = soloMapling.beidou.HostCompatibility.jobTier(character.getJob()); // 0 for beginner, 1 for first job, etc.
 
         List<EquipType> possibleWeapons = new ArrayList<>();
         boolean useShield = false;

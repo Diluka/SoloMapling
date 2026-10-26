@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.BotAttackSystem;
 
-import client.Job;
+import org.gms.client.Job;
 
 /*
  * Original fixed-damage attack profile; the attack-plan concept is inspired by GreenCatMS. Credit: NutNNut for the idea.
@@ -98,7 +98,7 @@ public final class BotAttackProfile {
     }
 
     /* This profile's skill for the given weapon - the alternate form when one is set and the weapon calls for it. */
-    public int skillFor(client.inventory.WeaponType weapon) {
+    public int skillFor(org.gms.client.inventory.WeaponType weapon) {
         return (altSkillId != 0 && BotAttackData.usesAltWarriorVariant(weapon)) ? altSkillId : skillId;
     }
 
@@ -108,7 +108,7 @@ public final class BotAttackProfile {
      * into a heavier per-line hit - all owned by BotDamageModel, the one place damage is tuned.
      */
     public int rollDamage(int level, Job job) {
-        int tier = (job != null) ? job.getJobTier() : 0;
+        int tier = (job != null) ? soloMapling.beidou.HostCompatibility.jobTier(job) : 0;
         return BotDamageModel.rollLine(tier, level, numDamage);
     }
 }

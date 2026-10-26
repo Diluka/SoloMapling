@@ -20,11 +20,18 @@ public class EventBus {
         this.eventStore = new EventStore(5000); // Keep last 5000 events
     }
 
-    public static EventBus getInstance() {
+    public static synchronized EventBus getInstance() {
         if (instance == null) {
             instance = new EventBus();
         }
         return instance;
+    }
+
+    public static synchronized void clearIfCreated() {
+        if (instance != null) {
+            instance.subscribers.clear();
+            instance.eventStore.clear();
+        }
     }
 
     public void publish(GameEvent event) {

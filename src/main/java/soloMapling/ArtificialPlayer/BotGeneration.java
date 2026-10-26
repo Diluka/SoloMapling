@@ -1,9 +1,12 @@
 package soloMapling.ArtificialPlayer;
 
-import client.Character;
-import client.Client;
-import client.Job;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.client.Client;
+import org.gms.client.BotClient;
+import org.gms.client.Job;
+import org.gms.server.maps.MapleMap;
+import org.gms.util.DatabaseConnection;
+import soloMapling.beidou.BotRegistry;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotBuffDriver;
 import soloMapling.ArtificialPlayer.BotBuffRequestSystem.BotBuffRequestHandler;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
@@ -11,6 +14,9 @@ import soloMapling.server.SoloMaplingConstants;
 import soloMapling.server.SoloMaplingUtilities;
 
 import java.awt.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,7 +39,48 @@ public class BotGeneration {
 
     // Atomic because bots spawn in parallel - a plain int would let two threads
     // grab the same id, silently overwriting one bot with another in storage.
-    private static final AtomicInteger currentBotCount = new AtomicInteger(100);
+    private static final AtomicInteger currentBotCount = new AtomicInteger();
+    private static volatile int templateCharacterId;
+    private static Character consoleBot;
+
+    /** Resolve an existing template without changing accounts or character data. */
+    private static int templateCharacterId() {
+        int cached = templateCharacterId;
+        if (cached > 0) return cached;
+        synchronized (BotGeneration.class) {
+            if (templateCharacterId > 0) return templateCharacterId;
+            try (Connection connection = DatabaseConnection.getConnection();
+                 PreparedStatement statement = connection.prepareStatement(
+                         "SELECT id FROM characters WHERE name = ? AND world = ?")) {
+                statement.setString(1, "fmbot");
+                statement.setInt(2, SoloMaplingConstants.GameConstants.WORLD_SCANIA);
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) {
+                        throw new IllegalStateException("SoloMapling requires an existing fmbot template character");
+                    }
+                    int resolved = result.getInt("id");
+                    if (resolved <= 0 || result.next()) {
+                        throw new IllegalStateException("SoloMapling fmbot template must resolve to one native character");
+                    }
+                    templateCharacterId = resolved;
+                    return resolved;
+                }
+            } catch (SQLException failure) {
+                throw new IllegalStateException("Could not read the SoloMapling fmbot template", failure);
+            }
+        }
+    }
+
+    private static Character loadTemplate() {
+        Client client = new BotClient(SoloMaplingConstants.GameConstants.WORLD_SCANIA,
+                SoloMaplingConstants.GameConstants.CHANNEL_1);
+        Character character = Character.loadCharFromDB(templateCharacterId(), client, false);
+        if (character == null) {
+            throw new IllegalStateException("Could not load the existing SoloMapling fmbot template");
+        }
+        client.setPlayer(character);
+        return character;
+    }
 
     /**
      * Worst-case duration of the spawn choreography (pre-drop delay 0.5-1.2s
@@ -46,27 +93,15 @@ public class BotGeneration {
 
     /** Total number of bots created since server start (for startup logging). */
     public static int getBotsCreatedCount() {
-        return currentBotCount.get() - 100;
+        return currentBotCount.get();
     }
 
 
-    public static Character getConsoleBot() {
-        Character consoleBot = getChr(999);
-        if (consoleBot != null) {
+    public static synchronized Character getConsoleBot() {
+        if (BotRegistry.isCurrent(consoleBot)) {
             return consoleBot;
         }
-
-        int botId = 999;
-        int baseId = 2; // Base Bot Character
-
-        try {
-            Character chr = Character.loadCharFromDB(baseId, getBotClient(), false);
-            consoleBot = chr;
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
-
-        consoleBot = setConsoleBot(consoleBot, botId); // Bot onDemandBot
+        consoleBot = setConsoleBot(loadTemplate(), BotRegistry.allocateId());
         addBotToServer(consoleBot);
         return consoleBot;
     }
@@ -81,19 +116,14 @@ public class BotGeneration {
 
     // forcedJobId > 0 pins the exact job (GM 'trainhere' test spawn); 0 = a random job for the class.
     public static int createBot(Point pos, MapleMap map, int baseClass, int minLevel, int maxLevel, int forcedJobId) {
-        int cid = 2; // CID 2 = Base Bot Character
-
-        Character bot = null;
-        try {
-            Character chr = Character.loadCharFromDB(cid, getBotClient(), false);
-            bot = chr;
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
-        int botId = SoloMaplingConstants.GameConstants.BOT_BASE_ID + currentBotCount.getAndIncrement();
+        Character bot = loadTemplate();
+        int botId = BotRegistry.allocateId();
         bot = setBotStats(bot, botId); // Bot onDemandBot
         addBotToServer(bot);
-        placeBotOnMap(bot, pos, map);
+        currentBotCount.incrementAndGet();
+        if (!placeBotOnMap(bot, pos, map)) {
+            throw new IllegalStateException("SoloMapling bot is no longer current before map publication");
+        }
         // Decorate before the drop-down plays so the bot arrives fully dressed
         // (decoration is an in-memory cache lookup, takes microseconds).
         if (baseClass <= 0) {
@@ -121,18 +151,23 @@ public class BotGeneration {
      * should already be running on a pooled executor (not the client thread).
      */
     public static void warpBotToLocation(Character fakechar, Point pos, MapleMap map) {
-        placeBotOnMap(fakechar, pos, map);
+        if (!placeBotOnMap(fakechar, pos, map)) return;
         playSpawnChoreography(fakechar);
     }
 
-    private static void placeBotOnMap(Character fakechar, Point pos, MapleMap map) {
-        if (fakechar.getMap() == map) {
-            fakechar.getMap().removePlayer(fakechar);
+    static boolean placeBotOnMap(Character fakechar, Point pos, MapleMap map) {
+        if (!BotRegistry.isCurrent(fakechar)) return false;
+        MapleMap previous = fakechar.getMap();
+        if (previous != null) {
+            previous.removePlayer(fakechar);
         }
+        if (!BotRegistry.isCurrent(fakechar)) return false;
         fakechar.setMap(map);
         fakechar.setPosition(pos);
         fakechar.setStance(5);
+        if (!BotRegistry.isCurrent(fakechar)) return false;
         map.addPlayer(fakechar);
+        return true;
     }
 
     /**
@@ -145,26 +180,28 @@ public class BotGeneration {
      * Worst case is bounded by {@link #SPAWN_CHOREOGRAPHY_MAX_MS}.
      */
     private static void playSpawnChoreography(Character fakechar) {
+        if (!BotRegistry.isCurrent(fakechar)) return;
         long dropDelayMs = ThreadLocalRandom.current().nextLong(500, 1201);
         if (!BotHelpers.blockingSleep(dropDelayMs)) return;
+        if (!BotRegistry.isCurrent(fakechar)) return;
         botEnterPortalDropDown(fakechar);
+        if (!BotRegistry.isCurrent(fakechar)) return;
 
         // Bots spawn facing right by default, so a 50% roll to flip to left gives
         // roughly even left/right distribution without a no-op right-turn.
         if (ThreadLocalRandom.current().nextBoolean()) {
             long turnDelayMs = ThreadLocalRandom.current().nextLong(1000, 1501);
             if (!BotHelpers.blockingSleep(turnDelayMs)) return;
+            if (!BotRegistry.isCurrent(fakechar)) return;
             microTurnAroundToLeft(fakechar);
         }
     }
 
     private static Character setConsoleBot(Character baseChr, int botId) {
         Character onDemandBot = baseChr; // Character.getDefault(c)
-        onDemandBot.setClient(getBotClient());
         onDemandBot.setName("Console");
 
-        onDemandBot.setID(botId);
-        onDemandBot.setFame(botId); // debug purposes
+        onDemandBot.setId(botId);
         onDemandBot.setLevel(69);
         onDemandBot.setJob(Job.getById(420));
 
@@ -173,36 +210,35 @@ public class BotGeneration {
 
     private static Character setBotStats(Character baseChr, int botId) {
         Character onDemandBot = baseChr; // Character.getDefault(c)
-        onDemandBot.setClient(getBotClient());
         onDemandBot.setName(getRandomCharacterIGN());
-        onDemandBot.setID(botId);
-        onDemandBot.setFame(botId); // debug purposes
+        onDemandBot.setId(botId);
         return onDemandBot;
     }
 
     public static void removeBotFromServer(Character fakechar) {
         fakechar.getMap().removePlayer(fakechar);
-        channel.removePlayer(fakechar);
-        world.getPlayerStorage().removePlayer(fakechar.getId());
+        channel().removePlayer(fakechar);
+        world().getPlayerStorage().removePlayer(fakechar.getId());
         CharacterStorage.removeActiveBot(fakechar.getId());//
         BotBuffDriver.clearBot(fakechar.getId());   // Phase 3a: release buff recast timers
         BotBuffRequestHandler.clearBot(fakechar.getId());   // release chat-buff-request cooldown
+        BotRegistry.unregister(fakechar);
+        synchronized (BotGeneration.class) {
+            if (consoleBot == fakechar) consoleBot = null;
+        }
     }
 
-    private static void addBotToServer(Character fakechar) {
-//        final Channel channel = Server.getInstance().getChannel(BotSM.GameConstants.WORLD_SCANIA, BotSM.GameConstants.CHANNEL_1);
-        channel.addPlayer(fakechar);
-//        World world = Server.getInstance().getWorld(BotSM.GameConstants.WORLD_SCANIA);
-        world.getPlayerStorage().addPlayer(fakechar);
+    static void addBotToServer(Character fakechar) {
+        BotRegistry.register(fakechar);
+        channel().addPlayer(fakechar);
+        world().getPlayerStorage().addPlayer(fakechar);
     }
 
     public static void spawnBotFm(Character fakechar, Point pt) {
+        if (!BotRegistry.isCurrent(fakechar)) return;
         int fmMap = 910000000;
         MapleMap spawnMap = getBotClient().getChannelServer().getMapFactory().getMap(fmMap);
-        fakechar.setMap(spawnMap);
-        fakechar.setPosition(pt);
-        fakechar.setStance(5);
-        spawnMap.addPlayer(fakechar);
+        placeBotOnMap(fakechar, pt, spawnMap);
     }
 
     /*

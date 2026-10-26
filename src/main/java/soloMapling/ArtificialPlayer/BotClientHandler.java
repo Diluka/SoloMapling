@@ -1,7 +1,7 @@
 package soloMapling.ArtificialPlayer;
 
-import client.BotClient;
-import client.Client;
+import org.gms.client.BotClient;
+import org.gms.client.Client;
 import soloMapling.server.SoloMaplingConstants.GameConstants;
 
 /**
@@ -12,7 +12,7 @@ public class BotClientHandler {
     private static volatile Client botClient = null;
 
     /**
-     * Constructs the one shared headless bot client. Idempotent — safe to call
+     * Constructs the one shared headless bot org.gms.client. Idempotent — safe to call
      * more than once (only the first call builds the instance). Must run after
      * the channels exist, since the client reports {@code WORLD_SCANIA} /
      * {@code CHANNEL_1} for routing.

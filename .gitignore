@@ -3,6 +3,10 @@
 !.idea/codeStyles/
 *.iml
 /target
+/beidou-integration/target/
+**/__pycache__/
+*.pyc
+/.serena/
 
 # GCMoveSystem runtime-generated nav/world graph caches (CWD-relative)
 /cache/

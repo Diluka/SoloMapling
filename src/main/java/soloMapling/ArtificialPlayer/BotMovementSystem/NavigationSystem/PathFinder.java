@@ -1,12 +1,13 @@
 package soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem;
 
-import client.Character;
-import server.maps.MapleMap;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.MovementRecording;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.MovementRecordingRaw;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.StartEndPair;
 import soloMapling.ArtificialPlayer.BotMovementSystem.MovementStructures.TimeCoordinatePair;
 import soloMapling.server.SoloMaplingUtilities;
+import soloMapling.server.BotTickService;
 
 import soloMapling.ArtificialPlayer.BotLogic;
 import soloMapling.ArtificialPlayer.BotMovementSystem.PlayerReaction;
@@ -18,11 +19,14 @@ import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 import static soloMapling.ArtificialPlayer.BotMovementSystem.InPacketReader.getMovementRecordingRaw;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands.MidMovementCheck;
+import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands.checkMovementCancellation;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.MovementCommands.executeMovement;
 import static soloMapling.ArtificialPlayer.BotMovementSystem.NavigationSystem.NavigationElement.parseNavigationType;
 import static soloMapling.DebugUtilities.debugprint;
@@ -37,6 +41,8 @@ public class PathFinder {
 
     private static final Random random = new Random();
     private static final Map<PathType, Double> WEIGHTS = new EnumMap<>(PathType.class);
+
+    private static final class UnavailableRecordingException extends RuntimeException { }
 
 
     public PathFinder(Character fakechar, Point endPt) {
@@ -214,12 +220,14 @@ public class PathFinder {
 
     }
 
-    public void executePath(int mapId, List<NavigationElement> elements) {
+    public boolean executePath(int mapId, List<NavigationElement> elements) {
+        checkMovementCancellation(this.character);
         if (elements == null || elements.isEmpty()) {
 //            debugprint("No navigation elements provided");
-            return;
+            return false;
         }
 
+        boolean completed = true;
         for (int i = 0; i < elements.size(); i++) {
             NavigationElement currentElement = elements.get(i);
             NavigationElement nextElement = (i < elements.size() - 1) ? elements.get(i + 1) : null;
@@ -227,13 +235,18 @@ public class PathFinder {
             try {
                 boolean interrupted = executeElement(mapId, currentElement, nextElement);
                 if (interrupted) {
-                    break;
+                    return false;
                 }
-            } catch (Exception e) {
-                debugprint(e);
-                debugprint("Failed to execute navigation element at index current: " + currentElement.getRecordingName());
+            } catch (CancellationException cancelled) {
+                throw cancelled;
+            } catch (UnavailableRecordingException unavailable) {
+                return false;
+            } catch (Exception failure) {
+                BotTickService.reportFailure(failure);
+                completed = false;
             }
         }
+        return completed;
     }
 
     /**
@@ -247,22 +260,24 @@ public class PathFinder {
      * @param stopWeight    RNG weight for stopping and reacting
      * @param walkWeight    RNG weight for reacting while walking
      */
-    public void executePathAware(int mapId, List<NavigationElement> elements,
+    public boolean executePathAware(int mapId, List<NavigationElement> elements,
                                   int detectWidth, int detectHeight,
                                   int ignoreWeight, int stopWeight, int walkWeight) {
+        checkMovementCancellation(this.character);
         if (elements == null || elements.isEmpty()) {
 //            debugprint("No navigation elements provided");
-            return;
+            return false;
         }
 
         Set<Integer> reactedPlayerIds = new HashSet<>();
 
         // This callback runs inside the packet loop every N packets
         MidMovementCheck awarenessCheck = (bot) -> {
-            List<client.Character> nearbyPlayers = BotLogic.getRealPlayersInRange(
+            checkMovementCancellation(bot);
+            List<org.gms.client.Character> nearbyPlayers = BotLogic.getRealPlayersInRange(
                     bot, detectWidth, detectHeight);
 
-            for (client.Character player : nearbyPlayers) {
+            for (org.gms.client.Character player : nearbyPlayers) {
                 if (reactedPlayerIds.contains(player.getId())) {
                     continue;
                 }
@@ -290,7 +305,7 @@ public class PathFinder {
             return false; // keep walking
         };
 
-        executeElementsWithRepath(mapId, elements, awarenessCheck,
+        return executeElementsWithRepath(mapId, elements, awarenessCheck,
                 detectWidth, detectHeight, ignoreWeight, stopWeight, walkWeight, reactedPlayerIds);
     }
 
@@ -299,11 +314,14 @@ public class PathFinder {
      * re-pathfinds from the bot's current position to the original endpoint
      * and continues with the new path.
      */
-    private void executeElementsWithRepath(int mapId, List<NavigationElement> elements,
+    private boolean executeElementsWithRepath(int mapId, List<NavigationElement> elements,
                                             MidMovementCheck awarenessCheck,
                                             int detectWidth, int detectHeight,
                                             int ignoreWeight, int stopWeight, int walkWeight,
                                             Set<Integer> reactedPlayerIds) {
+        checkMovementCancellation(this.character);
+        if (elements == null || elements.isEmpty()) return false;
+        boolean completed = true;
         for (int i = 0; i < elements.size(); i++) {
             NavigationElement currentElement = elements.get(i);
             NavigationElement nextElement = (i < elements.size() - 1) ? elements.get(i + 1) : null;
@@ -311,6 +329,7 @@ public class PathFinder {
             try {
                 boolean interrupted = executeElementAware(mapId, currentElement, nextElement, awarenessCheck);
                 if (interrupted) {
+                    checkMovementCancellation(this.character);
                     // Stop-react happened — re-pathfind from current position to original endpoint
                     Point currentPos = this.character.getPosition();
                     debugprint("Re-pathfinding from " + currentPos + " to " + this.endPt);
@@ -318,32 +337,41 @@ public class PathFinder {
                     List<NavigationElement> newElements = getNavElements(mapId, newPath);
 
                     // Recurse with the fresh path (reactedPlayerIds carries over)
-                    executeElementsWithRepath(mapId, newElements, awarenessCheck,
+                    boolean replacementCompleted = executeElementsWithRepath(mapId, newElements, awarenessCheck,
                             detectWidth, detectHeight, ignoreWeight, stopWeight, walkWeight, reactedPlayerIds);
-                    return; // the recursive call handled the rest
+                    return completed && replacementCompleted;
                 }
-            } catch (Exception e) {
-                debugprint(e);
-                debugprint("Failed to execute navigation element at index: " + currentElement.getRecordingName());
+            } catch (CancellationException cancelled) {
+                throw cancelled;
+            } catch (UnavailableRecordingException unavailable) {
+                return false;
+            } catch (Exception failure) {
+                BotTickService.reportFailure(failure);
+                completed = false;
             }
         }
+        return completed;
     }
 
     private boolean executeElementAware(int mapId, NavigationElement currentElement,
                                          NavigationElement nextElement, MidMovementCheck midCheck) {
+        checkMovementCancellation(this.character);
+        boolean interrupted;
         if (currentElement instanceof MainArea) {
-            return executeMainAreaAware(mapId, (MainArea) currentElement, nextElement, midCheck);
+            interrupted = executeMainAreaAware(mapId, (MainArea) currentElement, nextElement, midCheck);
         } else if (currentElement instanceof Connector) {
-            return executeConnectorAware((Connector) currentElement, midCheck);
+            interrupted = executeConnectorAware((Connector) currentElement, midCheck);
         } else {
             debugprint("Unknown navigation element type: {}");
-            return false;
+            interrupted = false;
         }
+        checkMovementCancellation(this.character);
+        return interrupted;
     }
 
     private boolean executeMainAreaAware(int mapId, MainArea mainArea,
                                           NavigationElement nextElement, MidMovementCheck midCheck) {
-        MovementRecording finalPath;
+        Optional<MovementRecording> finalPath;
 
         if (nextElement == null) {
             finalPath = getPathBetweenTwoPointsInMainArea(
@@ -359,7 +387,7 @@ public class PathFinder {
             return false;
         }
 
-        return executeMovement(this.character, finalPath, midCheck);
+        return executeMovement(this.character, finalPath.orElseThrow(UnavailableRecordingException::new), midCheck);
     }
 
     private boolean executeConnectorAware(Connector connector, MidMovementCheck midCheck) {
@@ -368,18 +396,22 @@ public class PathFinder {
     }
 
     private boolean executeElement(int mapId, NavigationElement currentElement, NavigationElement nextElement) {
+        checkMovementCancellation(this.character);
+        boolean interrupted;
         if (currentElement instanceof MainArea) {
-            return executeMainArea(mapId, (MainArea) currentElement, nextElement);
+            interrupted = executeMainArea(mapId, (MainArea) currentElement, nextElement);
         } else if (currentElement instanceof Connector) {
-            return executeConnector((Connector) currentElement);
+            interrupted = executeConnector((Connector) currentElement);
         } else {
             debugprint("Unknown navigation element type: {}");
-            return false;
+            interrupted = false;
         }
+        checkMovementCancellation(this.character);
+        return interrupted;
     }
 
     private boolean executeMainArea(int mapId, MainArea mainArea, NavigationElement nextElement) {
-        MovementRecording finalPath;
+        Optional<MovementRecording> finalPath;
 
         if (nextElement == null) {
             finalPath = getPathBetweenTwoPointsInMainArea(
@@ -407,7 +439,7 @@ public class PathFinder {
             return false;
         }
 
-        return executeMovement(this.character, finalPath);
+        return executeMovement(this.character, finalPath.orElseThrow(UnavailableRecordingException::new));
     }
 
     private boolean executeConnector(Connector connector) {
@@ -438,10 +470,12 @@ public class PathFinder {
     }
 
     // todo move out
-    public static MovementRecording getPathBetweenTwoPointsInMainArea(int mapId, String recName, Point start, Point end) {
+    public static Optional<MovementRecording> getPathBetweenTwoPointsInMainArea(int mapId, String recName, Point start, Point end) {
         MovementRecordingRaw mvRaw = getMovementRecordingRaw(mapId, recName);
         StartEndPair startEndPair = mvRaw.getStartEndTimeCoordPairs(start, end);
-        return mvRaw.trimRecording2(startEndPair.getStartTimestamp(), startEndPair.getEndTimestamp());
+        if (startEndPair == null) return Optional.empty();
+        MovementRecording trimmed = mvRaw.trimRecording2(startEndPair.getStartTimestamp(), startEndPair.getEndTimestamp());
+        return trimmed.getMovementPacketList().isEmpty() ? Optional.empty() : Optional.of(trimmed);
     }
 
     // ----- Aerial pathing (OPQ cloud reactors etc.) -----

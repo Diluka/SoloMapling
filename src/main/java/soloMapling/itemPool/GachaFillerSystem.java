@@ -1,9 +1,8 @@
 package soloMapling.itemPool;
+
+import soloMapling.Environment.SoloResources;
 import com.esotericsoftware.yamlbeans.YamlReader;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -133,20 +132,10 @@ public class GachaFillerSystem {
 
     @SuppressWarnings("unchecked")
     private static void loadGachaData() throws Exception {
-        File yamlFile = new File(YAML_PATH);
-
-        // If file doesn't exist at relative path, try to find it relative to working directory
-        if (!yamlFile.exists()) {
-            String workingDir = System.getProperty("user.dir");
-            yamlFile = new File(workingDir, YAML_PATH);
-
-            if (!yamlFile.exists()) {
-                throw new FileNotFoundException("Cannot find gacha YAML file at: " + yamlFile.getAbsolutePath());
-            }
+        Object object;
+        try (java.io.Reader source = SoloResources.openReader(YAML_PATH)) {
+            object = new YamlReader(source).read();
         }
-
-        YamlReader reader = new YamlReader(new FileReader(yamlFile));
-        Object object = reader.read();
 
         if (object instanceof Map) {
             gachaData = new HashMap<>();
@@ -207,7 +196,6 @@ public class GachaFillerSystem {
             }
         }
 
-        reader.close();
     }
 
     // Method to reload gacha data if needed

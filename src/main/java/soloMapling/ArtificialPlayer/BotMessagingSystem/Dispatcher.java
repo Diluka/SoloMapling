@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer.BotMessagingSystem;
 
-import client.Character;
+import org.gms.client.Character;
 import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotTypes.SocialBot;
 
@@ -16,31 +16,75 @@ import static soloMapling.BotLogger.log;
 
 public class Dispatcher implements Runnable {
 
-    private static final Dispatcher dispatcher = new Dispatcher(MessageQueue.getInstance());
+    private static volatile Dispatcher dispatcher;
     private final MessageQueue messageQueue;
     private final ExecutorService executor = getExecutorService();
     private final ScheduledExecutorService scheduler = getScheduledExecutorService();
+    private final java.util.Set<Future<?>> pending = ConcurrentHashMap.newKeySet();
+    private volatile ScheduledFuture<?> scheduledTask;
+    private volatile boolean running;
+    private volatile long generation;
 
     public Dispatcher(MessageQueue messageQueue) {
+        this(messageQueue, true);
+    }
+
+    private Dispatcher(MessageQueue messageQueue, boolean startWorker) {
         log("Dispatcher OBJECT Created");
         this.messageQueue = messageQueue;
-        this.scheduler.scheduleAtFixedRate(this, 0, 2, TimeUnit.SECONDS);
+        if (startWorker) start();
+    }
+
+    static synchronized void startIfNeeded(MessageQueue messageQueue) {
+        Dispatcher current = dispatcher;
+        if (current == null) dispatcher = new Dispatcher(messageQueue);
+        else current.start();
+    }
+
+    private synchronized void start() {
+        if (running) return;
+        running = true;
+        long currentGeneration = ++generation;
+        scheduledTask = scheduler.scheduleAtFixedRate(() -> processMessages(currentGeneration),
+                0, 2, TimeUnit.SECONDS);
+    }
+
+    public static void stopIfStarted() {
+        Dispatcher current = dispatcher;
+        if (current != null) current.stop();
+    }
+
+    private synchronized void stop() {
+        running = false;
+        generation++;
+        if (scheduledTask != null) {
+            scheduledTask.cancel(true);
+            scheduledTask = null;
+        }
+        pending.forEach(task -> task.cancel(true));
+        pending.clear();
+    }
+
+    private boolean isCurrent(long currentGeneration) {
+        return running && generation == currentGeneration && !Thread.currentThread().isInterrupted();
     }
 
     // Static method to access the singleton instance
-    public static Dispatcher getInstance() {
+    public static synchronized Dispatcher getInstance() {
         log("Dispatcher getInstance");
+        if (dispatcher == null) dispatcher = new Dispatcher(MessageQueue.getInstance(), false);
         return dispatcher;
     }
 
     @Override
     public void run() {
 //        log("Dispatcher: RUN");
-        processMessages();
+        processMessages(generation);
     }
 
     //    @Override
-    private void processMessages() {
+    private void processMessages(long currentGeneration) {
+        if (!isCurrent(currentGeneration)) return;
         try {
             ChatMessage message = messageQueue.getMessageNonBlocking("primary");
             if (message == null) {
@@ -50,10 +94,11 @@ public class Dispatcher implements Runnable {
             final int[] botToCall = new int[1];  // Using an array to hold the bot ID
 
             boolean characterFound = checkIfCharacterOnMap(chars_on_map, message, botToCall);
+            if (!isCurrent(currentGeneration)) return;
 
             // Determine if the message is for any registered bot
             if (characterFound) {
-                handleBotRunning(botToCall, message);
+                handleBotRunning(botToCall, message, currentGeneration);
             } else {
                 handleMessageWithNoBotName(message);
             }
@@ -76,8 +121,9 @@ public class Dispatcher implements Runnable {
         return characterFound;
     }
 
-    private void handleBotRunning(int[] botToCall, ChatMessage message) {
-        executor.execute(() -> {
+    private void handleBotRunning(int[] botToCall, ChatMessage message, long currentGeneration) {
+        FutureTask<Void> action = new FutureTask<>(() -> {
+            if (!isCurrent(currentGeneration)) return;
             BotSM bot = getBotById(botToCall[0]);
             if (bot == null) {
                 logBotNotFound(botToCall[0]);
@@ -89,7 +135,15 @@ public class Dispatcher implements Runnable {
             } else {
                 handleExistingBotSession(bot, message);
             }
-        });
+        }, null) {
+            @Override
+            protected void done() {
+                pending.remove(this);
+            }
+        };
+        pending.add(action);
+        if (isCurrent(currentGeneration)) executor.execute(action);
+        else action.cancel(false);
     }
 
     private void startNewBotSession(BotSM bot, ChatMessage message) {
@@ -167,16 +221,7 @@ public class Dispatcher implements Runnable {
     }
 
     public void shutdown() {
-        executor.shutdown();
-        try {
-            // Wait for existing tasks to complete
-            if (!executor.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException ex) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        stop();
     }
 }
 

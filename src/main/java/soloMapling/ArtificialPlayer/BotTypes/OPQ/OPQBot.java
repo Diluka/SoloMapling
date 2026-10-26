@@ -1,9 +1,9 @@
 package soloMapling.ArtificialPlayer.BotTypes.OPQ;
 
-import client.Character;
-import server.maps.MapleMap;
-import server.maps.MapObject;
-import server.maps.Reactor;
+import org.gms.client.Character;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.MapObject;
+import org.gms.server.maps.Reactor;
 import soloMapling.ArtificialPlayer.BotCommandsPack.BotAttack;
 import soloMapling.ArtificialPlayer.BotCommandsPack.DropCommands;
 import soloMapling.ArtificialPlayer.BotCommandsPack.SocialCommands;
@@ -300,7 +300,9 @@ public class OPQBot extends BotSM {
             List<String> platforms = PlatformPlacement.getMainPlatformIds(getChr().getMapId());
             if (!platforms.isEmpty()) {
                 String target = platforms.get(new Random().nextInt(platforms.size()));
-                PlatformPlacement.botMoveToPlatformAnyUnoccupiedSpot(getChr(), target);
+                if (!PlatformPlacement.botMoveToPlatformAnyUnoccupiedSpot(getChr(), target)) {
+                    debugLogf("No recorded recruitment route; staying available until the next target selection.");
+                }
             }
         }
     }

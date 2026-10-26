@@ -1,9 +1,10 @@
 package soloMapling.itemPool;
 
+import soloMapling.Environment.SoloResources;
+
 import com.esotericsoftware.yamlbeans.YamlReader;
 import soloMapling.server.MapleVersionManager;
 
-import java.io.FileReader;
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -13,8 +14,10 @@ public class ItemSelector {
     private Map<String, List<ItemNode>> items;
 
     public ItemSelector(String yamlFile) throws Exception {
-        YamlReader reader = new YamlReader(new FileReader(yamlFile));
-        items = (Map<String, List<ItemNode>>) reader.read();
+        try (java.io.Reader source = SoloResources.openReader(yamlFile)) {
+            YamlReader reader = new YamlReader(source);
+            items = (Map<String, List<ItemNode>>) reader.read();
+        }
     }
 
     // Convert a map to an ItemNode instance

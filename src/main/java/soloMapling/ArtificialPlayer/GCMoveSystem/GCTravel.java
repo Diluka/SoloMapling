@@ -1,10 +1,12 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
-import client.Character;
-import server.maps.MapleMap;
-import server.maps.Portal;
+import org.gms.client.Character;
+import org.gms.client.BotClient;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Portal;
 import soloMapling.ArtificialPlayer.BotTravelSystem.BotScriptedWarp;
 import soloMapling.BotLogger;
+import soloMapling.beidou.BotRegistry;
 
 import java.awt.Point;
 import java.util.List;
@@ -81,6 +83,7 @@ final class GCTravel {
         final int destMapId;
         final Consumer<Boolean> callback;
         ScheduledFuture<?> task;
+        boolean cancelled;
         long settledAtMs;       // when the bot first arrived + stopped at the current hop's portal (0 = not yet)
         int hopBestDist = Integer.MAX_VALUE; // closest the bot has gotten to the current hop's portal
         int lastPosX = Integer.MIN_VALUE;    // last sampled bot position (liveness: is it still moving at all?)
@@ -104,7 +107,7 @@ final class GCTravel {
     }
 
     static void travel(Character bot, int destMapId, Consumer<Boolean> callback) {
-        if (bot == null) {
+        if (bot == null || GCMovement.isStopping() || !isCurrentTraveler(bot)) {
             return;
         }
         cancel(bot);
@@ -116,15 +119,46 @@ final class GCTravel {
         Trip trip = new Trip(bot, destMapId, callback);
         trip.hopProgressAtMs = nowMs();
         trip.hopStartAtMs = nowMs();
-        trip.task = POOL.scheduleAtFixedRate(
-                () -> {
-                    try {
-                        tick(trip);
-                    } catch (Throwable ignored) {
-                        // a thrown poll would cancel the periodic task
-                    }
-                }, 0, POLL_MS, TimeUnit.MILLISECONDS);
-        TRIPS.put(bot.getId(), trip);
+        boolean installed = false;
+        synchronized (TRIPS) {
+            if (!GCMovement.isStopping() && isCurrentTraveler(bot)) {
+                TRIPS.put(bot.getId(), trip);
+                // Prevent an immediate first poll from cancelling before its future
+                // has been published, which would otherwise leave an empty poller.
+                synchronized (trip) {
+                    trip.task = POOL.scheduleAtFixedRate(() -> poll(trip), 0, POLL_MS, TimeUnit.MILLISECONDS);
+                }
+                installed = true;
+            }
+        }
+        if (!installed) GCMovement.disable(bot);
+    }
+
+    private static boolean isCurrentTraveler(Character character) {
+        // Public GC movement also backs real GM diagnostics; the registration
+        // requirement belongs specifically to headless Solo-owned characters.
+        return !(character.getClient() instanceof BotClient) || BotRegistry.isCurrent(character);
+    }
+
+    private static void poll(Trip trip) {
+        boolean detached = false;
+        synchronized (trip) {
+            if (trip.cancelled) return;
+            if (GCMovement.isStopping() || !isCurrentTraveler(trip.bot)) {
+                TRIPS.remove(trip.bot.getId(), trip);
+                cancelTrip(trip);
+                detached = true;
+            } else {
+                try {
+                    tick(trip);
+                } catch (Throwable ignored) {
+                    // A transient map failure must not cancel a live trip.
+                }
+            }
+        }
+        // Do not take follow/fidget locks while holding the trip lock: another
+        // movement callback can be cancelling this trip under one of those locks.
+        if (detached) GCMovement.disable(trip.bot);
     }
 
     static void cancel(Character bot) {
@@ -132,8 +166,22 @@ final class GCTravel {
             return;
         }
         Trip t = TRIPS.remove(bot.getId());
-        if (t != null && t.task != null) {
-            t.task.cancel(false);
+        if (t != null) cancelTrip(t);
+    }
+
+    static void cancelAll() {
+        List<Trip> trips;
+        synchronized (TRIPS) {
+            trips = new java.util.ArrayList<>(TRIPS.values());
+            TRIPS.clear();
+        }
+        for (Trip trip : trips) cancelTrip(trip);
+    }
+
+    private static void cancelTrip(Trip trip) {
+        synchronized (trip) {
+            trip.cancelled = true;
+            if (trip.task != null) trip.task.cancel(false);
         }
     }
 
@@ -354,7 +402,8 @@ final class GCTravel {
     }
 
     private static void finish(Trip trip, boolean ok) {
-        TRIPS.remove(trip.bot.getId());
+        if (trip.cancelled || GCMovement.isStopping()) return;
+        TRIPS.remove(trip.bot.getId(), trip);
         if (trip.task != null) {
             trip.task.cancel(false);
         }

@@ -1,9 +1,15 @@
 package soloMapling.server;
 
 import java.util.Map;
+import java.util.IdentityHashMap;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 // Fable Phase 2: the central macro-brain tick wheel. Replaces the per-bot
 // Executors.newScheduledThreadPool(1) in BotSM (one dedicated OS thread per bot)
@@ -19,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 // Virtual-thread dispatch means a tick that still calls Thread.sleep (several bot
 // types do) parks its own virtual thread only - it can't stall other bots.
 public final class BotTickService {
+    private static final Logger LOG = LoggerFactory.getLogger(BotTickService.class);
 
     private BotTickService() {
     }
@@ -28,6 +35,8 @@ public final class BotTickService {
     private static final long DRIVER_PERIOD_MS = 100;
 
     private static final class Entry {
+        final int botId;
+        final long generation;
         final Runnable tick;
         volatile long periodMs;
         volatile long nextDueMs;
@@ -39,7 +48,9 @@ public final class BotTickService {
         volatile boolean noThrottle;
         final AtomicBoolean ticking = new AtomicBoolean(false);
 
-        Entry(Runnable tick, long periodMs, long nextDueMs) {
+        Entry(int botId, long generation, Runnable tick, long periodMs, long nextDueMs) {
+            this.botId = botId;
+            this.generation = generation;
             this.tick = tick;
             this.periodMs = periodMs;
             this.nextDueMs = nextDueMs;
@@ -48,6 +59,11 @@ public final class BotTickService {
 
     private static final Map<Integer, Entry> ENTRIES = new ConcurrentHashMap<>();
     private static final AtomicBoolean DRIVER_STARTED = new AtomicBoolean(false);
+    private static final Object LIFECYCLE = new Object();
+    private static final Map<Thread, Entry> RUNNING = new IdentityHashMap<>();
+    private static final ThreadLocal<Entry> CURRENT = new ThreadLocal<>();
+    private static long generation;
+    private static boolean accepting = true;
 
     // ── Governor v1 (Fable Phase 5): self-regulating degrade ────────────────
     // If the wheel falls behind (sustained avg dispatch lag over a 5s window above
@@ -74,12 +90,118 @@ public final class BotTickService {
     // Register a bot's tick on the wheel. Keep-if-present, mirroring the old
     // startScheduledTask which left a live task alone.
     public static void register(int botId, Runnable tick, long initialDelayMs, long periodMs) {
+        synchronized (LIFECYCLE) {
+            Entry caller = CURRENT.get();
+            if (!accepting || (caller != null && caller.generation != generation)) return;
+            ENTRIES.putIfAbsent(botId, new Entry(botId, generation, tick, periodMs,
+                    System.currentTimeMillis() + initialDelayMs));
+        }
         ensureDriver();
-        ENTRIES.putIfAbsent(botId, new Entry(tick, periodMs, System.currentTimeMillis() + initialDelayMs));
     }
 
     public static void unregister(int botId) {
         ENTRIES.remove(botId);
+    }
+
+    /** Drop callbacks holding the old world's bots; the empty shared wheel stays reusable. */
+    public static void clear() {
+        synchronized (LIFECYCLE) {
+            generation++;
+            ENTRIES.clear();
+        }
+    }
+
+    /** Close dispatch before any old-world state is removed. */
+    public static void stop() {
+        synchronized (LIFECYCLE) {
+            accepting = false;
+            generation++;
+            ENTRIES.clear();
+        }
+    }
+
+    /** Reopen only once the previous world's real executing callbacks have left. */
+    public static void start() {
+        synchronized (LIFECYCLE) {
+            if (accepting) return;
+            if (!RUNNING.isEmpty()) throw new IllegalStateException("Previous SoloMapling macro ticks are still running");
+            generation++;
+            accepting = true;
+        }
+    }
+
+    /** Wait for actual callback bodies, not cancellation or Future completion flags. */
+    public static boolean awaitQuiescence(long timeout, TimeUnit unit) {
+        if (timeout < 0) throw new IllegalArgumentException("Negative macro stop timeout");
+        long budget = unit.toNanos(timeout);
+        long began = System.nanoTime();
+        synchronized (LIFECYCLE) {
+            // The caller cannot finish its own callback while waiting here.
+            // Return failure so runtime can report it without blocking native saves.
+            if (RUNNING.containsKey(Thread.currentThread())) return false;
+            while (!RUNNING.isEmpty()) {
+                long remaining = budget - (System.nanoTime() - began);
+                if (remaining <= 0) return false;
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(LIFECYCLE, remaining);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    /** Cooperative cancellation is restricted to real bodies from an invalidated generation. */
+    public static void interruptCancelledRunning() {
+        synchronized (LIFECYCLE) {
+            for (Map.Entry<Thread, Entry> running : RUNNING.entrySet()) {
+                if (running.getKey() != Thread.currentThread() && running.getValue().generation != generation) {
+                    running.getKey().interrupt();
+                }
+            }
+        }
+    }
+
+    public static boolean isCurrentTickCancelled() {
+        Entry entry = CURRENT.get();
+        synchronized (LIFECYCLE) {
+            return entry != null && (entry.generation != generation || ENTRIES.get(entry.botId) != entry);
+        }
+    }
+
+    /** Both BotSM and the wheel use the same narrowly scoped cancellation policy. */
+    public static void reportFailure(Throwable failure) {
+        Throwable cause = failure;
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                && cause.getCause() != null) cause = cause.getCause();
+        if ((cause instanceof CancellationException || cause instanceof InterruptedException)
+                && isCurrentTickCancelled()) return;
+        Entry entry = CURRENT.get();
+        if (entry == null) LOG.error("SoloMapling macro callback failed outside dispatch", failure);
+        else LOG.error("SoloMapling macro tick failed for bot {}", entry.botId, failure);
+    }
+
+    /** A failed stop must retain bounded evidence of the actual executing bodies. */
+    public static String runningDiagnostics() {
+        Map<Thread, Entry> snapshot;
+        synchronized (LIFECYCLE) {
+            snapshot = new IdentityHashMap<>(RUNNING);
+        }
+        StringBuilder result = new StringBuilder("running=").append(snapshot.size());
+        int shown = 0;
+        for (Map.Entry<Thread, Entry> running : snapshot.entrySet()) {
+            if (shown++ == 8) break;
+            Thread thread = running.getKey();
+            result.append("\nbotId=").append(running.getValue().botId)
+                    .append(" thread=").append(thread.threadId()).append(" state=").append(thread.getState());
+            StackTraceElement[] stack = thread.getStackTrace();
+            for (int index = 0; index < Math.min(8, stack.length); index++) {
+                result.append("\n  at ").append(stack[index]);
+            }
+        }
+        return result.toString();
     }
 
     public static boolean isRegistered(int botId) {
@@ -142,7 +264,7 @@ public final class BotTickService {
         try {
             drive();
         } catch (Throwable t) {
-            // the driver must never die; skip the pass and catch up on the next one
+            LOG.error("SoloMapling macro driver failed", t);
         }
     }
 
@@ -154,8 +276,11 @@ public final class BotTickService {
             if (now < e.nextDueMs) {
                 continue;
             }
-            if (!e.ticking.compareAndSet(false, true)) {
-                continue; // still running; its completion computes the next due time
+            synchronized (LIFECYCLE) {
+                if (!accepting || e.generation != generation || ENTRIES.get(e.botId) != e
+                        || !e.ticking.compareAndSet(false, true)) {
+                    continue;
+                }
             }
             long lag = now - e.nextDueMs;
             e.nextDueMs = Long.MAX_VALUE; // parked while ticking
@@ -196,10 +321,19 @@ public final class BotTickService {
     }
 
     private static void runTick(Entry e) {
+        Thread thread = Thread.currentThread();
+        synchronized (LIFECYCLE) {
+            if (!accepting || e.generation != generation || ENTRIES.get(e.botId) != e) {
+                e.ticking.set(false);
+                return;
+            }
+            RUNNING.put(thread, e);
+        }
+        CURRENT.set(e);
         try {
             e.tick.run();
         } catch (Throwable t) {
-            // one bot's tick error must never kill its schedule (tickRunnable also guards)
+            reportFailure(t);
         } finally {
             long now = System.currentTimeMillis();
             long due = now + (e.noThrottle ? e.periodMs
@@ -209,8 +343,14 @@ public final class BotTickService {
                 e.pendingDueMs = 0;
                 due = Math.min(due, Math.max(pending, now));
             }
-            e.nextDueMs = due;       // write the due time BEFORE releasing the guard
-            e.ticking.set(false);
+            CURRENT.remove();
+            synchronized (LIFECYCLE) {
+                e.nextDueMs = accepting && e.generation == generation && ENTRIES.get(e.botId) == e
+                        ? due : Long.MAX_VALUE;
+                e.ticking.set(false);
+                RUNNING.remove(thread);
+                LIFECYCLE.notifyAll();
+            }
         }
     }
 }

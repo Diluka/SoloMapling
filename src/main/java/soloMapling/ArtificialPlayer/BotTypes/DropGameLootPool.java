@@ -1,8 +1,9 @@
 package soloMapling.ArtificialPlayer.BotTypes;
 
+import soloMapling.Environment.SoloResources;
+
 import com.esotericsoftware.yamlbeans.YamlReader;
 
-import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,8 +37,8 @@ public class DropGameLootPool {
 
     public static DropGameLootPool load(String tier) {
         DropGameLootPool pool = new DropGameLootPool();
-        try {
-            YamlReader reader = new YamlReader(new FileReader(LOOT_POOL_PATH));
+        try (java.io.Reader source = SoloResources.openReader(LOOT_POOL_PATH)) {
+            YamlReader reader = new YamlReader(source);
             Map<String, Object> root = (Map<String, Object>) reader.read();
             Map<String, Object> tierNode = (Map<String, Object>) root.get(tier);
             if (tierNode == null) {

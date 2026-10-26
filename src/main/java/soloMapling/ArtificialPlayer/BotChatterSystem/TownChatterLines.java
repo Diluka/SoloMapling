@@ -1,8 +1,9 @@
 package soloMapling.ArtificialPlayer.BotChatterSystem;
 
+import soloMapling.Environment.SoloResources;
+
 import com.esotericsoftware.yamlbeans.YamlReader;
 
-import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -52,8 +53,8 @@ public final class TownChatterLines {
     @SuppressWarnings("unchecked")
     private static List<List<String>> load() {
         List<List<String>> out = new ArrayList<>();
-        try {
-            YamlReader reader = new YamlReader(new FileReader(YAML_PATH));
+        try (java.io.Reader source = SoloResources.openReader(YAML_PATH)) {
+            YamlReader reader = new YamlReader(source);
             Map<String, Object> root = (Map<String, Object>) reader.read();
             if (root == null) {
                 return out;

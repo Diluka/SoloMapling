@@ -1,12 +1,13 @@
 package soloMapling.ArtificialPlayer.BotTypes;
 
-import client.Character;
-import constants.game.ExpTable;
-import constants.id.MapId;
-import net.server.Server;
-import net.server.world.Party;
-import net.server.world.PartyCharacter;
-import net.server.world.World;
+import org.gms.client.Character;
+import org.gms.client.BotClient;
+import org.gms.constants.game.ExpTable;
+import org.gms.constants.id.MapId;
+import org.gms.net.server.Server;
+import org.gms.net.server.world.Party;
+import org.gms.net.server.world.PartyCharacter;
+import org.gms.net.server.world.World;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackDriver;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotBuffDriver;
 import soloMapling.ArtificialPlayer.BotOptionMenu;
@@ -14,9 +15,9 @@ import soloMapling.ArtificialPlayer.BotPartySystem.BotPartyQueue;
 import soloMapling.ArtificialPlayer.BotPartySystem.BotRecruitManager;
 import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotTypeManager;
-import server.life.Monster;
-import server.maps.MapleMap;
-import server.maps.Portal;
+import org.gms.server.life.Monster;
+import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Portal;
 import soloMapling.ArtificialPlayer.BotDialogueHandler;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotGrindSystem.DeepHub;
@@ -32,6 +33,7 @@ import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.server.EventMessageSystem.EventBus;
 import soloMapling.server.EventMessageSystem.EventFactory;
 import soloMapling.server.ExecutorServiceManager;
+import soloMapling.beidou.BotRegistry;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -44,6 +46,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -252,6 +255,9 @@ public class TrainingBot extends BotSM {
     private volatile boolean saunaTripActive = false; // a sauna trip's async chain is in flight
     private volatile boolean saunaTripDone = false;   // chain finished → macro tick advances to DECIDE
     private volatile long saunaTripDeadlineMs = 0;    // whole-trip watchdog deadline
+    private long saunaTripGeneration;
+    private ScheduledFuture<?> saunaDoorTask;
+    private ScheduledFuture<?> saunaExitTask;
 
     // ── Grind engine + macro watchdog state ──
     // The per-bot localized grind sub-FSM (SELECT_SPOT→TRAVEL→FIGHT⇄WAIT→RELOCATE). TrainingBot keeps the
@@ -503,12 +509,16 @@ public class TrainingBot extends BotSM {
     // tick parks on saunaTripActive while it runs and resumes at DECIDE when it finishes. Gated by
     // homeMapId == SLEEPYWOOD, so it can never leak into any other town's behavior.
     //   town -> hotel -> walk to the (non-portal) sauna door -> warp into a sauna -> wander -> exit -> town.
-    private void startSaunaTrip() {
+    private synchronized void startSaunaTrip() {
+        if (!getRunning()) return;
         Character chr = getChr();
         if (chr == null) {
             enterPhase(Phase.DECIDE);
             return;
         }
+        if (chr.getClient() instanceof BotClient && !BotRegistry.isCurrent(chr)) return;
+        cancelSaunaCallbacks();
+        long trip = saunaTripGeneration;
         TownLoiter.stop(chr); // this async errand leaves town without enterPhase - end the loiter first
         saunaTripActive = true;
         saunaTripDone = false;
@@ -517,56 +527,93 @@ public class TrainingBot extends BotSM {
         if (rng.nextInt(2) == 0) {
             BotEmote(chr, 1 + rng.nextInt(7)); // a beat of life before heading off
         }
-        GCMovement.travel(chr, SLEEPYWOOD_HOTEL, ok -> enterSaunaFromHotel(chr));
+        GCMovement.travel(chr, SLEEPYWOOD_HOTEL, ok ->
+                ExecutorServiceManager.runAsync(() -> enterSaunaFromHotel(chr, trip)));
     }
 
     // In the hotel: walk to the sauna door for the visual, then warp into a sauna (the NPC-script teleport is
     // pure smoke-and-mirrors server-side). The warp fires on arrival, or after a cap so a missed/abandoned
     // door-walk can't stall the trip — whichever comes first, exactly once.
-    private void enterSaunaFromHotel(Character chr) {
-        if (!saunaTripActive) {
+    private synchronized void enterSaunaFromHotel(Character chr, long trip) {
+        if (!isCurrentSaunaTrip(chr, trip)) {
             return; // aborted while travelling to the hotel
         }
         AtomicBoolean entered = new AtomicBoolean(false);
         Runnable enter = () -> {
-            if (!saunaTripActive || !entered.compareAndSet(false, true)) {
-                return; // already entered (door-arrival vs cap race), or the trip was aborted
+            synchronized (this) {
+                if (!isCurrentSaunaTrip(chr, trip) || !entered.compareAndSet(false, true)) {
+                    return; // already entered, stopped, or superseded by a different trip
+                }
+                if (saunaDoorTask != null) {
+                    saunaDoorTask.cancel(false);
+                    saunaDoorTask = null;
+                }
+                int sauna = rng.nextDouble() < SAUNA_VIP_CHANCE ? SAUNA_VIP : SAUNA_REGULAR;
+                chr.changeMap(sauna);
+                if (!isCurrentSaunaTrip(chr, trip)) return;
+                BotWanderSystem.start(chr); // relax in the sauna for a beat
+                saunaExitTask = ExecutorServiceManager.getScheduledExecutorService().schedule(
+                        () -> leaveSauna(chr, trip), shopDwellMs(), TimeUnit.MILLISECONDS);
             }
-            int sauna = rng.nextDouble() < SAUNA_VIP_CHANCE ? SAUNA_VIP : SAUNA_REGULAR;
-            chr.changeMap(sauna);
-            BotWanderSystem.start(chr); // relax in the sauna for a beat
-            ExecutorServiceManager.getScheduledExecutorService().schedule(
-                    () -> leaveSauna(chr), shopDwellMs(), TimeUnit.MILLISECONDS);
         };
-        GCMovement.move(chr, SAUNA_DOOR_X, SAUNA_DOOR_Y, enter);
-        ExecutorServiceManager.getScheduledExecutorService().schedule(enter, DOOR_WALK_MAX_MS, TimeUnit.MILLISECONDS);
+        // Movement callbacks may hold a travel/physics lock. Dispatch before taking
+        // this monitor so stopScheduledTask can cancel movement without lock inversion.
+        GCMovement.move(chr, SAUNA_DOOR_X, SAUNA_DOOR_Y,
+                () -> ExecutorServiceManager.runAsync(enter));
+        if (!entered.get() && isCurrentSaunaTrip(chr, trip)) {
+            saunaDoorTask = ExecutorServiceManager.getScheduledExecutorService().schedule(
+                    enter, DOOR_WALK_MAX_MS, TimeUnit.MILLISECONDS);
+        }
     }
 
     // Done relaxing: the sauna's one-way exit portal drops the bot back into the hotel; from there take the
     // hotel's portal back down to Sleepywood town. Then hand control back to the macro tick (-> DECIDE).
-    private void leaveSauna(Character chr) {
-        if (!saunaTripActive) {
+    private synchronized void leaveSauna(Character chr, long trip) {
+        if (!isCurrentSaunaTrip(chr, trip)) {
             return;
         }
+        saunaExitTask = null;
         BotWanderSystem.stop(chr);
-        GCMovement.travel(chr, SLEEPYWOOD_HOTEL, okHotel ->
-                GCMovement.travel(chr, homeMapId, okTown -> finishSaunaTrip()));
+        GCMovement.travel(chr, SLEEPYWOOD_HOTEL, okHotel -> ExecutorServiceManager.runAsync(() -> {
+            synchronized (this) {
+                if (!isCurrentSaunaTrip(chr, trip)) return;
+                GCMovement.travel(chr, homeMapId, okTown ->
+                        ExecutorServiceManager.runAsync(() -> finishSaunaTrip(chr, trip)));
+            }
+        }));
     }
 
-    private void finishSaunaTrip() {
-        if (!saunaTripActive) {
+    private synchronized void finishSaunaTrip(Character chr, long trip) {
+        if (!isCurrentSaunaTrip(chr, trip)) {
             return; // already aborted/finished — don't re-arm the handoff
         }
         saunaTripActive = false;
         saunaTripDone = true; // doInTown advances to DECIDE on the macro thread
+        cancelSaunaCallbacks();
+    }
+
+    /** Called with this monitor, shared by every callback and stopScheduledTask. */
+    private boolean isCurrentSaunaTrip(Character chr, long trip) {
+        return saunaTripActive && getRunning() && saunaTripGeneration == trip && getChr() == chr
+                && (!(chr.getClient() instanceof BotClient) || BotRegistry.isCurrent(chr));
+    }
+
+    private void cancelSaunaCallbacks() {
+        saunaTripGeneration++;
+        if (saunaDoorTask != null) saunaDoorTask.cancel(false);
+        if (saunaExitTask != null) saunaExitTask.cancel(false);
+        saunaDoorTask = null;
+        saunaExitTask = null;
     }
 
     // Trip watchdog (macro thread): the chained callbacks can silently drop on an unreachable hop, so if the
     // whole errand overruns, cut it and hard-recover to town rather than leaving the bot parked forever.
-    private void abortSaunaTrip() {
+    private synchronized void abortSaunaTrip() {
+        if (!saunaTripActive || !getRunning()) return;
         Character chr = getChr();
         debugChat("sauna trip overran -> force-recover to town");
         saunaTripActive = false; // disarm any in-flight callbacks first
+        cancelSaunaCallbacks();
         if (chr != null) {
             BotWanderSystem.stop(chr);
             GCMovement.cancelTravel(chr);
@@ -1261,7 +1308,7 @@ public class TrainingBot extends BotSM {
         Map<Integer, MapleMap> mapsById = new HashMap<>();
         Server server = Server.getInstance();
         if (server != null) {
-            for (World w : server.getWorlds()) {
+            for (World w : Server.getInstance().getWorlds()) {
                 if (w == null) {
                     continue;
                 }
@@ -1334,6 +1381,11 @@ public class TrainingBot extends BotSM {
     // Release combat + movement when the bot stops (FINISHED / converted / manually stopped).
     @Override
     public synchronized void stopScheduledTask() {
+        setRunning(false);
+        saunaTripActive = false;
+        saunaTripDone = false;
+        saunaTripDeadlineMs = 0;
+        cancelSaunaCallbacks();
         ACTIVE_GRINDERS.remove(this);
         Character chr = getChr();
         if (chr != null) {

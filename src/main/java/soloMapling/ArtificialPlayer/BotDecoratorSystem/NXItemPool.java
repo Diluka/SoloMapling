@@ -1,10 +1,11 @@
 package soloMapling.ArtificialPlayer.BotDecoratorSystem;
 
+import soloMapling.Environment.SoloResources;
+
 import com.esotericsoftware.yamlbeans.YamlReader;
-import constants.inventory.EquipType;
+import soloMapling.itemPool.EquipType;
 import soloMapling.itemPool.EquipMetadataCache;
 
-import java.io.FileReader;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -76,8 +77,8 @@ public class NXItemPool {
     public static synchronized void load() {
         if (loaded) return;
 
-        try {
-            YamlReader reader = new YamlReader(new FileReader(YAML_PATH));
+        try (java.io.Reader source = SoloResources.openReader(YAML_PATH)) {
+            YamlReader reader = new YamlReader(source);
             Map<String, Object> root = (Map<String, Object>) reader.read();
             if (root == null) root = Collections.emptyMap();
 
@@ -219,7 +220,7 @@ public class NXItemPool {
 
     /**
      * Force a reload — clears existing pools and re-reads YAML + cache.
-     * Useful for hot-reloading curated lists without restarting the server.
+     * Useful for hot-reloading curated lists without restarting the org.gms.server.
      */
     public static synchronized void forceReload() {
         pools.clear();
