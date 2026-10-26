@@ -50,7 +50,7 @@ public abstract class BotSM implements EventSubscriber {
     // Level-appropriate throwing star chosen once at creation for claw-thief bots (0 = not a claw
     // thrower). Cosmetic packet projectile only; lives here so we never touch the Cosmic Character.
     private final int chosenStarId;
-    private boolean running;
+    private volatile boolean running;
     protected BotState state;
     private BotDebugHandler debugger;
     private BotInteractorsHandler interactors = new BotInteractorsHandler();
@@ -78,7 +78,7 @@ public abstract class BotSM implements EventSubscriber {
             soloMapling.server.BotPerfStats.MACRO_TICKS.increment();
             updateState();
         } catch (Exception e) {
-            e.printStackTrace(); // Handle exceptions to ensure the scheduler doesn't stop unexpectedly
+            BotTickService.reportFailure(e);
         }
     };
 
@@ -386,9 +386,11 @@ public abstract class BotSM implements EventSubscriber {
         return 2000 + random.nextInt(4000); // 2000 to 3000 ms
     }
 
-    // Method to stop the scheduled task. An in-flight tick is allowed to finish
-    // (the old cancel(true) interrupt is gone); the wheel entry is simply removed.
+    // Stop future ticks and publish local stop flags. Global runtime shutdown
+    // also interrupts and drains real macro bodies before removing the world.
     public synchronized void stopScheduledTask() {
+        setRunning(false);
+        interruptMovement();
         log("Shutting down scheduler: " + this.getChr().getName());
         EventBus.getInstance().unsubscribeAll(this);
         botClearChalkboard(this.getChr());

@@ -21,8 +21,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -494,17 +497,36 @@ final class BotNavigationGraphProvider {
 
         Runnable task = () -> {
             try {
-                if (session != runtimeGeneration || future.isCancelled()) return;
+                if (session != runtimeGeneration || future.isCancelled()) {
+                    // A stop may have cleared the registry before this old load
+                    // was inserted, so cancellation must also settle this promise.
+                    future.cancel(false);
+                    return;
+                }
                 BotNavigationGraph graph = loadOrBuildGraph(map, movementProfile, key);
                 synchronized (BotNavigationGraphProvider.class) {
-                    if (session != runtimeGeneration || future.isCancelled()) return;
+                    if (session != runtimeGeneration || future.isCancelled()) {
+                        future.cancel(false);
+                        return;
+                    }
                     GRAPHS.put(key, graph);
                     future.complete(graph);
                 }
             } catch (Throwable t) {
-                future.completeExceptionally(t);
-                log.warn("Failed to warm bot nav graph for map {} speed={} jump={}",
-                        key.mapId(), key.totalSpeedStat(), key.totalJumpStat(), t);
+                Throwable cause = t;
+                while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                        && cause.getCause() != null) {
+                    cause = cause.getCause();
+                }
+                if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
+                if (session != runtimeGeneration
+                        && (cause instanceof CancellationException || cause instanceof InterruptedException)) {
+                    future.cancel(false);
+                } else {
+                    future.completeExceptionally(t);
+                    log.warn("Failed to warm bot nav graph for map {} speed={} jump={}",
+                            key.mapId(), key.totalSpeedStat(), key.totalJumpStat(), t);
+                }
             } finally {
                 PENDING_GRAPHS.remove(key, future);
             }

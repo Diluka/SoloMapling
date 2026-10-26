@@ -2,6 +2,9 @@ package soloMapling.server;
 
 import java.util.Map;
 import java.util.IdentityHashMap;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -133,8 +136,8 @@ public final class BotTickService {
         long budget = unit.toNanos(timeout);
         long began = System.nanoTime();
         synchronized (LIFECYCLE) {
-            // The caller cannot finish its own callback while waiting here. Refuse
-            // teardown so an external lifecycle thread can retry after it returns.
+            // The caller cannot finish its own callback while waiting here.
+            // Return failure so runtime can report it without blocking native saves.
             if (RUNNING.containsKey(Thread.currentThread())) return false;
             while (!RUNNING.isEmpty()) {
                 long remaining = budget - (System.nanoTime() - began);
@@ -148,6 +151,57 @@ public final class BotTickService {
             }
             return true;
         }
+    }
+
+    /** Cooperative cancellation is restricted to real bodies from an invalidated generation. */
+    public static void interruptCancelledRunning() {
+        synchronized (LIFECYCLE) {
+            for (Map.Entry<Thread, Entry> running : RUNNING.entrySet()) {
+                if (running.getKey() != Thread.currentThread() && running.getValue().generation != generation) {
+                    running.getKey().interrupt();
+                }
+            }
+        }
+    }
+
+    public static boolean isCurrentTickCancelled() {
+        Entry entry = CURRENT.get();
+        synchronized (LIFECYCLE) {
+            return entry != null && entry.generation != generation;
+        }
+    }
+
+    /** Both BotSM and the wheel use the same narrowly scoped cancellation policy. */
+    public static void reportFailure(Throwable failure) {
+        Throwable cause = failure;
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                && cause.getCause() != null) cause = cause.getCause();
+        if ((cause instanceof CancellationException || cause instanceof InterruptedException)
+                && isCurrentTickCancelled()) return;
+        Entry entry = CURRENT.get();
+        if (entry == null) LOG.error("SoloMapling macro callback failed outside dispatch", failure);
+        else LOG.error("SoloMapling macro tick failed for bot {}", entry.botId, failure);
+    }
+
+    /** A failed stop must retain bounded evidence of the actual executing bodies. */
+    public static String runningDiagnostics() {
+        Map<Thread, Entry> snapshot;
+        synchronized (LIFECYCLE) {
+            snapshot = new IdentityHashMap<>(RUNNING);
+        }
+        StringBuilder result = new StringBuilder("running=").append(snapshot.size());
+        int shown = 0;
+        for (Map.Entry<Thread, Entry> running : snapshot.entrySet()) {
+            if (shown++ == 8) break;
+            Thread thread = running.getKey();
+            result.append("\nbotId=").append(running.getValue().botId)
+                    .append(" thread=").append(thread.threadId()).append(" state=").append(thread.getState());
+            StackTraceElement[] stack = thread.getStackTrace();
+            for (int index = 0; index < Math.min(8, stack.length); index++) {
+                result.append("\n  at ").append(stack[index]);
+            }
+        }
+        return result.toString();
     }
 
     public static boolean isRegistered(int botId) {
@@ -279,7 +333,7 @@ public final class BotTickService {
         try {
             e.tick.run();
         } catch (Throwable t) {
-            LOG.error("SoloMapling macro tick failed for bot {}", e.botId, t);
+            reportFailure(t);
         } finally {
             long now = System.currentTimeMillis();
             long due = now + (e.noThrottle ? e.periodMs

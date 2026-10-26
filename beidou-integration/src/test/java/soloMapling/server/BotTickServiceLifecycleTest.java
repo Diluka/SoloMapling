@@ -21,6 +21,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -148,6 +150,106 @@ class BotTickServiceLifecycleTest {
         } finally {
             logger.removeAppender(appender);
             appender.stop();
+        }
+    }
+
+    @Test
+    void cancelledSleepingBodyIsInterruptedAndActuallyLeavesBeforeDrain() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        AtomicBoolean exited = new AtomicBoolean();
+        CapturingAppender appender = new CapturingAppender();
+        Logger logger = (Logger) LogManager.getLogger(BotTickService.class);
+        appender.start();
+        logger.addAppender(appender);
+        try (Dispatch dispatch = new Dispatch()) {
+            BotTickService.register(907, () -> {
+                entered.countDown();
+                try {
+                    Thread.sleep(TimeUnit.MINUTES.toMillis(1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new CompletionException(interrupted);
+                } finally {
+                    exited.set(true);
+                }
+            }, 0, 1);
+            Thread worker = Thread.ofVirtual().start(dispatch.next());
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            BotTickService.stop();
+            BotTickService.interruptCancelledRunning();
+            assertTrue(BotTickService.awaitQuiescence(2, TimeUnit.SECONDS));
+            assertTrue(exited.get());
+            assertTrue(appender.events.isEmpty());
+            worker.join(1000);
+        } finally {
+            logger.removeAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
+    void activeCancellationAndCancelledGenerationDomainFailuresRemainVisible() throws Exception {
+        CapturingAppender appender = new CapturingAppender();
+        Logger logger = (Logger) LogManager.getLogger(BotTickService.class);
+        appender.start();
+        logger.addAppender(appender);
+        CancellationException active = new CancellationException("unexpected-active-cancellation");
+        NullPointerException stoppedFailure = new NullPointerException("stopped-domain-failure");
+        try (Dispatch dispatch = new Dispatch()) {
+            BotTickService.register(908, () -> { throw active; }, 0, 1);
+            dispatch.next().run();
+            assertTrue(appender.events.stream().anyMatch(event -> event.getThrown() == active));
+            BotTickService.unregister(908);
+            BotTickService.register(909, () -> { BotTickService.stop(); throw stoppedFailure; }, 0, 1);
+            dispatch.next().run();
+            assertTrue(appender.events.stream().anyMatch(event -> event.getThrown() == stoppedFailure));
+        } finally {
+            logger.removeAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
+    void stoppedGenerationFutureCancellationDoesNotBecomeAnError() throws Exception {
+        CapturingAppender appender = new CapturingAppender();
+        Logger logger = (Logger) LogManager.getLogger(BotTickService.class);
+        appender.start();
+        logger.addAppender(appender);
+        try (Dispatch dispatch = new Dispatch()) {
+            BotTickService.register(910, () -> {
+                CompletableFuture<Void> promise = new CompletableFuture<>();
+                BotTickService.stop();
+                promise.cancel(false);
+                promise.join();
+            }, 0, 1);
+            dispatch.next().run();
+            assertTrue(appender.events.isEmpty());
+            assertTrue(BotTickService.awaitQuiescence(1, TimeUnit.SECONDS));
+        } finally {
+            logger.removeAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
+    void runningDiagnosticsCaptureABoundedPeakSnapshot() throws Exception {
+        CountDownLatch entered = new CountDownLatch(9);
+        CountDownLatch release = new CountDownLatch(1);
+        try (Dispatch dispatch = new Dispatch()) {
+            for (int id = 920; id < 929; id++) {
+                BotTickService.register(id, () -> { entered.countDown(); await(release); }, 0, 1);
+            }
+            for (int index = 0; index < 9; index++) Thread.ofVirtual().start(dispatch.next());
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            BotTickService.stop();
+            String snapshot = BotTickService.runningDiagnostics();
+            assertTrue(snapshot.startsWith("running=9"));
+            assertEquals(8, snapshot.lines().filter(line -> line.startsWith("botId=")).count());
+            assertTrue(snapshot.lines().filter(line -> line.startsWith("  at ")).count() <= 64);
+            release.countDown();
+            assertTrue(BotTickService.awaitQuiescence(2, TimeUnit.SECONDS));
+        } finally {
+            release.countDown();
         }
     }
 

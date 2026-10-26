@@ -9,6 +9,7 @@ import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import soloMapling.ArtificialPlayer.BotClientHandler;
 import soloMapling.ArtificialPlayer.BotGeneration;
+import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.MessageQueue;
 import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
@@ -25,6 +26,41 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class BeiDouRuntimeLifecycleTest {
+    @Test
+    void stoppingSignalsAndUnblocksMachinesBeforeTakingTheirCleanupLocks() {
+        CharacterTestContext.install();
+        Character character = mock(Character.class);
+        when(character.getId()).thenReturn(716);
+        when(character.getClient()).thenReturn(mock(BotClient.class));
+        BotSM machine = mock(BotSM.class);
+        BotRegistry.register(character);
+        try (MockedStatic<SocialLlmService> llm = mockStatic(SocialLlmService.class);
+             MockedStatic<EnvironmentManager> environment = mockStatic(EnvironmentManager.class);
+             MockedStatic<BotGeneration> generation = mockStatic(BotGeneration.class);
+             MockedStatic<CharacterStorage> machines = mockStatic(CharacterStorage.class);
+             MockedStatic<BotTickService> ticks = mockStatic(BotTickService.class)) {
+            machines.when(() -> CharacterStorage.getBotById(716)).thenReturn(machine);
+            doAnswer(ignored -> {
+                ticks.verify(BotTickService::interruptCancelledRunning);
+                environment.verify(EnvironmentManager::stop);
+                return null;
+            }).when(machine).stopScheduledTask();
+            ticks.when(() -> BotTickService.awaitQuiescence(10, TimeUnit.SECONDS)).thenAnswer(ignored -> {
+                verify(machine).setRunning(false);
+                verify(machine).stopScheduledTask();
+                return true;
+            });
+            generation.when(() -> BotGeneration.removeBotFromServer(character)).thenAnswer(ignored -> {
+                ticks.verify(() -> BotTickService.awaitQuiescence(10, TimeUnit.SECONDS));
+                return null;
+            });
+            assertDoesNotThrow(BeiDouRuntime::onServerStopping);
+            assertFalse(BotRegistry.isRegistered(character));
+        } finally {
+            BotRegistry.unregister(character);
+        }
+    }
+
     @Test
     void macroDrainFailureReportsFailureWithoutBlockingNativeCleanup() {
         CharacterTestContext.install();

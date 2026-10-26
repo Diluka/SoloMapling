@@ -19,6 +19,7 @@ import soloMapling.server.BotTickService;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
+import java.util.List;
 
 /** Entry points invoked by woven engine lifecycle methods, after Spring is available. */
 public final class BeiDouRuntime {
@@ -62,28 +63,43 @@ public final class BeiDouRuntime {
             return;
         }
         BotTickService.stop();
+        List<Character> characters = BotRegistry.snapshot();
+        // First publish the non-blocking stop flag. Subclass cleanup can acquire
+        // a bot monitor held by its callback, so unblock waits before taking it.
+        for (Character character : characters) {
+            try {
+                BotSM machine = CharacterStorage.getBotById(character.getId());
+                if (machine != null) {
+                    machine.setRunning(false);
+                }
+            } catch (RuntimeException failure) {
+                LOG.warn("Unable to stop SoloMapling bot {} scheduler during shutdown", character.getId(), failure);
+            }
+        }
+        BotTickService.interruptCancelledRunning();
         SocialLlmService.shutdown();
         try {
             EnvironmentManager.stop();
         } catch (RuntimeException failure) {
             LOG.warn("Unable to stop all SoloMapling environment tasks during shutdown", failure);
         }
+        for (Character character : characters) {
+            try {
+                BotSM machine = CharacterStorage.getBotById(character.getId());
+                if (machine != null) machine.stopScheduledTask();
+            } catch (RuntimeException failure) {
+                LOG.warn("Unable to clean SoloMapling bot {} scheduler during shutdown", character.getId(), failure);
+            }
+        }
         if (!BotTickService.awaitQuiescence(10, TimeUnit.SECONDS)) {
             // Preserve native player saving/closure even if a misbehaving AI
             // callback or a self-initiated shutdown cannot satisfy this barrier.
-            LOG.error("SoloMapling macro callbacks did not drain before shutdown; continuing native player saving and closure");
+            LOG.error("SoloMapling macro callbacks did not drain before shutdown; continuing native player saving and closure: {}",
+                    BotTickService.runningDiagnostics());
         }
         // Do this before the engine tears down its channels and maps. The upstream
         // executor pools are process-wide, so do not destroy them on an in-JVM restart.
-        for (Character character : BotRegistry.snapshot()) {
-            try {
-                BotSM machine = CharacterStorage.getBotById(character.getId());
-                if (machine != null) {
-                    machine.stopScheduledTask();
-                }
-            } catch (RuntimeException failure) {
-                LOG.warn("Unable to stop SoloMapling bot {} scheduler during shutdown", character.getId(), failure);
-            }
+        for (Character character : characters) {
             try {
                 BotGeneration.removeBotFromServer(character);
             } catch (RuntimeException failure) {
