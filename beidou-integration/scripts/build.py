@@ -23,6 +23,12 @@ REPOSITORY = INTEGRATION.parent
 TARGET = INTEGRATION / "target"
 ENGINE = REPOSITORY / "upstream" / "BeiDou-Server"
 ENGINE_REVISION = "75a86268738ca8845e06ea9d59ec36d15b22c91b"
+ENGINE_COMPILER_OPTIONS = [
+    "-Dmaven.test.skip=true",
+    "-Dmaven.compiler.source=21",
+    "-Dmaven.compiler.target=21",
+    "-Dmaven.compiler.parameters=true",
+]
 RESOURCE_SUFFIXES = {".yaml", ".yml", ".bin", ".csv", ".txt"}
 DOCUMENT_DIRECTORIES = {"documents", "docs", "handbook"}
 RUNTIME_BUNDLE_NAME = "solomapling-runtime-dependencies.jar"
@@ -114,6 +120,8 @@ def build_engine(maven: list[str], skip: bool) -> Path:
         stamp = json.loads((workspace / "source-reference.json").read_text())
         if stamp["revision"] != ENGINE_REVISION or stamp["jarSha256"] != digest(jar):
             raise RuntimeError("缓存的北斗 JAR 与源码记录不匹配，请重新构建。")
+        if stamp.get("compilerOptions") != ENGINE_COMPILER_OPTIONS:
+            raise RuntimeError("缓存的北斗编译选项不匹配，请移除 --skip-engine-build 后重新构建。")
         return jar
 
     workspace.mkdir(parents=True, exist_ok=True)
@@ -123,14 +131,15 @@ def build_engine(maven: list[str], skip: bool) -> Path:
     )
     with tarfile.open(fileobj=io.BytesIO(archive)) as source:
         source.extractall(workspace, filter="data")
-    run(maven + ["-f", str(workspace / "pom.xml"), "-pl", "gms-server", "-am", "package",
-                 "-Dmaven.test.skip=true", "-Dmaven.compiler.source=21",
-                 "-Dmaven.compiler.target=21"], cwd=workspace)
+    # 显式 clean 防止增量编译沿用缺少 MethodParameters 的旧 class。
+    run(maven + ["-f", str(workspace / "pom.xml"), "-pl", "gms-server", "-am",
+                 "clean", "package"] + ENGINE_COMPILER_OPTIONS, cwd=workspace)
     if not jar.is_file():
         raise RuntimeError("北斗编译未生成预期的 gms-server/target/BeiDou.jar。")
     (workspace / "source-reference.json").write_text(json.dumps({
         "revision": ENGINE_REVISION,
         "jarSha256": digest(jar),
+        "compilerOptions": ENGINE_COMPILER_OPTIONS,
     }, indent=2) + "\n")
     return jar
 
@@ -189,7 +198,7 @@ def compile_and_weave(classes: Path, libraries: list[Path], bundle: Path, compil
     aspectjrt = TARGET / "tools/aspectjrt.jar"
     run([
         os.environ.get("JAVA_COMMAND", "java"), "-Xmx2g", "-cp", str(compiler),
-        "org.aspectj.tools.ajc.Main", "-21", "-proc:none", "-encoding", "UTF-8",
+        "org.aspectj.tools.ajc.Main", "-21", "-parameters", "-proc:none", "-encoding", "UTF-8",
         "-inpath", str(classes), "-classpath", os.pathsep.join(map(str, [classes, aspectjrt, bundle] + libraries)),
         "-sourceroots", os.pathsep.join(map(str, source_roots)),
         "-d", str(output), "-showWeaveInfo", "-Xlintfile", str(lint),
