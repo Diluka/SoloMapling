@@ -263,7 +263,7 @@ class BotTickServiceLifecycleTest {
     }
 
     /** Capture submitted bodies without starting the process-wide scheduler pools. */
-    private static final class Dispatch implements AutoCloseable {
+    static final class Dispatch implements AutoCloseable {
         final List<Runnable> queued = new ArrayList<>();
         final MockedStatic<ExecutorServiceManager> executor = mockStatic(ExecutorServiceManager.class);
         final AtomicBoolean driver;
@@ -295,7 +295,7 @@ class BotTickServiceLifecycleTest {
         }
     }
 
-    private static final class CapturingAppender extends AbstractAppender {
+    static final class CapturingAppender extends AbstractAppender {
         final List<LogEvent> events = new CopyOnWriteArrayList<>();
         CapturingAppender() {
             super("macro-lifecycle-test", null, PatternLayout.createDefaultLayout(), true, Property.EMPTY_ARRAY);
