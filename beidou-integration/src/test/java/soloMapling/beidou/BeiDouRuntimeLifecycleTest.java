@@ -15,14 +15,39 @@ import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
 import soloMapling.Environment.EnvironmentManager;
 import soloMapling.itemPool.DesirableEquipList;
 import soloMapling.itemPool.EquipMetadataCache;
+import soloMapling.server.BotTickService;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class BeiDouRuntimeLifecycleTest {
+    @Test
+    void macroDrainFailureReportsFailureWithoutBlockingNativeCleanup() {
+        CharacterTestContext.install();
+        Character character = mock(Character.class);
+        when(character.getId()).thenReturn(714);
+        when(character.getClient()).thenReturn(mock(BotClient.class));
+        BotRegistry.register(character);
+        try (MockedStatic<SocialLlmService> llm = mockStatic(SocialLlmService.class);
+             MockedStatic<EnvironmentManager> environment = mockStatic(EnvironmentManager.class);
+             MockedStatic<BotGeneration> generation = mockStatic(BotGeneration.class);
+             MockedStatic<CharacterStorage> machines = mockStatic(CharacterStorage.class);
+             MockedStatic<BotTickService> ticks = mockStatic(BotTickService.class)) {
+            ticks.when(() -> BotTickService.awaitQuiescence(10, TimeUnit.SECONDS)).thenReturn(false);
+            assertDoesNotThrow(BeiDouRuntime::onServerStopping);
+            ticks.verify(BotTickService::stop);
+            ticks.verify(() -> BotTickService.awaitQuiescence(10, TimeUnit.SECONDS));
+            generation.verify(() -> BotGeneration.removeBotFromServer(character));
+            assertFalse(BotRegistry.isRegistered(character));
+        } finally {
+            BotRegistry.unregister(character);
+        }
+    }
+
     @Test
     void failedStartupRemovesPartialBotsAndAllowsANewStart() {
         CharacterTestContext.install();

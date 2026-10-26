@@ -15,8 +15,10 @@ import soloMapling.Environment.EnvironmentManager;
 import soloMapling.Environment.EnvironmentPopulationConfig;
 import soloMapling.itemPool.DesirableEquipList;
 import soloMapling.itemPool.EquipMetadataCache;
+import soloMapling.server.BotTickService;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
 
 /** Entry points invoked by woven engine lifecycle methods, after Spring is available. */
 public final class BeiDouRuntime {
@@ -36,6 +38,7 @@ public final class BeiDouRuntime {
             BotClientHandler.initHeadlessBotClient();
             EquipMetadataCache.initialize();
             DesirableEquipList.load();
+            BotTickService.start();
             // Manual GM bot creation must receive chat even when startup population
             // is disabled. Only this live lifecycle may restart message workers.
             MessageQueue.start();
@@ -58,11 +61,17 @@ public final class BeiDouRuntime {
         if (!READY.getAndSet(false) && BotRegistry.snapshot().isEmpty()) {
             return;
         }
+        BotTickService.stop();
         SocialLlmService.shutdown();
         try {
             EnvironmentManager.stop();
         } catch (RuntimeException failure) {
             LOG.warn("Unable to stop all SoloMapling environment tasks during shutdown", failure);
+        }
+        if (!BotTickService.awaitQuiescence(10, TimeUnit.SECONDS)) {
+            // Preserve native player saving/closure even if a misbehaving AI
+            // callback or a self-initiated shutdown cannot satisfy this barrier.
+            LOG.error("SoloMapling macro callbacks did not drain before shutdown; continuing native player saving and closure");
         }
         // Do this before the engine tears down its channels and maps. The upstream
         // executor pools are process-wide, so do not destroy them on an in-JVM restart.
