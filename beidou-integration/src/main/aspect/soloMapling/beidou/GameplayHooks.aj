@@ -123,9 +123,11 @@ public privileged aspect GameplayHooks {
     // integration intentionally marks its headless characters present before add.
     before(Character character): execution(void MapleMap.addPlayer(Character)) && args(character) {
         if (BotRegistry.isBot(character)) {
+            if (!BotRegistry.isRegistered(character)) {
+                throw new IllegalStateException("An unregistered headless character cannot enter a map");
+            }
             character.setCanRecvPartySearchInvite(false);
             character.setEnteredChannelWorld();
-            BotRegistry.register(character);
         }
     }
 }

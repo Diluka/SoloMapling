@@ -3,6 +3,8 @@ package soloMapling.beidou;
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.net.server.Server;
+import org.gms.net.server.PlayerStorage;
+import org.gms.net.server.channel.Channel;
 import org.gms.util.DatabaseConnection;
 
 import java.sql.Connection;
@@ -59,6 +61,15 @@ public final class BotRegistry {
 
     public static boolean isRegistered(Character character) {
         return character != null && BOTS.get(character.getId()) == character;
+    }
+
+    /** A stale headless object must not act on a replacement world's channel. */
+    public static boolean isCurrent(Character character) {
+        if (!isRegistered(character)) return false;
+        Channel channel = character.getClient().getChannelServer();
+        if (channel == null) return false;
+        PlayerStorage storage = channel.getPlayerStorage();
+        return storage != null && storage.getCharacterById(character.getId()) == character;
     }
 
     public static List<Character> snapshot() {

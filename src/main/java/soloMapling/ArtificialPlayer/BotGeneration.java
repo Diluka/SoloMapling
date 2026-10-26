@@ -98,7 +98,7 @@ public class BotGeneration {
 
 
     public static synchronized Character getConsoleBot() {
-        if (consoleBot != null) {
+        if (BotRegistry.isCurrent(consoleBot)) {
             return consoleBot;
         }
         consoleBot = setConsoleBot(loadTemplate(), BotRegistry.allocateId());
@@ -121,7 +121,9 @@ public class BotGeneration {
         bot = setBotStats(bot, botId); // Bot onDemandBot
         addBotToServer(bot);
         currentBotCount.incrementAndGet();
-        placeBotOnMap(bot, pos, map);
+        if (!placeBotOnMap(bot, pos, map)) {
+            throw new IllegalStateException("SoloMapling bot is no longer current before map publication");
+        }
         // Decorate before the drop-down plays so the bot arrives fully dressed
         // (decoration is an in-memory cache lookup, takes microseconds).
         if (baseClass <= 0) {
@@ -149,19 +151,23 @@ public class BotGeneration {
      * should already be running on a pooled executor (not the client thread).
      */
     public static void warpBotToLocation(Character fakechar, Point pos, MapleMap map) {
-        placeBotOnMap(fakechar, pos, map);
+        if (!placeBotOnMap(fakechar, pos, map)) return;
         playSpawnChoreography(fakechar);
     }
 
-    static void placeBotOnMap(Character fakechar, Point pos, MapleMap map) {
+    static boolean placeBotOnMap(Character fakechar, Point pos, MapleMap map) {
+        if (!BotRegistry.isCurrent(fakechar)) return false;
         MapleMap previous = fakechar.getMap();
         if (previous != null) {
             previous.removePlayer(fakechar);
         }
+        if (!BotRegistry.isCurrent(fakechar)) return false;
         fakechar.setMap(map);
         fakechar.setPosition(pos);
         fakechar.setStance(5);
+        if (!BotRegistry.isCurrent(fakechar)) return false;
         map.addPlayer(fakechar);
+        return true;
     }
 
     /**
@@ -174,15 +180,19 @@ public class BotGeneration {
      * Worst case is bounded by {@link #SPAWN_CHOREOGRAPHY_MAX_MS}.
      */
     private static void playSpawnChoreography(Character fakechar) {
+        if (!BotRegistry.isCurrent(fakechar)) return;
         long dropDelayMs = ThreadLocalRandom.current().nextLong(500, 1201);
         if (!BotHelpers.blockingSleep(dropDelayMs)) return;
+        if (!BotRegistry.isCurrent(fakechar)) return;
         botEnterPortalDropDown(fakechar);
+        if (!BotRegistry.isCurrent(fakechar)) return;
 
         // Bots spawn facing right by default, so a 50% roll to flip to left gives
         // roughly even left/right distribution without a no-op right-turn.
         if (ThreadLocalRandom.current().nextBoolean()) {
             long turnDelayMs = ThreadLocalRandom.current().nextLong(1000, 1501);
             if (!BotHelpers.blockingSleep(turnDelayMs)) return;
+            if (!BotRegistry.isCurrent(fakechar)) return;
             microTurnAroundToLeft(fakechar);
         }
     }
@@ -225,6 +235,7 @@ public class BotGeneration {
     }
 
     public static void spawnBotFm(Character fakechar, Point pt) {
+        if (!BotRegistry.isCurrent(fakechar)) return;
         int fmMap = 910000000;
         MapleMap spawnMap = getBotClient().getChannelServer().getMapFactory().getMap(fmMap);
         placeBotOnMap(fakechar, pt, spawnMap);

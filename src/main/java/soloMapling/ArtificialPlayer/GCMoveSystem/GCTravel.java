@@ -1,10 +1,12 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
 import org.gms.client.Character;
+import org.gms.client.BotClient;
 import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Portal;
 import soloMapling.ArtificialPlayer.BotTravelSystem.BotScriptedWarp;
 import soloMapling.BotLogger;
+import soloMapling.beidou.BotRegistry;
 
 import java.awt.Point;
 import java.util.List;
@@ -105,7 +107,7 @@ final class GCTravel {
     }
 
     static void travel(Character bot, int destMapId, Consumer<Boolean> callback) {
-        if (bot == null || GCMovement.isStopping()) {
+        if (bot == null || GCMovement.isStopping() || !isCurrentTraveler(bot)) {
             return;
         }
         cancel(bot);
@@ -117,21 +119,46 @@ final class GCTravel {
         Trip trip = new Trip(bot, destMapId, callback);
         trip.hopProgressAtMs = nowMs();
         trip.hopStartAtMs = nowMs();
+        boolean installed = false;
         synchronized (TRIPS) {
-            if (GCMovement.isStopping()) return;
-            TRIPS.put(bot.getId(), trip);
-            trip.task = POOL.scheduleAtFixedRate(
-                    () -> {
-                        synchronized (trip) {
-                            if (trip.cancelled) return;
-                            try {
-                                tick(trip);
-                            } catch (Throwable ignored) {
-                                // a thrown poll would cancel the periodic task
-                            }
-                        }
-                    }, 0, POLL_MS, TimeUnit.MILLISECONDS);
+            if (!GCMovement.isStopping() && isCurrentTraveler(bot)) {
+                TRIPS.put(bot.getId(), trip);
+                // Prevent an immediate first poll from cancelling before its future
+                // has been published, which would otherwise leave an empty poller.
+                synchronized (trip) {
+                    trip.task = POOL.scheduleAtFixedRate(() -> poll(trip), 0, POLL_MS, TimeUnit.MILLISECONDS);
+                }
+                installed = true;
+            }
         }
+        if (!installed) GCMovement.disable(bot);
+    }
+
+    private static boolean isCurrentTraveler(Character character) {
+        // Public GC movement also backs real GM diagnostics; the registration
+        // requirement belongs specifically to headless Solo-owned characters.
+        return !(character.getClient() instanceof BotClient) || BotRegistry.isCurrent(character);
+    }
+
+    private static void poll(Trip trip) {
+        boolean detached = false;
+        synchronized (trip) {
+            if (trip.cancelled) return;
+            if (GCMovement.isStopping() || !isCurrentTraveler(trip.bot)) {
+                TRIPS.remove(trip.bot.getId(), trip);
+                cancelTrip(trip);
+                detached = true;
+            } else {
+                try {
+                    tick(trip);
+                } catch (Throwable ignored) {
+                    // A transient map failure must not cancel a live trip.
+                }
+            }
+        }
+        // Do not take follow/fidget locks while holding the trip lock: another
+        // movement callback can be cancelling this trip under one of those locks.
+        if (detached) GCMovement.disable(trip.bot);
     }
 
     static void cancel(Character bot) {
