@@ -161,6 +161,7 @@ class BotGenerationLifecycleTest {
         when(server.getWorld(0)).thenReturn(world);
         when(channel.getPlayerStorage().getCharacterById(bot.getId()))
                 .thenAnswer(ignored -> channelPresence.get());
+        var worldStorage = world.getPlayerStorage();
         doAnswer(ignored -> {
             assertTrue(BotRegistry.isRegistered(bot));
             channelPresence.set(bot);
@@ -172,7 +173,7 @@ class BotGenerationLifecycleTest {
             worldPresence.set(bot);
             publications.add("world");
             return null;
-        }).when(world.getPlayerStorage()).addPlayer(bot);
+        }).when(worldStorage).addPlayer(bot);
         doAnswer(ignored -> {
             assertTrue(BotRegistry.isCurrent(bot));
             assertSame(bot, channelPresence.get());
