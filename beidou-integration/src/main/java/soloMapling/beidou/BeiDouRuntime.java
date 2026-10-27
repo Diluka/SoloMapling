@@ -2,6 +2,7 @@ package soloMapling.beidou;
 
 import org.gms.client.Character;
 import org.gms.manager.ServerManager;
+import org.gms.soloacceptance.AcceptanceObservationRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
@@ -34,6 +35,7 @@ public final class BeiDouRuntime {
             return;
         }
         try {
+            AcceptanceObservationRuntime.onWorldStarted();
             Environment environment = ServerManager.getApplicationContext().getEnvironment();
             SoloMaplingLanguageConfig.configure(environment);
             SocialLlmService.configure(environment);
@@ -62,6 +64,7 @@ public final class BeiDouRuntime {
     }
 
     public static void onServerStopping() {
+        AcceptanceObservationRuntime.onWorldStopped();
         if (!READY.getAndSet(false) && BotRegistry.snapshot().isEmpty()) {
             return;
         }
