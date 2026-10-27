@@ -9,10 +9,10 @@ from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
-from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, load_config
+from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, load_config, validate_action_request
 
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$", strict=True)]
@@ -23,6 +23,42 @@ Cursor = Annotated[int, Field(ge=0, le=MAX_LONG, strict=True)]
 WorldId = Annotated[int, Field(ge=0, le=255, strict=True)]
 ChannelId = Annotated[int, Field(ge=1, le=255, strict=True)]
 Limit = Annotated[int, Field(ge=1, le=500, strict=True)]
+
+
+class ChatParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: Annotated[str, Field(strict=True)]
+
+
+class ExpectedContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    scene_ref: Identifier
+    runtime_generation: Identifier
+
+
+CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
+
+
+class AcceptanceMCPServer(MCPServer):
+    async def list_tools(self):
+        tools = await super().list_tools()
+        for tool in tools:
+            if tool.name == "game_act":
+                tool.input_schema = {**tool.input_schema, "additionalProperties": False}
+        return tools
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
+        # SDK 2.3 otherwise drops unknown top-level arguments before invoking a tool.
+        if name == "game_act":
+            if set(arguments) != CHAT_ARGUMENTS:
+                return result({"error": {"code": "INVALID_ARGUMENTS", "message": "game_act 参数缺失或包含额外字段。", "retryable": False}},
+                              is_error=True)
+            try:
+                # Reject raw input safely before SDK model errors can echo values.
+                validate_action_request(**arguments)
+            except BridgeError as failure:
+                return result(failure.public_data(), is_error=True)
+        return await super().call_tool(name, arguments, context)
 
 
 def result(data: dict[str, Any], *, is_error: bool = False) -> CallToolResult:
@@ -43,12 +79,12 @@ def build_server(config: BridgeConfig) -> MCPServer:
         finally:
             await bridge.close()
 
-    server = MCPServer(
+    server = AcceptanceMCPServer(
         "solomapling-acceptance",
         version=__version__,
         instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
-                      "取消请求不等于原生清理完成。当前没有聊天、NPC、移动或通关工具。"),
+                      "取消请求不等于原生清理完成。game_act 当前仅支持普通 chat，实际能力以桥公告为准；没有 NPC、移动或通关工具。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -110,6 +146,20 @@ def build_server(config: BridgeConfig) -> MCPServer:
         """排队正常退出专用角色，可能触发原生队伍/副本离开；仅在清理与存档核实后确认关闭。"""
         try:
             return result(await bridge.actor_close(session_id, expected_generation, request_id=request_id))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=open_annotations)
+    async def game_act(
+        session_id: Identifier, expected_generation: Generation, request_id: RequestId,
+        action: Literal["chat"], parameters: ChatParameters, expected_context: ExpectedContext,
+    ) -> CallToolResult:
+        """在实际 actor 场景中排队普通 chat；同 request_id 恢复，不盲目重发。通过 ACTION 终态及自身 CHATTEXT 回声确认广播，不能用系统公告代替。"""
+        try:
+            return result(await bridge.act(
+                session_id, expected_generation, request_id=request_id, action=action,
+                parameters=parameters.model_dump(), expected_context=expected_context.model_dump(),
+            ))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 

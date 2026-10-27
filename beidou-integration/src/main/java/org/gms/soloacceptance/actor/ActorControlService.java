@@ -10,11 +10,14 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -34,6 +37,8 @@ public final class ActorControlService {
     private static final int DEFAULT_MAX_SESSIONS = 4;
     private static final int DEFAULT_MAX_HISTORY = 256;
     private static final int DEFAULT_MAX_EVENTS = 64;
+    private static final int MAX_PENDING_ACTIONS = 7;
+    private static final int EXECUTOR_QUEUE_CAPACITY = 8;
     private final Object monitor = new Object();
     private final NativeActorBackend backend;
     private final int maxSessions;
@@ -89,6 +94,7 @@ public final class ActorControlService {
             accepting = false;
             worldGeneration = null;
             for (Session session : new ArrayList<>(profiles.values())) {
+                cancelUndispatchedActions(session);
                 Operation opening = operations.get(session.openingOperation);
                 if (opening != null && !terminal(opening.status)) requestCancellation(opening);
                 if (session.handle != null && (opening == null || terminal(opening.status))
@@ -180,8 +186,77 @@ public final class ActorControlService {
                 Operation operation = operation("CLOSE", session);
                 session.state = "CLOSING";
                 session.cleanupScheduled = true;
+                cancelUndispatchedActions(session);
                 requests.put(key, new RequestRecord(request, operation.id));
                 submit(session, () -> runClose(session, operation), operation);
+                return response(operation, 0, 100);
+            }
+        }
+        return refreshedResponse(prior, 0, 100);
+    }
+
+    public Map<String, Object> act(String owner, String requestId, ActorActRequest request) {
+        validateOwner(owner);
+        validateRequestId(requestId);
+        if (request == null || request.sessionId() == null
+                || !request.sessionId().matches("[A-Za-z0-9_.-]{1,128}") || request.expectedGeneration() == null) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
+        }
+        String text = request.parameters() == null ? null : request.parameters().text();
+        ActorActRequest.ExpectedContext context = request.expectedContext();
+        ActionFingerprint fingerprint = new ActionFingerprint(request.expectedGeneration(), request.action(),
+                text == null ? null : textDigest(text), context);
+        RequestKey key = new RequestKey("ACTION", owner, request.sessionId(), requestId);
+        Operation prior;
+        Session session;
+        NativeActorHandle handle;
+        synchronized (monitor) {
+            prior = duplicate(key, fingerprint);
+            if (prior == null) {
+                if (request.expectedGeneration() < 1) throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
+                if (!"chat".equals(request.action())) throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
+                if (context == null || context.sceneRef() == null || context.runtimeGeneration() == null
+                        || !context.sceneRef().matches("[A-Za-z0-9_.-]{1,128}")
+                        || !context.runtimeGeneration().matches("[A-Za-z0-9_.-]{1,128}")) {
+                    throw error(HttpStatus.BAD_REQUEST, "invalid_expected_context");
+                }
+                requireAccepting();
+                session = ownedSession(owner, request.sessionId(), request.expectedGeneration());
+                requireActionSession(session, null);
+                handle = session.handle;
+            } else {
+                session = null;
+                handle = null;
+            }
+        }
+        if (prior != null) return refreshedResponse(prior, 0, 100);
+
+        backend.validateChat(handle, text);
+        validateActionContext(handle, context);
+        synchronized (monitor) {
+            // Concurrent callers may have accepted this ID while native validation was running.
+            prior = duplicate(key, fingerprint);
+            if (prior == null) {
+                requireAccepting();
+                if (ownedSession(owner, request.sessionId(), request.expectedGeneration()) != session) {
+                    throw error(HttpStatus.GONE, "stale_actor_session");
+                }
+                requireActionSession(session, handle);
+                if (operations.size() + reservedFirstCloses() + 1 > maxHistory
+                        || requests.size() + reservedFirstCloses() + 1 > maxHistory) {
+                    throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
+                }
+                if (session.pendingActions >= MAX_PENDING_ACTIONS) {
+                    throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_action_capacity_exceeded");
+                }
+                Operation operation = operation("ACTION", session);
+                operation.action = "chat";
+                operation.actionSlotHeld = true;
+                session.pendingActions++;
+                requests.put(key, new RequestRecord(fingerprint, operation.id));
+                Session acceptedSession = session;
+                NativeActorHandle acceptedHandle = handle;
+                submit(session, () -> runAction(acceptedSession, operation, acceptedHandle, text, context), operation);
                 return response(operation, 0, 100);
             }
         }
@@ -306,10 +381,22 @@ public final class ActorControlService {
     }
 
     public Map<String, Object> publicCapabilities() {
+        String timingGeneration;
+        synchronized (monitor) { timingGeneration = live() ? worldGeneration : null; }
+        Map<String, Object> timing = null;
+        ObservationException timingFailure = null;
+        if (timingGeneration != null) {
+            try { timing = backend.chatTimingCapabilities(); }
+            catch (ObservationException failure) { timingFailure = failure; }
+        }
         synchronized (monitor) {
+            boolean sameRuntime = timingGeneration != null && live() && timingGeneration.equals(worldGeneration);
+            if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel"));
-            result.put("actions", List.of());
+            result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
+            result.put("actions", List.of("chat"));
+            result.put("maximum_pending_actions_per_session", MAX_PENDING_ACTIONS);
+            result.put("actor_executor_queue_capacity", EXECUTOR_QUEUE_CAPACITY);
             result.put("maximum_active_sessions", maxSessions);
             result.put("active_sessions", profiles.size());
             result.put("maximum_operation_history", maxHistory);
@@ -320,7 +407,11 @@ public final class ActorControlService {
             result.put("idempotency_scope", "process_lifetime");
             result.put("reserved_first_closes", reservedFirstCloses());
             result.put("close_retry_history_policy", "unreserved_capacity_only_then_quarantine_until_lifecycle_cleanup");
-            result.put("actor_accepting_requests", live());
+            result.put("actor_accepting_requests", sameRuntime);
+            if (sameRuntime) {
+                result.put("chat_minimum_interval_ms", timing.get("chat_minimum_interval_ms"));
+                result.put("native_clock_update_interval_ms", timing.get("native_clock_update_interval_ms"));
+            }
             result.put("operation_event_kind", "lifecycle");
             result.put("close_cancellation", "native_cleanup_continues_after_acceptance");
             result.put("packet_observation", AcceptanceClient.packetObservationCapabilities());
@@ -393,6 +484,146 @@ public final class ActorControlService {
                     : Map.of("reason", rolledBack ? safeReason(failure, "native_actor_open_failed") : "native_actor_cleanup_unverified");
             finish(operation, rolledBack ? cancelled ? "CANCELLED" : "FAILED" : "INDETERMINATE",
                     rolledBack ? "native_actor_open_failed" : "native_actor_cleanup_unverified");
+        }
+    }
+
+    private void runAction(Session session, Operation operation, NativeActorHandle handle, String text,
+                           ActorActRequest.ExpectedContext context) {
+        try {
+            synchronized (monitor) {
+                if (actionCancelled(session, operation)) {
+                    cancelledBeforeAction(operation);
+                    return;
+                }
+                requireActionSession(session, handle);
+                running(operation, "chat_validation_started");
+            }
+            backend.validateChat(handle, text);
+            validateActionContext(handle, context);
+            synchronized (monitor) {
+                if (actionCancelled(session, operation)) {
+                    cancelledBeforeAction(operation);
+                    return;
+                }
+                requireActionSession(session, handle);
+                operation.dispatchStarted = true;
+                running(operation, "native_chat_dispatch_started");
+            }
+            Map<String, Object> outcome = backend.chat(handle, text);
+            synchronized (monitor) {
+                finishChat(operation, outcome);
+            }
+        } catch (ObservationException failure) {
+            synchronized (monitor) {
+                if (!operation.dispatchStarted && actionCancelled(session, operation)) cancelledBeforeAction(operation);
+                else {
+                    operation.result = Map.of("observed_outcome", "chat_not_dispatched",
+                            "native_dispatch_started", false, "cancel_too_late", false);
+                    operation.error = Map.of("reason", safeReason(failure, "native_chat_rejected"));
+                    finish(operation, "FAILED", safeReason(failure, "native_chat_rejected"));
+                }
+            }
+        } catch (Throwable failure) {
+            synchronized (monitor) {
+                if (!operation.dispatchStarted && actionCancelled(session, operation)) cancelledBeforeAction(operation);
+                else {
+                    String reason = operation.dispatchStarted ? "native_chat_outcome_unknown" : "native_chat_validation_failed";
+                    operation.result = Map.of("observed_outcome", operation.dispatchStarted
+                                    ? "native_chat_outcome_unknown" : "chat_not_dispatched",
+                            "native_dispatch_started", operation.dispatchStarted,
+                            "cancel_too_late", operation.dispatchStarted && operation.cancelRequested);
+                    operation.error = Map.of("reason", reason);
+                    finish(operation, operation.dispatchStarted ? "INDETERMINATE" : "FAILED", reason);
+                }
+            }
+        } finally {
+            synchronized (monitor) { releaseActionSlot(operation); }
+        }
+    }
+
+    private void finishChat(Operation operation, Map<String, Object> outcome) {
+        String status = outcome != null && outcome.get("status") instanceof String value ? value : "INDETERMINATE";
+        Map<?, ?> nativeResult = outcome != null && outcome.get("result") instanceof Map<?, ?> value ? value : Map.of();
+        boolean dispatched = Boolean.TRUE.equals(nativeResult.get("native_dispatch_started"));
+        boolean matched = Boolean.TRUE.equals(nativeResult.get("echo_matched"));
+        if (!(List.of("SUCCEEDED", "FAILED", "INDETERMINATE").contains(status))
+                || "SUCCEEDED".equals(status) && (!dispatched || !matched
+                || !"native_chat_broadcast".equals(nativeResult.get("observed_outcome")))) {
+            status = "INDETERMINATE";
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("observed_outcome", "SUCCEEDED".equals(status) ? "native_chat_broadcast"
+                : "FAILED".equals(status) ? "native_chat_not_broadcast" : "native_chat_outcome_unknown");
+        result.put("native_dispatch_started", dispatched);
+        result.put("echo_matched", matched);
+        if (Boolean.TRUE.equals(nativeResult.get("native_handler_error"))) result.put("native_handler_error", true);
+        for (String key : List.of("sender_character_id", "echo_sequence", "packet_cursor_before", "packet_cursor_after")) {
+            if (nativeResult.get(key) instanceof Number value) result.put(key, value);
+            else if (nativeResult.containsKey(key) && nativeResult.get(key) == null) result.put(key, null);
+        }
+        result.put("cancel_too_late", dispatched && operation.cancelRequested);
+        operation.result = result;
+        String reason = "FAILED".equals(status) ? "native_chat_not_broadcast" : "native_chat_outcome_unknown";
+        operation.error = "SUCCEEDED".equals(status) ? null : Map.of("reason", reason);
+        finish(operation, status, "SUCCEEDED".equals(status) ? "native_chat_broadcast_observed" : reason);
+    }
+
+    private void cancelledBeforeAction(Operation operation) {
+        operation.result = Map.of("observed_outcome", "chat_cancelled_before_dispatch",
+                "native_dispatch_started", false, "cancel_too_late", false);
+        operation.error = null;
+        finish(operation, "CANCELLED", "chat_cancelled_before_dispatch");
+    }
+
+    private boolean actionCancelled(Session session, Operation operation) {
+        return operation.cancelRequested || !sameWorld(session) || session.cleanupScheduled;
+    }
+
+    private void cancelUndispatchedActions(Session session) {
+        for (Operation operation : operations.values()) {
+            if (operation.session == session && "ACTION".equals(operation.kind) && !operation.dispatchStarted
+                    && !terminal(operation.status) && !operation.cancelRequested) requestCancellation(operation);
+        }
+    }
+
+    private void releaseActionSlot(Operation operation) {
+        if (operation.actionSlotHeld) {
+            operation.actionSlotHeld = false;
+            operation.session.pendingActions--;
+        }
+        monitor.notifyAll();
+    }
+
+    private void requireActionSession(Session session, NativeActorHandle expectedHandle) {
+        if (!sameWorld(session)) throw error(HttpStatus.GONE, "stale_actor_session");
+        if (!"OPEN".equals(session.state) || session.handle == null) {
+            boolean transition = List.of("OPENING", "CLOSING").contains(session.state);
+            throw error(transition ? HttpStatus.CONFLICT : HttpStatus.GONE,
+                    transition ? "actor_not_actable" : "stale_actor_session");
+        }
+        if (expectedHandle != null && session.handle != expectedHandle) throw error(HttpStatus.GONE, "stale_actor_session");
+    }
+
+    private void validateActionContext(NativeActorHandle handle, ActorActRequest.ExpectedContext expected) {
+        if (observations == null) throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
+        Map<String, Object> actual = observations.contextForActor(handle.character());
+        if (!expected.sceneRef().equals(actual.get("scene_ref"))
+                || !expected.runtimeGeneration().equals(actual.get("runtime_generation"))) {
+            throw error(HttpStatus.CONFLICT, "actor_context_mismatch");
+        }
+    }
+
+    private static String textDigest(String text) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (int i = 0; i < text.length(); i++) {
+                char unit = text.charAt(i);
+                digest.update((byte) (unit >>> 8));
+                digest.update((byte) unit);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("sha256_unavailable", impossible);
         }
     }
 
@@ -509,6 +740,13 @@ public final class ActorControlService {
         try {
             session.executor.execute(task);
         } catch (RejectedExecutionException rejected) {
+            if (operation != null && "ACTION".equals(operation.kind)) {
+                operation.error = Map.of("reason", "actor_queue_full");
+                operation.result = Map.of("observed_outcome", "chat_not_dispatched", "native_dispatch_started", false);
+                finish(operation, "FAILED", "actor_queue_full");
+                releaseActionSlot(operation);
+                throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
+            }
             session.cleanupScheduled = false;
             if (operation != null) {
                 operation.error = Map.of("reason", "actor_queue_full");
@@ -575,6 +813,7 @@ public final class ActorControlService {
         response.put("schema_version", 1);
         response.put("operation_id", operation.id);
         response.put("kind", operation.kind);
+        if (operation.action != null) response.put("action", operation.action);
         response.put("status", operation.status);
         response.put("step", operation.step);
         response.put("session_id", session.id);
@@ -674,12 +913,14 @@ public final class ActorControlService {
     private static ObservationException error(HttpStatus status, String reason) { return new ObservationException(status, reason); }
 
     private static ExecutorService newExecutor(String profile) {
-        return new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
+        return new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(EXECUTOR_QUEUE_CAPACITY),
                 Thread.ofVirtual().name("acceptance-actor-" + profile + "-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     }
 
     private record RequestKey(String kind, String owner, String target, String requestId) { }
     private record RequestRecord(Object fingerprint, String operationId) { }
+    private record ActionFingerprint(long generation, String action, String textHash,
+                                     ActorActRequest.ExpectedContext context) { }
     private static final class Session {
         final String id;
         final long generation;
@@ -693,6 +934,7 @@ public final class ActorControlService {
         Map<String, Object> lastActor;
         boolean cleanupScheduled;
         boolean firstCloseReserved = true;
+        int pendingActions;
         Session(String id, long generation, String owner, String profile, String runtimeGeneration, ExecutorService executor) {
             this.id = id;
             this.generation = generation;
@@ -710,6 +952,9 @@ public final class ActorControlService {
         String status = "QUEUED";
         String step = "queued";
         boolean cancelRequested;
+        boolean dispatchStarted;
+        boolean actionSlotHeld;
+        String action;
         long sequence;
         Map<String, Object> result = Map.of();
         Map<String, Object> error;

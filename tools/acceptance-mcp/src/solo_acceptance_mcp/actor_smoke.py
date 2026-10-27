@@ -87,7 +87,9 @@ class ActorAcceptance:
         self.active: dict[str, Any] | None = None
         self.opening: dict[str, Any] | None = None
         self.closing: dict[str, Any] | None = None
+        self.actioning: dict[str, Any] | None = None
         self.unknown_write: dict[str, str] | None = None
+        self.unknown_action_write: dict[str, str] | None = None
         self.report: dict[str, Any] = {
             "passed": False, "transport": "stdio", "profile_id": profile,
             "request_prefix": self.prefix, "operations": [], "requests": [],
@@ -112,7 +114,9 @@ class ActorAcceptance:
             },
             "opening_operation": None if self.opening is None else self.opening.get("operation_id"),
             "closing_operation": None if self.closing is None else self.closing.get("operation_id"),
+            "action_operation": None if self.actioning is None else self.actioning.get("operation_id"),
             "unknown_write": self.unknown_write,
+            "unknown_action_write": self.unknown_action_write,
         }
         try:
             checkpoint(self.output, self.report)
@@ -144,16 +148,20 @@ class ActorAcceptance:
         check(isinstance(value, dict), "MCP_CALL_FAILED")
         if write:
             check(value.get("request_id") == request_id, "WRITE_REQUEST_ID_MISMATCH")
-            kind = {"actor_open": "OPEN", "actor_close": "CLOSE"}.get(name, value.get("kind"))
-            check(kind in {"OPEN", "CLOSE"}, "OPERATION_KIND_INVALID")
+            kind = {"actor_open": "OPEN", "actor_close": "CLOSE", "game_act": "ACTION"}.get(name, value.get("kind"))
+            check(kind in {"OPEN", "CLOSE", "ACTION"}, "OPERATION_KIND_INVALID")
             # A reply is only a recoverable receipt after its operation and session
             # identity have been validated. Keep the request key on malformed replies.
             self.operation(value, kind)
+            if name == "game_act":
+                check(value["session_id"] == args["session_id"]
+                      and value["session_generation"] == args["expected_generation"]
+                      and value.get("action") == args["action"], "ACTION_RECEIPT_IDENTITY_MISMATCH")
         if "operation_id" in value:
             check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
             self.report["operations"].append({
                 key: value.get(key) for key in [
-                    "operation_id", "kind", "status", "session_id", "session_generation",
+                    "operation_id", "kind", "action", "status", "session_id", "session_generation",
                     "profile_id", "runtime_generation", "cancel_requested",
                 ]
             })
@@ -165,6 +173,8 @@ class ActorAcceptance:
     def operation(self, value: dict[str, Any], kind: str, operation_id: str | None = None) -> None:
         check(type(value.get("schema_version")) is int and value["schema_version"] == 1, "OPERATION_SCHEMA_INVALID")
         check(value.get("kind") == kind and value.get("profile_id") == self.profile, "OPERATION_IDENTITY_MISMATCH")
+        if kind == "ACTION":
+            check(value.get("action") == "chat", "OPERATION_ACTION_INVALID")
         check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
         if operation_id is not None:
             check(value["operation_id"] == operation_id, "OPERATION_ID_MISMATCH")
@@ -184,6 +194,8 @@ class ActorAcceptance:
         while True:
             value = await self.call("operation_get", {"operation_id": operation_id, "since_cursor": 0, "limit": 100})
             self.operation(value, kind, operation_id)
+            check(value["session_id"] == receipt["session_id"]
+                  and value["session_generation"] == receipt["session_generation"], "OPERATION_SESSION_CHANGED")
             if value["status"] in TERMINAL:
                 return value
             check(time.monotonic() < deadline, "OPERATION_TIMEOUT")

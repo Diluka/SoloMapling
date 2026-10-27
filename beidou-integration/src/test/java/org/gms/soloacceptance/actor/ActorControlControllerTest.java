@@ -1,6 +1,9 @@
 package org.gms.soloacceptance.actor;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.gms.model.dto.SubmitBody;
 import org.gms.soloacceptance.ObservationException;
 import org.junit.jupiter.api.AfterEach;
@@ -65,6 +68,8 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
+                assertThrows(ObservationException.class, () -> controller.act(null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
@@ -74,6 +79,8 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
+        assertEquals(HttpStatus.FORBIDDEN,
+                assertThrows(ObservationException.class, () -> controller.act(null)).status());
         verifyNoInteractions(service);
     }
 
@@ -128,6 +135,25 @@ class ActorControlControllerTest {
     }
 
     @Test
+    void actionDelegatesTheOwnerOuterRequestIdAndExactContextWithoutExecutingInTheController() {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("operator-a", "ROLE_ADMIN");
+        ActorActRequest data = new ActorActRequest("session-id", 7L, "chat",
+                new ActorActRequest.Parameters("聊天验收 abc123"),
+                new ActorActRequest.ExpectedContext("scene-id", "runtime-id"));
+        Map<String, Object> operation = Map.of("kind", "ACTION", "status", "QUEUED", "action", "chat");
+        when(service.act("operator-a", "action-request", data)).thenReturn(operation);
+
+        var accepted = controller.act(new SubmitBody<>("action-request", data));
+        assertEquals(20000, accepted.getCode());
+        assertEquals("action-request", accepted.getResponseId());
+        assertSame(operation, accepted.getData());
+        verify(service).act("operator-a", "action-request", data);
+        verifyNoMoreInteractions(service);
+    }
+
+    @Test
     void missingBodyOrDataIsAControlledBadRequest() {
         ActorControlService service = mock(ActorControlService.class);
         ActorControlController controller = new ActorControlController(service);
@@ -142,6 +168,10 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         assertEquals(HttpStatus.BAD_REQUEST,
                 assertThrows(ObservationException.class, () -> controller.observe(new SubmitBody<>("request", null))).status());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ObservationException.class, () -> controller.act(null)).status());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ObservationException.class, () -> controller.act(new SubmitBody<>("request", null))).status());
         assertEquals(HttpStatus.BAD_REQUEST,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
         verifyNoInteractions(service);
@@ -228,6 +258,75 @@ class ActorControlControllerTest {
                     "{\"session_id\":\"session-id\",\"expected_generation\":7,\"limit\":" + value + "}",
                     ActorObserveRequest.class), value);
         }
+    }
+
+    @Test
+    void actionDtoBindsTheNativeEnvelopeAndLeavesSemanticValidationToTheService() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String data = actionJson();
+        SubmitBody<ActorActRequest> envelope = mapper.readValue(
+                "{\"requestId\":\"action-request\",\"data\":" + data + "}", new TypeReference<>() {});
+        assertEquals("action-request", envelope.getRequestId());
+        assertEquals(new ActorActRequest("session-id", 7L, "chat",
+                new ActorActRequest.Parameters("聊天验收 abc123"),
+                new ActorActRequest.ExpectedContext("scene-id", "runtime-id")), envelope.getData());
+        assertEquals(new ActorActRequest(null, null, null, null, null),
+                mapper.readValue("{}", ActorActRequest.class));
+        ObjectNode widest = (ObjectNode) mapper.readTree(data);
+        widest.put("expected_generation", Long.MAX_VALUE);
+        assertEquals(Long.MAX_VALUE, mapper.treeToValue(widest, ActorActRequest.class).expectedGeneration());
+        widest.put("expected_generation", 0);
+        widest.put("action", "unsupported");
+        assertEquals("unsupported", mapper.treeToValue(widest, ActorActRequest.class).action());
+    }
+
+    @Test
+    void actionDtoRejectsCoercionAndOverflowAtEveryContractStringAndGeneration() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String value : List.of("\"value\"", "7", "true", "[]")) {
+            assertThrows(Exception.class, () -> mapper.readValue(value, ActorActRequest.class), value);
+        }
+        for (String path : List.of("session_id", "action", "parameters.text",
+                "expected_context.scene_ref", "expected_context.runtime_generation")) {
+            for (String value : List.of("123", "1.0", "true", "{}", "[]")) {
+                ObjectNode body = (ObjectNode) mapper.readTree(actionJson());
+                String[] components = path.split("\\.");
+                ObjectNode owner = components.length == 1 ? body : (ObjectNode) body.get(components[0]);
+                owner.set(components[components.length - 1], mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), path + "=" + value);
+            }
+        }
+        for (String value : List.of("1.0", "\"7\"", "true", "9223372036854775808", "-9223372036854775809")) {
+            ObjectNode body = (ObjectNode) mapper.readTree(actionJson());
+            body.set("expected_generation", mapper.readTree(value));
+            assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), value);
+        }
+        for (String field : List.of("parameters", "expected_context")) {
+            for (String value : List.of("\"value\"", "1", "true", "[]")) {
+                ObjectNode body = (ObjectNode) mapper.readTree(actionJson());
+                body.set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), field + "=" + value);
+            }
+        }
+    }
+
+    @Test
+    void actionDtoRejectsUnknownFieldsEvenWhenTheHostMapperIgnoresThem() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String path : List.of("request_id", "character_id", "parameters.show", "parameters.script",
+                "expected_context.map_id", "expected_context.character_id")) {
+            ObjectNode body = (ObjectNode) mapper.readTree(actionJson());
+            String[] components = path.split("\\.");
+            ObjectNode owner = components.length == 1 ? body : (ObjectNode) body.get(components[0]);
+            owner.putNull(components[components.length - 1]);
+            assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), path);
+        }
+    }
+
+    private static String actionJson() {
+        return "{\"session_id\":\"session-id\",\"expected_generation\":7,\"action\":\"chat\","
+                + "\"parameters\":{\"text\":\"聊天验收 abc123\"},\"expected_context\":{"
+                + "\"scene_ref\":\"scene-id\",\"runtime_generation\":\"runtime-id\"}}";
     }
 
     private static void authenticate(String name, String authority) {

@@ -19,11 +19,12 @@ CONTEXT_FIELDS = (
 )
 OBSERVATION_TOOLS = frozenset({"game_capabilities", "game_observe"})
 ACTOR_TOOLS = frozenset({"actor_open", "actor_close", "operation_get", "operation_cancel"})
-IMPLEMENTED_TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS
+ACTOR_IMPLEMENTED_TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS
+IMPLEMENTED_TOOLS = ACTOR_IMPLEMENTED_TOOLS | {"game_act"}
 
 
-def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False) -> list[str]:
-    """The client implements six tools; the running bridge advertises its actual subset."""
+def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False, chat: bool = False) -> list[str]:
+    """The seven-tool client accepts only the implemented R1, R2a, or chat subset."""
     if len(names) != len(set(names)) or set(names) != IMPLEMENTED_TOOLS:
         raise RuntimeError("MCP 工具清单与当前已实现接口不一致。")
     enabled = capabilities.get("enabled_tools")
@@ -33,8 +34,7 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         or not isinstance(enabled, list)
         or any(not isinstance(name, str) for name in enabled)
         or len(enabled) != len(set(enabled))
-        or not OBSERVATION_TOOLS <= set(enabled) <= IMPLEMENTED_TOOLS
-        or set(enabled) & ACTOR_TOOLS not in (set(), ACTOR_TOOLS)
+        or set(enabled) not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, IMPLEMENTED_TOOLS)
     ):
         raise RuntimeError("实际验收桥没有返回合法的已开放能力。")
     expected_round = "R2a" if ACTOR_TOOLS <= set(enabled) else "R1"
@@ -42,6 +42,15 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         raise RuntimeError("验收桥迭代版本与实际开放工具不一致。")
     if actors and not ACTOR_TOOLS <= set(enabled):
         raise RuntimeError("当前验收桥没有开放原生角色控制，未执行写操作。")
+    actions = capabilities.get("actions", [])
+    if "game_act" in enabled:
+        control = capabilities.get("actor_control")
+        if actions != ["chat"] or not isinstance(control, dict) or control.get("actions") != ["chat"]:
+            raise RuntimeError("聊天动作与实际工具能力不一致。")
+    elif actions != []:
+        raise RuntimeError("未开放动作工具的验收桥不能公告聊天能力。")
+    if chat and "game_act" not in enabled:
+        raise RuntimeError("当前验收桥没有开放普通聊天动作，未执行写操作。")
     require_generation(capabilities)
     source = capabilities.get("source")
     if (

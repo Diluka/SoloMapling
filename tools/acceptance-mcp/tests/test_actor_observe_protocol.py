@@ -91,10 +91,10 @@ class ActorObserveProtocolTests(unittest.IsolatedAsyncioTestCase):
             async with Client(params, read_timeout_seconds=10) as client:
                 yield client
 
-    async def test_stdio_lists_only_six_tools_and_keeps_observation_read_only(self) -> None:
+    async def test_stdio_lists_only_seven_tools_and_keeps_observation_read_only(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(TOOLS | {"game_act"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
             self.assertTrue(tool.annotations.idempotent_hint, name)

@@ -55,15 +55,18 @@ public final class AcceptanceObservationService {
         Map<String, Object> result = metadata(runtime.generation());
         result.put("service", "solomapling-acceptance");
         ActorControlService controls = actorControls == null ? null : actorControls.getIfAvailable();
+        Map<String, Object> actorCapabilities = controls == null ? null : controls.publicCapabilities();
         List<String> enabledTools = new ArrayList<>(List.of("game_capabilities", "game_observe"));
-        if (controls != null) {
-            enabledTools.addAll(List.of("actor_open", "actor_close", "operation_get", "operation_cancel"));
-            result.put("actor_control", controls.publicCapabilities());
+        if (actorCapabilities != null) {
+            for (Object tool : (List<?>) actorCapabilities.get("enabled_tools")) {
+                enabledTools.add((String) tool);
+            }
+            result.put("actor_control", actorCapabilities);
         }
         result.put("implementation_round", controls == null ? "R1" : "R2a");
         result.put("enabled_tools", enabledTools);
         result.put("scopes", controls == null ? List.of("world", "scene") : List.of("world", "scene", "actor"));
-        result.put("actions", List.of());
+        result.put("actions", actorCapabilities == null ? List.of() : actorCapabilities.get("actions"));
         result.put("recipes", List.of());
         result.put("server_online", runtime.active() && serverSource.get().isOnline());
         result.put("source", SourceIdentity.publicFields(identitySource.get()));

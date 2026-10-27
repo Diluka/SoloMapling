@@ -18,6 +18,7 @@ import org.gms.net.PacketHandler;
 import org.gms.net.packet.ByteBufInPacket;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
+import org.gms.net.server.channel.handlers.GeneralChatHandler;
 import org.gms.net.server.channel.handlers.PlayerLoggedinHandler;
 import org.gms.net.server.coordinator.session.Hwid;
 import org.gms.net.server.coordinator.session.SessionCoordinator;
@@ -37,8 +38,13 @@ import org.springframework.stereotype.Component;
 import soloMapling.beidou.BotRegistry;
 
 import java.sql.Date;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,6 +96,111 @@ public final class NativeActorBackend {
 
     public void validateProfile(String profileId, Integer world, Integer channel) {
         profiles.resolve(profileId, world, channel);
+    }
+
+    public void validateChat(NativeActorHandle handle, String text) {
+        encodeChat(handle, text);
+    }
+
+    public Map<String, Object> chatTimingCapabilities() {
+        long updateInterval = GameConfig.getServerLong("update_interval");
+        if (updateInterval <= 0) throw unavailable("actor_chat_timing_unavailable");
+        return Map.of("chat_minimum_interval_ms", 200,
+                "native_clock_update_interval_ms", updateInterval);
+    }
+
+    /** Dispatches ordinary native chat once; only a matching player-visible native echo proves success. */
+    public Map<String, Object> chat(NativeActorHandle handle, String text) {
+        byte[] encoded = encodeChat(handle, text);
+        AcceptanceClient client = handle.client();
+        int characterId = handle.character().getId();
+        long before = client.latestPacketSequence();
+        boolean[] started = {false};
+        boolean handlerError = false;
+        try {
+            dispatch(new GeneralChatHandler(), client, packet -> {
+                packet.writeShortLE(encoded.length).writeBytes(encoded).writeByte(0);
+            }, () -> started[0] = true);
+        } catch (RuntimeException failure) {
+            if (!started[0]) throw failure;
+            handlerError = true;
+        }
+
+        Long after = null;
+        Long echoSequence = null;
+        boolean complete = false;
+        boolean uncertainPacket = false;
+        try {
+            Map<String, Object> window = client.packetEvents(before, 500);
+            after = (Long) window.get("latest_cursor");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> events = (List<Map<String, Object>>) window.get("items");
+            for (Map<String, Object> event : events) {
+                long sequence = (Long) event.get("sequence");
+                if (sequence <= before || after == null || sequence > after) continue;
+                if ("chat_text".equals(event.get("event_type"))
+                        && "decoded".equals(event.get("decode_status"))
+                        && Objects.equals(event.get("sender_character_id"), characterId)
+                        && Objects.equals(event.get("text"), text)
+                        && Objects.equals(event.get("show"), 0)
+                        && Boolean.FALSE.equals(event.get("text_truncated"))) {
+                    if (echoSequence == null) echoSequence = sequence;
+                }
+                if ("malformed".equals(event.get("decode_status"))
+                        && (event.get("opcode") == null || Objects.equals(event.get("opcode"), 0xA2))) {
+                    uncertainPacket = true;
+                }
+            }
+            complete = after != null && after >= before
+                    && Boolean.FALSE.equals(window.get("cursor_expired"))
+                    && Boolean.FALSE.equals(window.get("truncated"));
+        } catch (RuntimeException ignored) {
+            // A previously matched echo remains a fact even if a later evidence read fails.
+            complete = false;
+        }
+        if (after == null) {
+            try { after = client.latestPacketSequence(); }
+            catch (RuntimeException ignored) { /* Keep unavailable evidence explicitly absent. */ }
+        }
+
+        boolean matched = echoSequence != null;
+        String status = matched ? "SUCCEEDED" : handlerError || !complete || uncertainPacket ? "INDETERMINATE" : "FAILED";
+        String outcome = matched ? "native_chat_broadcast"
+                : "INDETERMINATE".equals(status) ? "native_chat_outcome_unknown" : "native_chat_not_broadcast";
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("observed_outcome", outcome);
+        result.put("native_dispatch_started", started[0]);
+        result.put("echo_matched", matched);
+        result.put("sender_character_id", characterId);
+        result.put("echo_sequence", echoSequence);
+        result.put("packet_cursor_before", before);
+        result.put("packet_cursor_after", after);
+        if (handlerError) result.put("native_handler_error", true);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", status);
+        response.put("error_reason", matched ? null : outcome);
+        response.put("result", Collections.unmodifiableMap(result));
+        return Collections.unmodifiableMap(response);
+    }
+
+    private byte[] encodeChat(NativeActorHandle handle, String text) {
+        if (!isCurrent(handle) || handle.character().gmLevel() != 0 || BotRegistry.isBot(handle.character())) {
+            throw conflict("actor_session_stale");
+        }
+        if (text == null || text.isBlank() || text.length() > Byte.MAX_VALUE
+                || text.charAt(0) == '@' || text.charAt(0) == '/') {
+            throw new ObservationException(HttpStatus.BAD_REQUEST, "invalid_chat_text");
+        }
+        try {
+            ByteBuffer bytes = CharsetConstants.getCharset(handle.client().getLanguage()).newEncoder()
+                    .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .encode(CharBuffer.wrap(text));
+            byte[] encoded = new byte[bytes.remaining()];
+            bytes.get(encoded);
+            return encoded;
+        } catch (CharacterCodingException ignored) {
+            throw new ObservationException(HttpStatus.BAD_REQUEST, "chat_text_not_encodable");
+        }
     }
 
     public NativeActorHandle open(String profileId, Integer worldId, Integer channelId, BooleanSupplier cancelled) {
@@ -485,11 +596,17 @@ public final class NativeActorBackend {
     }
 
     private static void dispatch(PacketHandler handler, AcceptanceClient client, Consumer<ByteBuf> writer) {
+        dispatch(handler, client, writer, () -> { });
+    }
+
+    private static void dispatch(PacketHandler handler, AcceptanceClient client, Consumer<ByteBuf> writer,
+                                 Runnable dispatchStarted) {
         ByteBuf packet = Unpooled.buffer();
         try {
             writer.accept(packet);
             withClient(client, () -> {
                 if (!handler.validateState(client)) throw conflict("actor_native_packet_state_rejected");
+                dispatchStarted.run();
                 handler.handlePacket(new ByteBufInPacket(packet), client);
                 return null;
             });

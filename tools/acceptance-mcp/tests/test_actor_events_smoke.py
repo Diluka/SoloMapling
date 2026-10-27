@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from solo_acceptance_mcp.actor_events_smoke import run_actor_events_smoke
 from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure
 from solo_acceptance_mcp.bridge import BridgeError, MAX_LONG
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS
+from solo_acceptance_mcp.smoke import ACTOR_IMPLEMENTED_TOOLS
 from tests.helpers import CAPABILITIES, PASSWORD, TOKEN, envelope
 from tests.test_actor_smoke import ActorSmokeStub
 
@@ -67,7 +67,7 @@ class ActorEventsStub(ActorSmokeStub):
         path = urlsplit(request["path"]).path
         if path == "/solo/acceptance/v1/capabilities":
             caps = deepcopy(CAPABILITIES)
-            caps.update(implementation_round="R2a", enabled_tools=sorted(IMPLEMENTED_TOOLS),
+            caps.update(implementation_round="R2a", enabled_tools=sorted(ACTOR_IMPLEMENTED_TOOLS),
                         scopes=["world", "scene", "actor"], event_stream=False,
                         actor_control={"packet_observation": deepcopy(PACKET_CAPABILITIES)})
             if self.mode == "missing_capability":

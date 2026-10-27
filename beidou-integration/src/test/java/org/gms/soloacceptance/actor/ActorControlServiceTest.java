@@ -16,9 +16,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -39,6 +41,8 @@ class ActorControlServiceTest {
         CharacterTestContext.install();
         AcceptanceObservationRuntime.onWorldStarted();
         backend = mock(NativeActorBackend.class);
+        when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200L,
+                "native_clock_update_interval_ms", 777L));
         handle = mock(NativeActorHandle.class);
         client = mock(AcceptanceClient.class);
         when(handle.client()).thenReturn(client);
@@ -629,6 +633,428 @@ class ActorControlServiceTest {
         assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
                 () -> service.observe("admin", observeRequest(opened, 0, 1))).status());
         assertEquals("LOST", session(service.get("admin", id(opened), 0, 100)).get("state"));
+    }
+
+    @Test
+    void chatActionsUseTheExistingSerialOperationsAndNeverReplayAKnownRequestAfterClosing() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        String secretText = "聊天验收 unique-private-body";
+        ActorActRequest request = chatRequest(opened, secretText);
+        var first = service.act("admin", "chat-one", request);
+        assertEquals("QUEUED", first.get("status"));
+        assertEquals("ACTION", first.get("kind"));
+        assertEquals("chat", first.get("action"));
+        assertEquals(id(first), id(service.act("admin", "chat-one", request)));
+        var second = service.act("admin", "chat-two", chatRequest(opened, "第二条"));
+        assertEquals(2, executors.getFirst().queue.size());
+        verify(backend, never()).chat(any(), any());
+        executors.getFirst().runNext();
+        executors.getFirst().runNext();
+        var ordering = inOrder(backend);
+        ordering.verify(backend).chat(handle, secretText);
+        ordering.verify(backend).chat(handle, "第二条");
+        var firstResult = service.get("admin", id(first), 0, 100);
+        assertEquals("SUCCEEDED", firstResult.get("status"));
+        assertEquals(false, result(firstResult).get("cancel_too_late"));
+        assertEquals(true, result(firstResult).get("native_dispatch_started"));
+        assertEquals(true, result(firstResult).get("echo_matched"));
+        assertEquals(73, result(firstResult).get("sender_character_id"));
+        assertEquals(31L, result(firstResult).get("packet_cursor_before"));
+        assertEquals(32L, result(firstResult).get("echo_sequence"));
+        assertEquals(32L, result(firstResult).get("packet_cursor_after"));
+        assertEquals("SUCCEEDED", service.get("admin", id(second), 0, 100).get("status"));
+        assertFalse(service.get("admin", id(first), 0, 100).toString().contains(secretText));
+        var requestsField = ActorControlService.class.getDeclaredField("requests");
+        requestsField.setAccessible(true);
+        assertFalse(requestsField.get(service).toString().contains(secretText));
+        assertTrue(requestsField.get(service).toString().contains("ActionFingerprint"));
+        service.close("admin", "close-chat", closeRequest(opened));
+        executors.getFirst().runNext();
+        var replay = service.act("admin", "chat-one", request);
+        assertEquals(id(first), id(replay));
+        assertEquals("SUCCEEDED", replay.get("status"));
+        assertEquals("CLOSED", session(replay).get("state"));
+        verify(backend, times(2)).chat(any(), any());
+        assertEquals(7, service.publicCapabilities().get("maximum_pending_actions_per_session"));
+        assertEquals(8, service.publicCapabilities().get("actor_executor_queue_capacity"));
+        assertEquals(List.of("chat"), service.publicCapabilities().get("actions"));
+    }
+
+    @Test
+    void actionIdReuseWithChangedTextActionContextOrGenerationConflictsBeforeASecondDispatch() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        ActorActRequest original = chatRequest(opened, "原文");
+        service.act("admin", "chat-one", original);
+        for (ActorActRequest changed : List.of(chatRequest(opened, "不同正文"),
+                new ActorActRequest(original.sessionId(), original.expectedGeneration(), "npc", original.parameters(), original.expectedContext()),
+                new ActorActRequest(original.sessionId(), original.expectedGeneration() + 1, "chat", original.parameters(), original.expectedContext()),
+                new ActorActRequest(original.sessionId(), original.expectedGeneration(), "chat", original.parameters(),
+                        new ActorActRequest.ExpectedContext("scene-other", original.expectedContext().runtimeGeneration())))) {
+            assertEquals("request_id_conflict", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "chat-one", changed)).reason());
+        }
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
+                () -> service.act("another-admin", "new-chat", original)).status());
+        verify(backend, times(1)).validateChat(handle, "原文");
+        verify(backend, never()).chat(any(), any());
+    }
+
+    @Test
+    void cancellingAQueuedChatDoesNotCloseTheActorAndOnlyReleasesItsSlotAfterDequeue() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        var action = service.act("admin", "chat-one", chatRequest(opened, "取消这条"));
+        assertEquals("CANCEL_REQUESTED", service.cancel("admin", "cancel-chat", id(action)).get("status"));
+        executors.getFirst().runNext();
+        var cancelled = service.get("admin", id(action), 0, 100);
+        assertEquals("CANCELLED", cancelled.get("status"));
+        assertEquals("chat_cancelled_before_dispatch", result(cancelled).get("observed_outcome"));
+        assertEquals(false, result(cancelled).get("native_dispatch_started"));
+        assertEquals("OPEN", session(cancelled).get("state"));
+        verify(backend, never()).chat(any(), any());
+        verify(backend, never()).close(any());
+        var next = service.act("admin", "chat-two", chatRequest(opened, "可以发这条"));
+        executors.getFirst().runNext();
+        assertEquals("SUCCEEDED", service.get("admin", id(next), 0, 100).get("status"));
+    }
+
+    @Test
+    void sceneContextIsCheckedAgainAtDequeueAndOrdinaryFailureCannotReleaseOrReopenTheActor() {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationService observations = prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        var action = service.act("admin", "chat-one", chatRequest(opened, "排队正文"));
+        when(observations.contextForActor(any())).thenReturn(Map.of("scene_ref", "scene-next",
+                "runtime_generation", opened.get("runtime_generation")));
+        executors.getFirst().runNext();
+        var failed = service.get("admin", id(action), 0, 100);
+        assertEquals("FAILED", failed.get("status"));
+        assertEquals(Map.of("reason", "actor_context_mismatch"), failed.get("error"));
+        assertEquals(false, result(failed).get("native_dispatch_started"));
+        assertEquals("OPEN", session(failed).get("state"));
+        assertEquals(1, service.publicCapabilities().get("active_sessions"));
+        verify(backend, never()).chat(any(), any());
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void nativeValidationFailuresBeforeDispatchStayFailedWithoutQuarantiningTheSession() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        doNothing().doThrow(new ObservationException(HttpStatus.BAD_REQUEST, "chat_text_not_encodable"))
+                .when(backend).validateChat(handle, "需要再验证");
+        var action = service.act("admin", "chat-one", chatRequest(opened, "需要再验证"));
+        executors.getFirst().runNext();
+        var failed = service.get("admin", id(action), 0, 100);
+        assertEquals("FAILED", failed.get("status"));
+        assertEquals(Map.of("reason", "chat_text_not_encodable"), failed.get("error"));
+        assertEquals(false, result(failed).get("native_dispatch_started"));
+        assertEquals("OPEN", session(failed).get("state"));
+        verify(backend, never()).chat(any(), any());
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void backendRejectionBeforeItsNativeDispatchIsNotConfusedWithTheCoordinatorBoundary() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        when(backend.chat(handle, "原生再验证")).thenThrow(new ObservationException(HttpStatus.CONFLICT, "actor_session_stale"));
+        var action = service.act("admin", "chat-one", chatRequest(opened, "原生再验证"));
+        executors.getFirst().runNext();
+        var failed = service.get("admin", id(action), 0, 100);
+        assertEquals("FAILED", failed.get("status"));
+        assertEquals(false, result(failed).get("native_dispatch_started"));
+        assertEquals(false, result(failed).get("cancel_too_late"));
+        assertEquals("OPEN", session(failed).get("state"));
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void failedUnknownAndUnexpectedNativeChatOutcomesDoNotMutateTheActorLeaseOrLeakText() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        when(backend.chat(handle, "限频样例")).thenReturn(Map.of("status", "FAILED", "error_reason", "native_chat_not_broadcast",
+                "result", Map.of("native_dispatch_started", true, "echo_matched", false)));
+        Map<String, Object> unknown = new java.util.LinkedHashMap<>(Map.of("native_dispatch_started", true,
+                "echo_matched", false, "native_handler_error", true, "text", "不得保留的正文"));
+        unknown.put("packet_cursor_after", null);
+        when(backend.chat(handle, "未知样例")).thenReturn(Map.of("status", "INDETERMINATE", "error_reason", "native_chat_outcome_unknown",
+                "result", unknown));
+        when(backend.chat(handle, "异常样例")).thenThrow(new IllegalStateException("private text and password must not escape"));
+        for (String text : List.of("限频样例", "未知样例", "异常样例")) {
+            var action = service.act("admin", "chat-" + text.hashCode(), chatRequest(opened, text));
+            executors.getFirst().runNext();
+            var finished = service.get("admin", id(action), 0, 100);
+            assertEquals("限频样例".equals(text) ? "FAILED" : "INDETERMINATE", finished.get("status"));
+            assertEquals("OPEN", session(finished).get("state"));
+            assertFalse(finished.toString().contains("不得保留的正文"));
+            assertFalse(finished.toString().contains("private text"));
+            if ("未知样例".equals(text)) {
+                assertEquals(true, result(finished).get("native_handler_error"));
+                assertTrue(result(finished).containsKey("packet_cursor_after"));
+                assertNull(result(finished).get("packet_cursor_after"));
+            }
+        }
+        verify(backend, never()).close(any());
+        assertEquals(1, service.publicCapabilities().get("active_sessions"));
+    }
+
+    @Test
+    void lateCancellationPreservesTheObservedBroadcastAndCannotRestoreAClosingSession() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.chat(handle, "正在发言")).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return chatSuccess();
+        });
+        var action = service.act("admin", "chat-one", chatRequest(opened, "正在发言"));
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.cancel("admin", "cancel-running-chat", id(action));
+            service.close("admin", "close-chat", closeRequest(opened));
+        } finally {
+            complete.countDown();
+            worker.join(5_000);
+        }
+        assertFalse(worker.isAlive());
+        var finished = service.get("admin", id(action), 0, 100);
+        assertEquals("SUCCEEDED", finished.get("status"));
+        assertEquals(true, result(finished).get("cancel_too_late"));
+        assertEquals(true, result(finished).get("echo_matched"));
+        assertEquals("CLOSING", session(finished).get("state"));
+        executors.getFirst().runNext();
+        assertEquals("CLOSED", session(service.get("admin", id(action), 0, 100)).get("state"));
+        verify(backend).chat(handle, "正在发言");
+        verify(backend).close(handle);
+    }
+
+    @Test
+    void sevenOccupiedActionSlotsKeepCancelledQueuedTasksCountedAndLeaveAPhysicalCloseSlot() throws Exception {
+        CountDownLatch openedTask = new CountDownLatch(1);
+        CountDownLatch allTasks = new CountDownLatch(9);
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(8), Thread.ofVirtual().factory()) {
+            @Override protected void afterExecute(Runnable task, Throwable failure) {
+                openedTask.countDown();
+                allTasks.countDown();
+            }
+        };
+        ActorControlService service = new ActorControlService(backend, 4, 40, 64, profile -> executor, Duration.ZERO);
+        services.add(service);
+        service.onWorldStarted();
+        prepareChat(service);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.chat(handle, "占住执行线程")).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return chatSuccess();
+        });
+        try {
+            var opened = open(service, "open-chat");
+            assertTrue(openedTask.await(5, TimeUnit.SECONDS));
+            List<Map<String, Object>> actions = new ArrayList<>();
+            actions.add(service.act("admin", "chat-running", chatRequest(opened, "占住执行线程")));
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            for (int i = 1; i < 7; i++) actions.add(service.act("admin", "chat-queued-" + i, chatRequest(opened, "排队" + i)));
+            assertEquals(6, executor.getQueue().size());
+            service.cancel("admin", "cancel-still-queued", id(actions.get(1)));
+            assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "chat-eighth", chatRequest(opened, "不能挤占关闭槽"))).reason());
+            assertEquals(6, executor.getQueue().size());
+            var closing = service.close("admin", "close-with-full-actions", closeRequest(opened));
+            assertEquals(7, executor.getQueue().size());
+            assertEquals("actor_not_actable", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "chat-after-close", chatRequest(opened, "关闭后不能排队"))).reason());
+            complete.countDown();
+            assertTrue(allTasks.await(5, TimeUnit.SECONDS));
+            assertEquals("SUCCEEDED", service.get("admin", id(actions.getFirst()), 0, 100).get("status"));
+            for (var queued : actions.subList(1, actions.size())) {
+                var cancelled = service.get("admin", id(queued), 0, 100);
+                assertEquals("CANCELLED", cancelled.get("status"));
+                assertEquals("CLOSED", session(cancelled).get("state"));
+            }
+            assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+            verify(backend, times(1)).chat(any(), any());
+            verify(backend).close(handle);
+        } finally {
+            complete.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void actionsCannotSpendAnySessionsFirstCloseHistoryAndCloseCancelsTheirUndispatchedWork() {
+        ActorControlService service = service(4, 6, 64);
+        prepareChat(service);
+        var first = open(service, "open-first");
+        executors.getFirst().runNext();
+        var second = service.open("admin", "open-second", new ActorOpenRequest("secondary", 0, 1));
+        executors.getLast().runNext();
+        var firstAction = service.act("admin", "chat-first", chatRequest(first, "第一组"));
+        var secondAction = service.act("admin", "chat-second", chatRequest(second, "第二组"));
+        assertEquals("actor_history_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "chat-over-history", chatRequest(first, "不能占用关闭历史"))).reason());
+        var closeFirst = service.close("admin", "close-first", closeRequest(first));
+        var closeSecond = service.close("admin", "close-second", closeRequest(second));
+        executors.getFirst().runNext();
+        assertEquals("CLOSING", session(service.get("admin", id(firstAction), 0, 100)).get("state"));
+        executors.getFirst().runNext();
+        executors.getLast().drain();
+        assertEquals("CANCELLED", service.get("admin", id(firstAction), 0, 100).get("status"));
+        assertEquals("CANCELLED", service.get("admin", id(secondAction), 0, 100).get("status"));
+        assertEquals("SUCCEEDED", service.get("admin", id(closeFirst), 0, 100).get("status"));
+        assertEquals("SUCCEEDED", service.get("admin", id(closeSecond), 0, 100).get("status"));
+        assertEquals(6, service.publicCapabilities().get("operation_history_size"));
+        verify(backend, never()).chat(any(), any());
+    }
+
+    @Test
+    void worldStoppingCancelsEveryUndispatchedActionWithoutRestoringAnOpenSession() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        var first = service.act("admin", "chat-first", chatRequest(opened, "尚未发一"));
+        var second = service.act("admin", "chat-second", chatRequest(opened, "尚未发二"));
+        AcceptanceObservationRuntime.onWorldStopped();
+        service.onWorldStopping();
+        executors.getFirst().runNext();
+        assertEquals("CANCELLED", service.get("admin", id(first), 0, 100).get("status"));
+        assertEquals("QUARANTINED", session(service.get("admin", id(first), 0, 100)).get("state"));
+        executors.getFirst().runNext();
+        assertEquals("CANCELLED", service.get("admin", id(second), 0, 100).get("status"));
+        assertEquals("QUARANTINED", session(service.get("admin", id(second), 0, 100)).get("state"));
+        executors.getFirst().runNext();
+        assertEquals("CLOSED", session(service.get("admin", id(second), 0, 100)).get("state"));
+        verify(backend, never()).chat(any(), any());
+        verify(backend).close(handle);
+    }
+
+    @Test
+    void aRejectedActionSubmissionReturnsItsSlotAndKeepsTheActorLease() {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-chat");
+        executors.getFirst().runNext();
+        executors.getFirst().shutdown();
+        ActorActRequest request = chatRequest(opened, "不会排队");
+        assertEquals("actor_queue_full", assertThrows(ObservationException.class,
+                () -> service.act("admin", "chat-rejected", request)).reason());
+        var rejected = service.act("admin", "chat-rejected", request);
+        assertEquals("FAILED", rejected.get("status"));
+        assertEquals("OPEN", session(rejected).get("state"));
+        assertEquals(1, service.publicCapabilities().get("active_sessions"));
+        verify(backend, never()).chat(any(), any());
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void capabilitiesPublishTheActualNativeTimingFieldsWithoutAddingDefaultsOrOtherBackendData() {
+        ActorControlService service = service(4, 20, 64);
+        when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200,
+                "native_clock_update_interval_ms", 319L, "internal_value", "not-public"));
+        var capabilities = service.publicCapabilities();
+        assertEquals(true, capabilities.get("actor_accepting_requests"));
+        assertEquals(200, capabilities.get("chat_minimum_interval_ms"));
+        assertEquals(319L, capabilities.get("native_clock_update_interval_ms"));
+        assertFalse(capabilities.containsKey("internal_value"));
+        verify(backend).chatTimingCapabilities();
+    }
+
+    @Test
+    void offlineCapabilitiesDoNotInitializeOrReadNativeTimingAndPublishNoClockValue() {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationRuntime.onWorldStopped();
+        var capabilities = service.publicCapabilities();
+        assertEquals(false, capabilities.get("actor_accepting_requests"));
+        assertFalse(capabilities.containsKey("native_clock_update_interval_ms"));
+        assertFalse(capabilities.containsKey("chat_minimum_interval_ms"));
+        verify(backend, never()).chatTimingCapabilities();
+    }
+
+    @Test
+    void missingNativeTimingKeepsItsFixedServiceUnavailableFailureWithoutPublishingZero() {
+        ActorControlService service = service(4, 20, 64);
+        ObservationException unavailable = new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_chat_timing_unavailable");
+        when(backend.chatTimingCapabilities()).thenThrow(unavailable);
+        assertSame(unavailable, assertThrows(ObservationException.class, service::publicCapabilities));
+    }
+
+    @Test
+    void slowNativeTimingReadDoesNotHoldTheControlLockOrPublishThePreviousWorldsTiming() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.chatTimingCapabilities()).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return Map.of("chat_minimum_interval_ms", 200, "native_clock_update_interval_ms", 319L);
+        });
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        Thread reader = Thread.ofVirtual().start(() -> {
+            try { outcome.set(service.publicCapabilities()); }
+            catch (Throwable failure) { outcome.set(failure); }
+        });
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            AcceptanceObservationRuntime.onWorldStopped();
+            service.onWorldStopping();
+            AcceptanceObservationRuntime.onWorldStarted();
+            service.onWorldStarted();
+        } finally {
+            complete.countDown();
+            reader.join(5_000);
+        }
+        assertFalse(reader.isAlive());
+        Map<?, ?> capabilities = assertInstanceOf(Map.class, outcome.get());
+        assertEquals(false, capabilities.get("actor_accepting_requests"));
+        assertFalse(capabilities.containsKey("native_clock_update_interval_ms"));
+        assertFalse(capabilities.containsKey("chat_minimum_interval_ms"));
+    }
+
+    private AcceptanceObservationService prepareChat(ActorControlService service) {
+        AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
+        org.gms.client.Character character = mock(org.gms.client.Character.class);
+        when(handle.character()).thenReturn(character);
+        when(observations.contextForActor(any())).thenReturn(Map.of("scene_ref", "scene-current",
+                "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
+        service.setObservations(observations);
+        when(backend.chat(any(), any())).thenReturn(chatSuccess());
+        return observations;
+    }
+
+    private static Map<String, Object> chatSuccess() {
+        return Map.of("status", "SUCCEEDED", "result", Map.of("observed_outcome", "native_chat_broadcast",
+                "native_dispatch_started", true, "echo_matched", true, "sender_character_id", 73,
+                "echo_sequence", 32L, "packet_cursor_before", 31L, "packet_cursor_after", 32L));
+    }
+
+    private static ActorActRequest chatRequest(Map<String, Object> opened, String text) {
+        return new ActorActRequest(sessionId(opened), generation(opened), "chat", new ActorActRequest.Parameters(text),
+                new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 
     private static Thread observeAsync(ActorControlService service, ActorObserveRequest request,

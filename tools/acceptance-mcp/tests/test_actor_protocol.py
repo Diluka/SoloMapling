@@ -93,17 +93,17 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
 
-    async def test_six_tools_have_explicit_mutation_and_request_contracts(self) -> None:
+    async def test_seven_tools_have_explicit_mutation_and_request_contracts(self) -> None:
         async with Client(build_server(self.stub.config())) as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(TOOLS | {"game_act"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
             self.assertTrue(tool.annotations.idempotent_hint, name)
         self.assertTrue(tools["actor_close"].annotations.destructive_hint)
         for name in ["actor_open", "actor_close", "operation_cancel"]:
             self.assertIn("request_id", tools[name].input_schema["required"], name)
-        self.assertNotIn("game_act", tools)
+        self.assertFalse(tools["game_act"].annotations.destructive_hint)
         self.assertNotIn("recipe_run", tools)
 
     async def test_queued_and_cancel_requested_results_are_not_promoted_to_completion(self) -> None:
@@ -176,7 +176,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": SESSION_ID, "expected_generation": 1, "request_id": "stdio-close",
                 })
                 closed = await client.call_tool("operation_get", {"operation_id": CLOSE_ID})
-        self.assertEqual(TOOLS, names)
+        self.assertEqual(TOOLS | {"game_act"}, names)
         self.assertTrue(all(not result.is_error for result in [opened, online, closing, closed]))
         self.assertEqual("QUEUED", opened.structured_content["status"])
         self.assertEqual(42, online.structured_content["session"]["actor"]["character_id"])
