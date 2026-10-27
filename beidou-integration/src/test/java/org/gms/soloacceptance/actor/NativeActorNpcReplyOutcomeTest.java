@@ -97,7 +97,7 @@ class NativeActorNpcReplyOutcomeTest {
     void noLogoutPersistenceOrHiddenRetry() {
         try {
             verify(client, never()).disconnect(anyBoolean(), anyBoolean());
-            verify(backend, never()).close(any());
+            verify(backend, never()).close(any(), any());
             verify(scripts, never()).dispose(any(Client.class));
             verify(scripts, never()).dispose(any(Client.class), anyBoolean());
             verifyNoInteractions(accounts, characters, notes);

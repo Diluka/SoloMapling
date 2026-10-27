@@ -438,7 +438,7 @@ class NativeActorNpcScriptTest {
         assertEquals(10000, character.getMapId());
         assertEquals(606, character.getMeso());
         verify(client, never()).disconnect(anyBoolean(), anyBoolean());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any());
         verify(character, never()).saveCharToDB(anyBoolean());
         verify(character, never()).gainMeso(anyInt());
         verify(character, never()).saveLocationOnWarp();
