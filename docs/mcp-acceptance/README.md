@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件和普通聊天均已完成隔离及实际部署验收；#75 原生脚本中心首屏与取消是本轮候选，仍待验收。** 当前部署源码为 `fbd0c117aec7d784ae12dd6a3036f8513311dab8`（[PR #73](https://github.com/Diluka/SoloMapling/pull/73)）；#63、#67～#70、#72 和限频验收修正 #74 已关闭。已部署七工具，`game_act` 仅支持 `chat`；#75 保持七工具，候选增加 `npc_center_open/npc_cancel` 两动作。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。中心菜单选择、其他 NPC 回复、出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**状态：观察、原生角色、包事件和普通聊天均已完成隔离及实际部署验收；#75 原生脚本中心首屏与取消已通过隔离 SDK 验收，实际部署另行记录。** 当前部署源码为 `fbd0c117aec7d784ae12dd6a3036f8513311dab8`（[PR #73](https://github.com/Diluka/SoloMapling/pull/73)）；#63、#67～#70、#72 和限频验收修正 #74 已关闭。已部署七工具，`game_act` 仅支持 `chat`；#75 保持七工具，候选增加 `npc_center_open/npc_cancel` 两动作。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。中心菜单选择、其他 NPC 回复、出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -219,9 +219,9 @@ ACTION 复用该 session 的单线程执行器，与 OPEN/CLOSE 保持顺序，�
 
 本项已在隔离及实际部署使用官方 MCP SDK 于出生地图发出两条带运行 nonce 的 GBK 中文普通聊天，每条均只收到一次真实自身广播。实际部署回声序号为32、33；第二条按200ms+777ms留出等待，实测在首操作完成后等待1014.38ms。已验证相同请求不重复广播、独立正文观察、终态历史无正文、正常保存退出及同 CID 重开，数据与网页证据分别留存。排队满额仍能 close、取消和原生未广播等边界由确定性测试补足；真实客户端画面未验。#72/#74 已关闭，#64 继续保留 SocialBot 回复、提示菜单、话题与告别等实际交互，NPC 出行前置由 #65 继续推进。命令与恢复检查点见 [工具运行说明](../../tools/acceptance-mcp/README.md)。
 
-## #75 候选：原生脚本中心首屏与正常取消
+## #75：原生脚本中心首屏与正常取消
 
-此切片属于 [R2c #65](https://github.com/Diluka/SoloMapling/issues/65)，复用七工具和既有 ACTION 队列，仅增加两种固定动作；当前代码与测试推进中，隔离与实际部署验收尚未完成：
+此切片属于 [R2c #65](https://github.com/Diluka/SoloMapling/issues/65)，复用七工具和既有 ACTION 队列，仅增加两种固定动作；实现和隔离 SDK 首屏/取消验收已通过，实际部署结果另行记录：
 
 ```json
 {"action":"npc_center_open","parameters":{}}
@@ -266,7 +266,7 @@ NPC operation result 使用单一 `active` 字段，并包含 `dialogue_version/
 
 `actor_control.packet_observation.decoded_packets` 另增加 opcode304、event_type=npc_dialogue、message_types=[4]。再次打开仍受原生500ms点击限制及实际缓存时钟影响；验收流程按 `500 + native_clock_update_interval_ms + 1` 留出正常间隔，当前777ms时至少1278ms，不改原生时间、不重置冷却、不自动重发失败动作。
 
-本项计划先隔离、再实际部署，从真实level1/map10000角色执行打开→只看首屏→正常取消→旧version拒绝→正常间隔重开→旧version不能取消新CM→用新version取消。另在打开状态直接actor_close并重开同CID，证明CM/QM清理、旧session正文拒绝及存档连续。前后核对地图/实例/坐标、等级/经验、金币、三种券、完整未截断的背包与任务摘要；允许NPC点击时间、对话上下文及enableActions等正常交互状态变化，不把“无玩法收益”解释成全部内存不变。
+本项已在隔离服从真实level1/map10000角色执行打开→只看首屏→正常取消→旧version拒绝→正常间隔重开→旧version不能取消新CM→用新version取消。另在打开状态直接actor_close并重开同CID，证明CM/QM清理、旧session正文拒绝及存档连续。SDK前后核对了地图/实例/坐标、等级/经验、金币、三种券、完整未截断的背包与任务摘要；实际部署继续重跑相同短流程。允许NPC点击时间、对话上下文及enableActions等正常交互状态变化，不把“无玩法收益”解释成全部内存不变。
 
 use_mts=true、现存CM/QM、节流、未知/畸形包、新包使旧version失效及close队列顺序由隔离/确定性测试覆盖；实际服务只重跑隔离通过的短流程。菜单选择、其他NPC回复、门户、礼包领取、出行、SocialBot及真实客户端画面仍是后续验收，完成本子项不关闭总#65。命令与恢复检查点见 [工具运行说明](../../tools/acceptance-mcp/README.md)。
 
@@ -309,7 +309,7 @@ recipe清单要显示`planned/available/blocked`、版本、所需能力和参�
 | R1 协议与观察 | 本地stdio MCP、正常鉴权桥、capabilities与只读快照 | 初始化/协商、tools/list和call、真实后端身份/场景；未鉴权拒绝、结果无密钥；当前Codex实际可调用独立核对 |
 | R2a 原生角色生命周期 | 专用原生持久 fixture、session/操作队列、登录/退出/保存；隔离及实际部署已验收，#63关闭 | 同一CID打开/释放/再加载，原生在线/存档连续，幂等、取消与冲突；同JVM停启后能保存，不混环境bot，不改既有玩家 |
 | R2b 普通聊天与回复 | #70/#72/#74 已完成隔离/部署验收并关闭，SocialBot 往返仍待后续 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
-| R2c NPC 对话 | #75 固定中心首屏/type4版本/取消为候选待验；其他回复、菜单选择与多页能力待后续 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
+| R2c NPC 对话 | #75 固定中心首屏/type4版本/取消已通过隔离 SDK 验收，部署另留证；其他回复、菜单选择与多页能力待后续 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
 | R3 原生动作 | 移动、门户、组队和物品/机关逐项增量 | 每动作正常原生路径及结果；不可达/拒绝/失败清楚返回；真实库存与任务进度一致；多actor无互相控制 |
 | R4 预置流程 | recipe发现/版本、run/status/cancel、条件等待、断言与证据 | 一键跑完整基础流程；中断/断线/重试/取消不重复收益；失败可定位到具体步骤与最后事实 |
 | R5 组队协作验收 | 多actor分工、真人保留角色、单个PQ阶段和逐步扩展 | 一真人与合法bot编制逐阶段验证；双队/双频道隔离、同时站位、掉线补位与失败恢复；每种PQ独立留证 |
@@ -338,7 +338,7 @@ enabled = true
 
 ## 当前源码依据
 
-R2a、#70、#72 与 #75 候选的控制/观察入口为 [ActorControlController](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlController.java)、[ActorControlService](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java)、[NativeActorBackend](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java)、[ActorProfiles](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorProfiles.java) 与 [账号所有权切面](../../beidou-integration/src/main/aspect/soloMapling/beidou/AcceptanceSessionOwnership.aj)。包缓冲与解码由 [PacketEventBuffer](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/PacketEventBuffer.java) 和 [PacketEventDecoder](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/PacketEventDecoder.java) 实现，#75 候选当前对话由 [NativeDialogueTracker](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeDialogueTracker.java) 关联真实CM身份。运行源码身份以 capabilities 与构建报告核对；R2a、#70 和 #72 已有隔离及实际部署记录，#75 仍待独立验收；聊天广播、NPC、机器人交互与真实客户端分别留证，不能仅凭代码存在判定完成。
+R2a、#70、#72 与 #75 候选的控制/观察入口为 [ActorControlController](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlController.java)、[ActorControlService](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java)、[NativeActorBackend](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java)、[ActorProfiles](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorProfiles.java) 与 [账号所有权切面](../../beidou-integration/src/main/aspect/soloMapling/beidou/AcceptanceSessionOwnership.aj)。包缓冲与解码由 [PacketEventBuffer](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/PacketEventBuffer.java) 和 [PacketEventDecoder](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/PacketEventDecoder.java) 实现，#75 候选当前对话由 [NativeDialogueTracker](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeDialogueTracker.java) 关联真实CM身份。运行源码身份以 capabilities 与构建报告核对；R2a、#70 和 #72 已有隔离及实际部署记录，#75 已有隔离首屏/取消记录，实际部署另留证；聊天广播、NPC、机器人交互与真实客户端分别留证，不能仅凭代码存在判定完成。
 
 - [BotClient](../../beidou-integration/src/main/java/org/gms/client/BotClient.java#L38)、[BotRegistry](../../beidou-integration/src/main/java/soloMapling/beidou/BotRegistry.java#L57)、[GameplayHooks](../../beidou-integration/src/main/aspect/soloMapling/beidou/GameplayHooks.aj#L39)：环境bot身份、聊天排除与地图脚本分支。
 - [CharacterFactory](../../upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/creator/CharacterFactory.java#L42)、[Character](../../upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java#L613)、[EIM](../../upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java#L270)：原生创建、角色在线状态、事件登记。
@@ -371,6 +371,6 @@ R2a、#70、#72 与 #75 候选的控制/观察入口为 [ActorControlController]
 - [R5：多验收角色与单任务阶段的团队协作验证](https://github.com/Diluka/SoloMapling/issues/60)
 - [Milestone](https://github.com/Diluka/SoloMapling/milestone/3)
 
-以上任务使用 GitHub 原生 Sub-issues 关联：#55 下为 R1～R5，#57 下为 #63～#65；#63 的验收缺陷 #67（原生角色视图）、#68（人口日志）和 #69（导航预热停服）分别关联为子项，均已随R2a验收关闭。#70 和 #72 为 #64 的子项，均已关闭；#72 的限频验收缺陷 #74 同样已关闭。#75 为 #65 的首个NPC切片，仍待验收；#64/#65 仍开放，后续继续回复与正常出行等能力。正文引用用于说明，不替代平台父子关系。
+以上任务使用 GitHub 原生 Sub-issues 关联：#55 下为 R1～R5，#57 下为 #63～#65；#63 的验收缺陷 #67（原生角色视图）、#68（人口日志）和 #69（导航预热停服）分别关联为子项，均已随R2a验收关闭。#70 和 #72 为 #64 的子项，均已关闭；#72 的限频验收缺陷 #74 同样已关闭。#75 为 #65 的首个NPC切片，已过隔离验收、部署仍待完成；#64/#65 仍开放，后续继续回复与正常出行等能力。正文引用用于说明，不替代平台父子关系。
 
 各切片独立开发、独立验收，通过后及时补充证据并关闭，随后同步总跟踪；剩余未验内容保持开放，不因设计或单测完成而关闭整个里程碑。MCP 发现迁移 bot 的问题时，先保留请求与实际场景/回复证据，再建独立缺陷 Issue，修复后重跑同一场景验收并关闭。
