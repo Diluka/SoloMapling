@@ -17,6 +17,7 @@ import org.gms.net.server.coordinator.session.Hwid;
 import org.gms.net.server.coordinator.session.SessionCoordinator;
 import org.gms.net.server.world.World;
 import org.gms.scripting.npc.NPCConversationManager;
+import org.gms.scripting.event.EventInstanceManager;
 import org.gms.scripting.quest.QuestActionManager;
 import org.gms.server.CashShop;
 import org.gms.server.maps.MapleMap;
@@ -29,7 +30,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.MockedConstruction;
+import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.WorldEpoch;
 
 import java.awt.Point;
 import java.lang.reflect.Field;
@@ -68,6 +71,7 @@ class NativeActorBackendTest {
     @BeforeEach
     void setup() {
         CharacterTestContext.install();
+        WorldEpoch.onWorldStarted();
         profiles = new ActorProfiles();
         ActorProfiles.Profile profile = new ActorProfiles.Profile();
         profile.setAccountName("mcp_primary");
@@ -77,6 +81,7 @@ class NativeActorBackendTest {
         accounts = mock(AccountService.class);
         characters = mock(CharacterService.class);
         server = mock(Server.class);
+        when(server.isOnline()).thenReturn(true);
         world = mock(World.class);
         channel = mock(Channel.class);
         worldPlayers = mock(PlayerStorage.class);
@@ -124,7 +129,10 @@ class NativeActorBackendTest {
     }
 
     @AfterEach
-    void closeStaticOwnershipMock() { ownership.close(); }
+    void closeStaticOwnershipMock() {
+        WorldEpoch.onWorldStopping();
+        ownership.close();
+    }
 
     @Test
     void profileValidationNeverTouchesGameDataOrWorld() {
@@ -249,6 +257,70 @@ class NativeActorBackendTest {
     }
 
     @Test
+    void aHandleCannotRecaptureTheNewWorldEpochEvenWhenAllNativeObjectsAreReused() {
+        var captured = handle.characterRef();
+        assertTrue(backend.isCurrent(handle));
+        WorldEpoch.onWorldStopping();
+        WorldEpoch.onWorldStarted();
+        assertSame(captured, handle.characterRef());
+        assertNotSame(captured.epoch(), WorldEpoch.snapshot().token());
+        assertFalse(backend.isCurrent(handle));
+        assertEquals("actor_session_stale", assertThrows(ObservationException.class, () -> backend.snapshot(handle)).reason());
+    }
+
+    @Test
+    void aNativeReadFailurePropagatesUnavailableInsteadOfReturningAnIdentityLoss() {
+        when(character.getMap()).thenThrow(new IllegalStateException("private-map-read-detail"));
+        ObservationException current = assertThrows(ObservationException.class, () -> backend.isCurrent(handle));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, current.status());
+        assertEquals("actor_observation_unavailable", current.reason());
+        assertFalse(String.valueOf(current.getMessage()).contains("private-map-read-detail"));
+        assertEquals("actor_observation_unavailable", assertThrows(ObservationException.class,
+                () -> backend.snapshot(handle)).reason());
+        verify(client, never()).disconnect(anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    void disposedSceneDoesNotInvalidateTheRoleOrPreventNativeLogoutAfterEpochStops() {
+        EventInstanceManager disposed = mock(EventInstanceManager.class);
+        when(disposed.isEventDisposed()).thenReturn(true);
+        when(map.getEventInstance()).thenReturn(disposed);
+        assertTrue(backend.isCurrent(handle));
+        assertEquals("actor_context_mismatch", assertThrows(ObservationException.class,
+                () -> backend.snapshot(handle)).reason());
+        clearInvocations(disposed);
+        MatchCheckerCoordinator match = mock(MatchCheckerCoordinator.class);
+        when(world.getMatchCheckerCoordinator()).thenReturn(match);
+        when(match.getMatchConfirmationLeaderid(41)).thenReturn(-1);
+        AccountsDO account = account();
+        account.setLoggedin(Client.LOGIN_LOGGEDIN);
+        when(accounts.findById(17)).thenReturn(account);
+        when(characters.findById(41)).thenReturn(stored());
+        ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
+        doAnswer(invocation -> {
+            account.setLoggedin(Client.LOGIN_NOTLOGGEDIN);
+            when(client.getPlayer()).thenReturn(null);
+            when(client.isLoggedIn()).thenReturn(false);
+            when(character.isLoggedIn()).thenReturn(false);
+            when(character.isLoggedInWorld()).thenReturn(false);
+            when(character.getMap()).thenReturn(null);
+            when(character.getClient()).thenReturn(null);
+            when(worldPlayers.getCharacterById(41)).thenReturn(null);
+            when(channelPlayers.getCharacterById(41)).thenReturn(null);
+            when(map.getCharacterById(41)).thenReturn(null);
+            ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+            return null;
+        }).when(client).disconnect(false, false);
+        WorldEpoch.onWorldStopping();
+        assertFalse(backend.isCurrent(handle));
+        Map<String, Object> closed = backend.close(handle);
+        assertEquals(true, closed.get("native_cleanup_verified"));
+        assertEquals(true, closed.get("persisted_state_verified"));
+        verify(client).disconnect(false, false);
+        verify(disposed, never()).isEventDisposed();
+    }
+
+    @Test
     void staleCloseCannotStartNativeLogoutOrTouchPersistence() {
         when(server.getWorld(0)).thenReturn(mock(World.class));
         ObservationException failure = assertThrows(ObservationException.class, () -> backend.close(handle));
@@ -299,11 +371,13 @@ class NativeActorBackendTest {
         ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
 
         // Native CM/QM maps must also be empty, even after Character.empty() cleared its client/map.
-        when(client.getCM()).thenReturn(mock(NPCConversationManager.class));
+        NPCConversationManager remainingCm = mock(NPCConversationManager.class);
+        when(client.getCM()).thenReturn(remainingCm);
         assertTrue(assertThrows(ObservationException.class, () -> backend.close(handle)).reason().contains("cleanup_unverified"));
         ownership.verify(() -> ActorAccountOwnership.release(lease), never());
         when(client.getCM()).thenReturn(null);
-        when(client.getQM()).thenReturn(mock(QuestActionManager.class));
+        QuestActionManager remainingQm = mock(QuestActionManager.class);
+        when(client.getQM()).thenReturn(remainingQm);
         assertTrue(assertThrows(ObservationException.class, () -> backend.close(handle)).reason().contains("cleanup_unverified"));
         ownership.verify(() -> ActorAccountOwnership.release(lease), never());
         when(client.getQM()).thenReturn(null);

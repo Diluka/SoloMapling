@@ -40,6 +40,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import soloMapling.beidou.BotRegistry;
+import soloMapling.game.context.GameContext;
 
 import java.sql.Date;
 import java.nio.ByteBuffer;
@@ -589,6 +590,8 @@ public final class NativeActorBackend {
 
     public Map<String, Object> snapshot(NativeActorHandle handle) {
         if (!isCurrent(handle)) throw conflict("actor_session_stale");
+        Server server = servers.get();
+        GameContext.SceneRef scene = AcceptanceActorContexts.captureScene(server, handle);
         Character character = handle.character();
         Map<String, Object> result = identity(handle);
         result.put("name", character.getName());
@@ -621,26 +624,21 @@ public final class NativeActorBackend {
         result.put("packet_events_dropped", handle.client().droppedPacketCount());
         result.put("malformed_packet_events", handle.client().malformedPacketCount());
         result.put("dialogue", handle.client().dialogueState());
+        AcceptanceActorContexts.requireSceneCurrent(server, scene);
         return result;
     }
 
     public boolean isCurrent(NativeActorHandle handle) {
         if (handle == null || handle.closeEvidence() != null) return false;
-        Server server = servers.get();
-        World world = server.getWorld(handle.world().getId());
-        if (world != handle.world() || world.getChannel(handle.channel().getId()) != handle.channel()) return false;
-        Character character = handle.character();
-        MapleMap map = character.getMap();
-        return character.getClient() == handle.client() && handle.client().getPlayer() == character
-                && ActorAccountOwnership.owns(handle.ownership(), handle.client())
-                && ActorAccountOwnership.currentOnlineClient(handle.accountId()) == handle.client()
-                && handle.client().getWorld() == handle.world().getId()
-                && handle.client().getChannel() == handle.channel().getId()
-                && handle.client().getAccID() == handle.accountId() && character.getAccountId() == handle.accountId()
-                && handle.client().isLoggedIn() && character.isLoggedInWorld() && !handle.client().transportClosed()
-                && world.getPlayerStorage().getCharacterById(character.getId()) == character
-                && handle.channel().getPlayerStorage().getCharacterById(character.getId()) == character
-                && map != null && map.getCharacterById(character.getId()) == character;
+        try {
+            AcceptanceActorContexts.requireCharacter(servers.get(), handle);
+            return true;
+        } catch (ObservationException failure) {
+            if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE && !"actor_world_offline".equals(failure.reason())) throw failure;
+            return false;
+        } catch (RuntimeException unavailable) {
+            throw unavailable("actor_observation_unavailable");
+        }
     }
 
     public Map<String, Object> close(NativeActorHandle handle) {
@@ -650,7 +648,7 @@ public final class NativeActorBackend {
             AcceptanceClient client = handle.client();
             NativeActorHandle.CloseContext context = handle.closeContext();
             if (context == null) {
-                if (!isCurrent(handle)) throw conflict("actor_close_cleanup_unverified_stale_session");
+                AcceptanceActorContexts.requireCloseCharacter(servers.get(), handle);
                 // These are native cooperative exits; dropping Java references leaves shared state behind.
                 withClient(client, () -> {
                     if (character.getParty() != null) Party.leaveParty(character.getParty(), client);

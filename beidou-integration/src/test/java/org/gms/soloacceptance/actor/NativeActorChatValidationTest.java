@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.WorldEpoch;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -29,6 +30,7 @@ class NativeActorChatValidationTest {
     @BeforeEach
     void ordinaryChineseFixtureWithCurrentHandle() {
         CharacterTestContext.install();
+        WorldEpoch.onWorldStarted();
         profiles = mock(ActorProfiles.class);
         accounts = mock(AccountService.class);
         characters = mock(CharacterService.class);
@@ -48,6 +50,7 @@ class NativeActorChatValidationTest {
 
     @AfterEach
     void inputChecksNeverReadProfilesOrPersistenceServices() {
+        WorldEpoch.onWorldStopping();
         verifyNoInteractions(profiles, accounts, characters, notes);
         verify(client, never()).sendPacket(any());
     }

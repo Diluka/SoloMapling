@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.WorldEpoch;
 
 import javax.script.Bindings;
 import javax.script.ScriptContext;
@@ -65,7 +66,9 @@ class NativeActorNpcScriptTest {
     @BeforeEach
     void nativeManagersAndUnmodifiedChineseScriptWithoutDatasource() throws Exception {
         CharacterTestContext.install();
+        WorldEpoch.onWorldStarted();
         Server server = mock(Server.class);
+        when(server.isOnline()).thenReturn(true);
         clock = new AtomicLong(1000);
         when(server.getCurrentTime()).thenAnswer(call -> clock.get());
         serverSingleton = mockStatic(Server.class);
@@ -129,6 +132,7 @@ class NativeActorNpcScriptTest {
                 assertNull(client.getQM());
             }
         } finally {
+            WorldEpoch.onWorldStopping();
             ThreadLocalUtil.removeCurrentClient();
             engines.forEach(GraalJSScriptEngine::close);
             if (extensions != null) extensions.close();

@@ -1,28 +1,22 @@
 package org.gms.soloacceptance;
 
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
+import soloMapling.game.context.WorldEpoch;
 
-/** The native world's lifecycle, not Spring's process lifetime, owns observation references. */
+/** MCP's compatibility view of the shared world lifecycle; this class owns no separate epoch. */
 public final class AcceptanceObservationRuntime {
-    private static final AtomicReference<State> STATE = new AtomicReference<>(new State(false, nextGeneration()));
-
     private AcceptanceObservationRuntime() { }
 
     public static void onWorldStarted() {
-        STATE.set(new State(true, nextGeneration()));
+        WorldEpoch.onWorldStarted();
     }
 
     public static void onWorldStopped() {
-        STATE.set(new State(false, nextGeneration()));
+        WorldEpoch.onWorldStopping();
     }
 
     public static State snapshot() {
-        return STATE.get();
-    }
-
-    private static String nextGeneration() {
-        return UUID.randomUUID().toString();
+        WorldEpoch.State state = WorldEpoch.snapshot();
+        return new State(state.active(), state.token().value());
     }
 
     public record State(boolean active, String generation) { }

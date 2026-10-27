@@ -1,6 +1,7 @@
 package org.gms.soloacceptance;
 
 import org.gms.client.Character;
+import org.gms.client.Client;
 import org.gms.net.server.Server;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.channel.Channel;
@@ -14,6 +15,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import soloMapling.game.context.GameContext;
+import soloMapling.game.context.NativeContextChecks;
 
 import java.lang.ref.WeakReference;
 import java.time.Instant;
@@ -109,39 +112,71 @@ public final class AcceptanceObservationService {
             result.put("context", ref.description(actual));
             result.putAll(SceneSnapshotMapper.snapshot(actual, limit));
         }
-        if (!runtime.equals(AcceptanceObservationRuntime.snapshot()) || !server.isOnline()) {
+        if (!server.isOnline() || !runtime.equals(AcceptanceObservationRuntime.snapshot())) {
             references.clear();
             throw error(HttpStatus.CONFLICT, "runtime_changed");
         }
         return result;
     }
 
-    /** Resolve the authenticated controller's current actor directly, without truncating the directory. */
+    /** Legacy internal read-only entry; control callers pass their already-bound CharacterRef instead. */
     public synchronized Map<String, Object> contextForActor(Character actor) {
         AcceptanceObservationRuntime.State runtime = AcceptanceObservationRuntime.snapshot();
-        Server server = serverSource.get();
-        if (!runtime.active() || !server.isOnline()) throw error(HttpStatus.SERVICE_UNAVAILABLE, "server_offline");
-        if (actor == null || actor.getClient() == null || !actor.isLoggedInWorld()) {
-            throw error(HttpStatus.GONE, "actor_not_in_world");
-        }
-        World world = server.getWorld(actor.getWorld());
-        Channel channel = world == null ? null : world.getChannel(actor.getClient().getChannel());
-        PlayerStorage storage = channel == null ? null : channel.getPlayerStorage();
-        if (storage == null || storage.getCharacterById(actor.getId()) != actor) {
-            throw error(HttpStatus.GONE, "actor_not_in_current_world");
-        }
-        MapleMap actual = actor.getMap();
-        refreshReferences(server, runtime);
-        SceneReference found = null;
-        for (SceneReference ref : references.values()) {
-            if (ref.channel().get() == channel && ref.map().get() == actual) {
-                found = ref;
-                break;
+        try {
+            Server server = serverSource.get();
+            requireActorWorld(server, runtime);
+            Client client = actor == null ? null : actor.getClient();
+            if (client == null || !actor.isLoggedInWorld()) {
+                throw error(HttpStatus.GONE, "actor_not_in_world");
             }
+            World world = server.getWorld(actor.getWorld());
+            Channel channel = world == null ? null : world.getChannel(client.getChannel());
+            if (channel == null) throw error(HttpStatus.GONE, "actor_not_in_current_world");
+            GameContext.CharacterRef ref = NativeContextChecks.captureCharacter(server, actor, client, world, channel);
+            return contextForActor(server, runtime, ref);
+        } catch (GameContext.Invalid invalid) {
+            if (runtime.equals(AcceptanceObservationRuntime.snapshot())
+                    && (invalid.reason() == GameContext.Failure.SCENE_CHANGED
+                    || invalid.reason() == GameContext.Failure.EVENT_CHANGED)) {
+                throw error(HttpStatus.GONE, "actor_scene_unavailable");
+            }
+            throw actorContextFailure(runtime, invalid);
+        } catch (ObservationException failure) {
+            requireActorGeneration(runtime);
+            throw failure;
+        } catch (RuntimeException ignored) {
+            throw actorReadFailure(runtime);
         }
-        if (found == null) throw error(HttpStatus.GONE, "actor_scene_unavailable");
-        Map<String, Object> context = found.description(actual);
-        if (!runtime.equals(AcceptanceObservationRuntime.snapshot()) || !server.isOnline()) {
+    }
+
+    /** Resolve one authorized binding without discovering or enumerating the world's other scenes. */
+    public synchronized Map<String, Object> contextForActor(GameContext.CharacterRef actor) {
+        AcceptanceObservationRuntime.State runtime = AcceptanceObservationRuntime.snapshot();
+        try {
+            Server server = serverSource.get();
+            requireActorWorld(server, runtime);
+            if (actor == null || actor.character() == null || actor.client() == null) {
+                throw error(HttpStatus.GONE, "actor_not_in_world");
+            }
+            return contextForActor(server, runtime, actor);
+        } catch (GameContext.Invalid invalid) {
+            throw actorContextFailure(runtime, invalid);
+        } catch (ObservationException failure) {
+            requireActorGeneration(runtime);
+            throw failure;
+        } catch (RuntimeException ignored) {
+            throw actorReadFailure(runtime);
+        }
+    }
+
+    private Map<String, Object> contextForActor(Server server, AcceptanceObservationRuntime.State runtime,
+                                               GameContext.CharacterRef actor) {
+        GameContext.SceneRef scene = NativeContextChecks.captureScene(server, actor);
+        useGeneration(runtime.generation());
+        SceneReference reference = registerActorScene(scene, runtime.generation());
+        Map<String, Object> context = reference.description(scene.map());
+        NativeContextChecks.requireSceneCurrent(server, scene);
+        if (!server.isOnline() || !runtime.equals(AcceptanceObservationRuntime.snapshot())) {
             references.clear();
             throw error(HttpStatus.CONFLICT, "runtime_changed");
         }
@@ -149,14 +184,84 @@ public final class AcceptanceObservationService {
         return context;
     }
 
-    private Discovery refreshReferences(Server server, AcceptanceObservationRuntime.State runtime) {
-        if (!runtime.generation().equals(referenceGeneration)) {
-            references.clear();
-            referenceGeneration = runtime.generation();
+    private void requireActorWorld(Server server, AcceptanceObservationRuntime.State runtime) {
+        if (!runtime.active() || server == null || !server.isOnline()) {
+            throw error(HttpStatus.SERVICE_UNAVAILABLE, "server_offline");
         }
+    }
+
+    private ObservationException actorContextFailure(AcceptanceObservationRuntime.State runtime,
+                                                     GameContext.Invalid invalid) {
+        requireActorGeneration(runtime);
+        if (invalid.reason() == GameContext.Failure.RUNTIME_CHANGED) {
+            references.clear();
+            return error(HttpStatus.CONFLICT, "runtime_changed");
+        }
+        return switch (invalid.reason()) {
+            case WORLD_OFFLINE -> error(HttpStatus.SERVICE_UNAVAILABLE, "server_offline");
+            case READ_UNAVAILABLE -> error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
+            case SCENE_CHANGED, EVENT_CHANGED -> error(HttpStatus.CONFLICT, "actor_context_mismatch");
+            default -> error(HttpStatus.GONE, "actor_not_in_current_world");
+        };
+    }
+
+    private ObservationException actorReadFailure(AcceptanceObservationRuntime.State runtime) {
+        requireActorGeneration(runtime);
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
+    }
+
+    private void requireActorGeneration(AcceptanceObservationRuntime.State runtime) {
+        if (!runtime.equals(AcceptanceObservationRuntime.snapshot())) {
+            references.clear();
+            throw error(HttpStatus.CONFLICT, "runtime_changed");
+        }
+    }
+
+    private SceneReference registerActorScene(GameContext.SceneRef scene, String generation) {
+        GameContext.CharacterRef actor = scene.actor();
+        Object runtime = scene.mapEim() == null ? actor.channel() : scene.mapEim();
+        String runtimeKey = null;
+        SceneReference existing = null;
+        var iterator = references.values().iterator();
+        while (iterator.hasNext()) {
+            SceneReference ref = iterator.next();
+            Object owner = ref.runtime().get();
+            Channel channel = ref.channel().get();
+            MapleMap map = ref.map().get();
+            if (owner == null || channel == null || map == null) {
+                iterator.remove();
+                continue;
+            }
+            if (channel == actor.channel() && map == scene.map()) {
+                if (owner == runtime) existing = ref;
+                else {
+                    iterator.remove();
+                    continue;
+                }
+            }
+            if (owner == runtime) runtimeKey = ref.runtimeKey();
+        }
+        if (existing != null) return existing;
+        if (references.size() >= registryLimit) throw error(HttpStatus.SERVICE_UNAVAILABLE, "scene_capacity_exceeded");
+        SceneReference added = new SceneReference("scene-" + UUID.randomUUID(), generation, actor.world().getId(),
+                actor.channel().getId(), new WeakReference<>(actor.channel()), new WeakReference<>(scene.map()),
+                new WeakReference<>(runtime), runtimeKey == null ? "runtime-" + UUID.randomUUID() : runtimeKey);
+        references.put(added.key(), added);
+        return added;
+    }
+
+    private Discovery refreshReferences(Server server, AcceptanceObservationRuntime.State runtime) {
+        useGeneration(runtime.generation());
         Discovery discovery = discover(server);
         reconcile(discovery.scenes(), runtime.generation());
         return discovery;
+    }
+
+    private void useGeneration(String generation) {
+        if (!generation.equals(referenceGeneration)) {
+            references.clear();
+            referenceGeneration = generation;
+        }
     }
 
     private Discovery discover(Server server) {

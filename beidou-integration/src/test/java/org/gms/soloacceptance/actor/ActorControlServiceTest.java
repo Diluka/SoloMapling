@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.GameContext;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -46,6 +47,8 @@ class ActorControlServiceTest {
         handle = mock(NativeActorHandle.class);
         client = mock(AcceptanceClient.class);
         when(handle.client()).thenReturn(client);
+        GameContext.CharacterRef binding = mock(GameContext.CharacterRef.class);
+        when(handle.characterRef()).thenReturn(binding);
         when(backend.open(anyString(), any(), any(), any())).thenReturn(handle);
         when(backend.isCurrent(handle)).thenReturn(true);
         when(backend.snapshot(handle)).thenReturn(Map.of("character_id", 73, "logged_in_world", true,
@@ -434,7 +437,7 @@ class ActorControlServiceTest {
         when(handle.character()).thenReturn(character);
         Map<String, Object> scene = Map.of("scene_ref", "scene-current", "map_id", 10000,
                 "runtime_generation", AcceptanceObservationRuntime.snapshot().generation());
-        when(observations.contextForActor(character)).thenReturn(scene);
+        when(observations.contextForActor(handle.characterRef())).thenReturn(scene);
         service.setObservations(observations);
         var opened = open(service, "open-one");
         executors.getFirst().runNext();
@@ -464,6 +467,69 @@ class ActorControlServiceTest {
         assertEquals(AcceptanceClient.packetObservationCapabilities(), service.publicCapabilities().get("packet_observation"));
         assertTrue(executors.getFirst().queue.isEmpty());
         verify(client, times(2)).packetEvents(0, 1);
+    }
+
+    @Test
+    void anUnavailableNativeContextReadDoesNotTurnTheOpenActorIntoALostSession() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-read-failure");
+        executors.getFirst().runNext();
+        service.get("admin", id(opened), 0, 100);
+        ObservationException expected = new ObservationException(HttpStatus.SERVICE_UNAVAILABLE,
+                "actor_observation_unavailable");
+        when(backend.isCurrent(handle)).thenThrow(expected);
+
+        assertSame(expected, assertThrows(ObservationException.class,
+                () -> service.get("admin", id(opened), 0, 100)));
+        doReturn(true).when(backend).isCurrent(handle);
+        var recovered = service.get("admin", id(opened), 0, 100);
+        assertEquals("OPEN", session(recovered).get("state"));
+        assertEquals(true, session(recovered).get("actor_current"));
+        assertSame(handle, service.currentActor("admin", sessionId(opened), generation(opened)).orElseThrow());
+        var close = service.close("admin", "close-after-read-failure", closeRequest(opened));
+        executors.getFirst().runNext();
+        assertEquals("CLOSED", session(service.get("admin", id(close), 0, 100)).get("state"));
+    }
+
+    @Test
+    void anUnexpectedProjectionReadFailureRemainsUnavailableAndDoesNotPreventNativeClose() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-projection-failure");
+        executors.getFirst().runNext();
+        service.get("admin", id(opened), 0, 100);
+        when(backend.snapshot(handle)).thenThrow(new IllegalStateException("private-projection-detail"));
+
+        ObservationException failure = assertThrows(ObservationException.class,
+                () -> service.get("admin", id(opened), 0, 100));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status());
+        assertEquals("actor_observation_unavailable", failure.reason());
+        assertFalse(failure.toString().contains("private-projection-detail"));
+        var close = service.close("admin", "close-during-projection-failure", closeRequest(opened));
+        executors.getFirst().runNext();
+        assertEquals("CLOSED", session(service.get("admin", id(close), 0, 100)).get("state"));
+        verify(backend).close(handle);
+    }
+
+    @Test
+    void aSceneReadConflictCanRecoverWithoutReplacingOrClosingTheNativeActor() {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationService observations = prepareChat(service);
+        var opened = open(service, "open-scene-conflict");
+        executors.getFirst().runNext();
+        service.get("admin", id(opened), 0, 100);
+        ObservationException conflict = new ObservationException(HttpStatus.CONFLICT, "actor_context_mismatch");
+        when(observations.contextForActor(handle.characterRef())).thenThrow(conflict);
+
+        assertSame(conflict, assertThrows(ObservationException.class,
+                () -> service.get("admin", id(opened), 0, 100)));
+        doReturn(Map.of("scene_ref", "scene-restored",
+                "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()))
+                .when(observations).contextForActor(any(GameContext.CharacterRef.class));
+        var recovered = service.get("admin", id(opened), 0, 100);
+        assertEquals("OPEN", session(recovered).get("state"));
+        assertEquals("scene-restored", ((Map<?, ?>) actor(recovered).get("scene")).get("scene_ref"));
+        verify(backend, never()).close(handle);
+        verify(backend, times(1)).open(anyString(), any(), any(), any());
     }
 
     @Test
@@ -733,7 +799,7 @@ class ActorControlServiceTest {
         var opened = open(service, "open-chat");
         executors.getFirst().runNext();
         var action = service.act("admin", "chat-one", chatRequest(opened, "排队正文"));
-        when(observations.contextForActor(any())).thenReturn(Map.of("scene_ref", "scene-next",
+        when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-next",
                 "runtime_generation", opened.get("runtime_generation")));
         executors.getFirst().runNext();
         var failed = service.get("admin", id(action), 0, 100);
@@ -1472,7 +1538,7 @@ class ActorControlServiceTest {
         assertEquals("CANCELLED", service.get("admin", id(cancelled), 0, 100).get("status"));
         assertEquals("action_cancelled_before_dispatch", result(service.get("admin", id(cancelled), 0, 100)).get("observed_outcome"));
         var moved = service.act("admin", "moved-select", replyRequest(opened, 37L, "select", 0));
-        when(observations.contextForActor(any())).thenReturn(Map.of("scene_ref", "scene-replaced",
+        when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-replaced",
                 "runtime_generation", opened.get("runtime_generation")));
         executors.getFirst().runNext();
         assertEquals(Map.of("reason", "actor_context_mismatch"), service.get("admin", id(moved), 0, 100).get("error"));
@@ -1653,7 +1719,7 @@ class ActorControlServiceTest {
         AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
         org.gms.client.Character character = mock(org.gms.client.Character.class);
         when(handle.character()).thenReturn(character);
-        when(observations.contextForActor(any())).thenReturn(Map.of("scene_ref", "scene-current",
+        when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-current",
                 "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
         service.setObservations(observations);
         when(backend.chat(any(), any())).thenReturn(chatSuccess());

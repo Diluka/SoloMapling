@@ -2,7 +2,7 @@ package soloMapling.beidou;
 
 import org.gms.client.Character;
 import org.gms.manager.ServerManager;
-import org.gms.soloacceptance.AcceptanceObservationRuntime;
+import soloMapling.game.context.WorldEpoch;
 import org.gms.soloacceptance.actor.ActorControlService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
@@ -38,7 +38,7 @@ public final class BeiDouRuntime {
             return;
         }
         try {
-            AcceptanceObservationRuntime.onWorldStarted();
+            WorldEpoch.onWorldStarted();
             ActorControlService actors = actorControls();
             if (actors != null) actors.onWorldStarted();
             Environment environment = ServerManager.getApplicationContext().getEnvironment();
@@ -70,7 +70,7 @@ public final class BeiDouRuntime {
     }
 
     public static void onServerStopping() {
-        AcceptanceObservationRuntime.onWorldStopped();
+        WorldEpoch.onWorldStopping();
         ActorControlService actors = actorControls();
         if (actors != null) actors.onWorldStopping();
         if (!READY.getAndSet(false) && BotRegistry.snapshot().isEmpty()) {
