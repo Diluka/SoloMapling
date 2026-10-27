@@ -49,7 +49,7 @@ flowchart LR
 ```
 
 - MCP进程负责工具协议、参数和结果呈现，不承担游戏状态的权威副本，也不直接连接MySQL。
-- Solo验收桥沿当前管理端JWT和管理员权限鉴权，默认不开启，开启与角色配额维护在本地配置。全部新增代码维护在Solo，北斗submodule保持原样。
+- Solo验收桥沿当前管理端JWT和管理员权限鉴权，默认不开启，开关与 profile 维护在本地配置。当前角色并发上限固定为4，实际额度由 capabilities 返回。全部新增代码维护在Solo，北斗submodule保持原样。
 - 独立`AcceptanceClient extends Client`捕获`sendPacket`，在专用actor注册表中登记。不要继承`BotClient`或把验收玩家放入环境`BotRegistry`：聊天观察和入图脚本会按bot分支处理。
 - 开放的能力由`game_capabilities`实际返回。接口契约可先设计齐，未实现或未验证的动作保持不可用；不创建空工具来宣称已支持。
 - 先用进程内队列和有界事件缓冲即可，无需分布式消息总线、通用远程代码执行器或每角色一个LLM。
@@ -215,5 +215,7 @@ R2a 实现入口为 [ActorControlController](../../beidou-integration/src/main/j
 - [R4：内置验收流程、可中断运行与证据报告](https://github.com/Diluka/SoloMapling/issues/59)
 - [R5：多验收角色与单任务阶段的团队协作验证](https://github.com/Diluka/SoloMapling/issues/60)
 - [Milestone](https://github.com/Diluka/SoloMapling/milestone/3)
+
+以上任务使用 GitHub 原生 Sub-issues 关联：#55 下为 R1～R5，#57 下为 #63～#65；#63 的验收缺陷 #67（原生角色视图）、#68（人口日志）和 #69（导航预热停服）分别关联为子项。正文引用用于说明，不替代平台父子关系。
 
 各切片独立开发、独立验收，通过后及时补充证据并关闭，随后同步总跟踪；剩余未验内容保持开放，不因设计或单测完成而关闭整个里程碑。MCP 发现迁移 bot 的问题时，先保留请求与实际场景/回复证据，再建独立缺陷 Issue，修复后重跑同一场景验收并关闭。

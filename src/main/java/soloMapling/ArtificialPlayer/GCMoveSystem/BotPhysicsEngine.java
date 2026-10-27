@@ -2520,6 +2520,7 @@ final class BotPhysicsEngine {
 
     /* Bot-side drop-in for MapleMap.getPointBelow (calcPointBelow), same math. */
     static Point pointBelowIndexed(MapleMap map, Point initial) {
+        BotNavigationGraphProvider.checkBuildActive();
         if (map == null) {
             return null;
         }
@@ -2755,6 +2756,7 @@ final class BotPhysicsEngine {
         final int floorY = mapFloorY(map);
 
         for (int tick = 0; tick < FALL_SIM_TICK_CAP; tick++) {
+            BotNavigationGraphProvider.checkBuildActive();
             Point current = new Point((int) Math.round(physX), (int) Math.round(physY));
             if (canGrabRopeAtPoint(current, targetRope)) {
                 return new RopeGrabResult(new Point(targetRope.x(), current.y), tick);
@@ -2841,6 +2843,7 @@ final class BotPhysicsEngine {
         final int floorY = mapFloorY(map);
 
         for (int tick = 0; tick < FALL_SIM_TICK_CAP; tick++) {
+            BotNavigationGraphProvider.checkBuildActive();
             if (remainingLandingGraceMs > 0L) {
                 remainingLandingGraceMs = Math.max(0L, remainingLandingGraceMs - cfg.TICK_MS);
             }

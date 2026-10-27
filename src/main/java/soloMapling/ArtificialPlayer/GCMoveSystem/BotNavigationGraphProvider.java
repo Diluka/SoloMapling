@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static soloMapling.DebugUtilities.debugprint;
 
@@ -76,6 +77,9 @@ final class BotNavigationGraphProvider {
     private static final Map<Integer, Set<Integer>> COLLIDABLE_WALL_IDS_BY_MAP_ID = new ConcurrentHashMap<>();
     private static final Map<Integer, Set<Integer>> COLLIDABLE_FROM_BELOW_IDS_BY_MAP_ID = new ConcurrentHashMap<>();
     private static final ThreadLocal<BuildProfileBuilder> ACTIVE_BUILD_PROFILE = new ThreadLocal<>();
+    private static final ThreadLocal<Long> ACTIVE_LOAD_GENERATION = new ThreadLocal<>();
+    private static final Set<Thread> RUNNING_LOADS = new HashSet<>();
+    private static volatile boolean acceptingLoads = true;
     private static volatile long runtimeGeneration;
     private static final ExecutorService GRAPH_WARMUP_EXECUTOR = Executors.newFixedThreadPool(1, r -> {
         Thread thread = new Thread(r, "bot-nav-graph-warmup");
@@ -94,6 +98,59 @@ final class BotNavigationGraphProvider {
         PENDING_GRAPHS.clear();
         ((java.util.concurrent.ThreadPoolExecutor) GRAPH_WARMUP_EXECUTOR).getQueue().clear();
         ((java.util.concurrent.ThreadPoolExecutor) FAST_GRAPH_WARMUP_EXECUTOR).getQueue().clear();
+    }
+
+    static synchronized void resumeLoads() {
+        acceptingLoads = true;
+    }
+
+    /** A cancelled promise is not a stopped worker: drain old-map readers before native disposal. */
+    static synchronized boolean stopAndAwaitLoads(long timeout, TimeUnit unit) {
+        acceptingLoads = false;
+        cancelPendingLoads();
+        Thread caller = Thread.currentThread();
+        for (Thread worker : RUNNING_LOADS) {
+            if (worker != caller) worker.interrupt();
+        }
+        long remaining = unit.toNanos(timeout);
+        long deadline = System.nanoTime() + remaining;
+        while (!RUNNING_LOADS.isEmpty()) {
+            if (RUNNING_LOADS.contains(caller) || remaining <= 0) return drainFailed("timeout_or_self_wait");
+            try {
+                TimeUnit.NANOSECONDS.timedWait(BotNavigationGraphProvider.class, remaining);
+            } catch (InterruptedException interrupted) {
+                caller.interrupt();
+                return drainFailed("shutdown_thread_interrupted");
+            }
+            remaining = deadline - System.nanoTime();
+        }
+        return true;
+    }
+
+    private static boolean drainFailed(String reason) {
+        log.error("Navigation warmup drain failed: reason={} running_count={} threads={}", reason,
+                RUNNING_LOADS.size(), RUNNING_LOADS.stream().map(Thread::getName).sorted().toList());
+        return false;
+    }
+
+    private static synchronized boolean beginLoad(long generation) {
+        if (!acceptingLoads || generation != runtimeGeneration || GCMovement.isStopping()) return false;
+        RUNNING_LOADS.add(Thread.currentThread());
+        ACTIVE_LOAD_GENERATION.set(generation);
+        return true;
+    }
+
+    private static synchronized void finishLoad() {
+        ACTIVE_LOAD_GENERATION.remove();
+        RUNNING_LOADS.remove(Thread.currentThread());
+        BotNavigationGraphProvider.class.notifyAll();
+    }
+
+    static void checkBuildActive() {
+        Long generation = ACTIVE_LOAD_GENERATION.get();
+        if (generation != null && (generation != runtimeGeneration || Thread.currentThread().isInterrupted())) {
+            throw new CancellationException("Navigation load stopped");
+        }
     }
 
     private record GraphCacheKey(int mapId, int totalSpeedStat, int totalJumpStat, boolean snowShoes) {
@@ -426,8 +483,8 @@ final class BotNavigationGraphProvider {
         return exact != null ? exact : peekClosestGraph(map, movementProfile);
     }
 
-    static void warmGraphAsync(MapleMap map, BotMovementProfile movementProfile) {
-        if (map == null) {
+    static synchronized void warmGraphAsync(MapleMap map, BotMovementProfile movementProfile) {
+        if (map == null || !acceptingLoads || GCMovement.isStopping()) {
             return;
         }
         movementProfile = canonicalProfile(map, movementProfile);
@@ -446,15 +503,32 @@ final class BotNavigationGraphProvider {
      */
     static void warmGraphsForRouteAsync(MapManager mapFactory, List<Integer> mapIds,
                                         BotMovementProfile movementProfile) {
-        GRAPH_WARMUP_EXECUTOR.execute(() -> {
-            for (int mapId : mapIds) {
+        synchronized (BotNavigationGraphProvider.class) {
+            if (!acceptingLoads || GCMovement.isStopping()) return;
+            long session = runtimeGeneration;
+            GRAPH_WARMUP_EXECUTOR.execute(() -> {
+                if (!beginLoad(session)) return;
                 try {
-                    warmGraphAsync(mapFactory.getMap(mapId), movementProfile);
-                } catch (RuntimeException e) {
-                    log.warn("Route prewarm failed for map {}", mapId, e);
+                    for (int mapId : mapIds) {
+                        checkBuildActive();
+                        try {
+                            MapleMap map = mapFactory.getMap(mapId);
+                            checkBuildActive();
+                            warmGraphAsync(map, movementProfile);
+                        } catch (CancellationException cancelled) {
+                            if (session != runtimeGeneration) return;
+                            throw cancelled;
+                        } catch (RuntimeException e) {
+                            log.warn("Route prewarm failed for map {}", mapId, e);
+                        }
+                    }
+                } catch (CancellationException cancelled) {
+                    if (session == runtimeGeneration) log.warn("Route prewarm interrupted while active", cancelled);
+                } finally {
+                    finishLoad();
                 }
-            }
-        });
+            });
+        }
     }
 
     static BotNavigationGraph rebuildGraph(MapleMap map) {
@@ -478,7 +552,7 @@ final class BotNavigationGraphProvider {
                                                                              GraphCacheKey key,
                                                                              boolean async) {
         long session = runtimeGeneration;
-        if (GCMovement.isStopping()) return CompletableFuture.failedFuture(new java.util.concurrent.CancellationException());
+        if (!acceptingLoads || GCMovement.isStopping()) return CompletableFuture.failedFuture(new CancellationException());
         BotNavigationGraph cached = GRAPHS.get(key);
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
@@ -496,8 +570,9 @@ final class BotNavigationGraphProvider {
         }
 
         Runnable task = () -> {
+            boolean running = false;
             try {
-                if (session != runtimeGeneration || future.isCancelled()) {
+                if (future.isCancelled() || !(running = beginLoad(session))) {
                     // A stop may have cleared the registry before this old load
                     // was inserted, so cancellation must also settle this promise.
                     future.cancel(false);
@@ -529,12 +604,13 @@ final class BotNavigationGraphProvider {
                 }
             } finally {
                 PENDING_GRAPHS.remove(key, future);
+                if (running) finishLoad();
             }
         };
 
         if (async) {
             synchronized (BotNavigationGraphProvider.class) {
-                if (GCMovement.isStopping() || session != runtimeGeneration || future.isCancelled()) {
+                if (!acceptingLoads || GCMovement.isStopping() || session != runtimeGeneration || future.isCancelled()) {
                     future.cancel(false);
                     PENDING_GRAPHS.remove(key, future);
                 } else {
@@ -567,6 +643,7 @@ final class BotNavigationGraphProvider {
         }
 
         BotNavigationGraph built = buildGraph(map, movementProfile);
+        checkBuildActive();
         saveGraph(built);
         return built;
     }
@@ -617,6 +694,7 @@ final class BotNavigationGraphProvider {
         BuildProfileBuilder buildProfile = new BuildProfileBuilder(map.getId(), movementProfile);
         ACTIVE_BUILD_PROFILE.set(buildProfile);
         try {
+            checkBuildActive();
             List<Foothold> footholds = map.getFootholds() == null ? List.of() : map.getFootholds().getAllFootholds();
             Map<Integer, Foothold> footholdsById = new HashMap<>();
             List<Foothold> walkableFootholds = new ArrayList<>();
@@ -691,6 +769,7 @@ final class BotNavigationGraphProvider {
 
             phaseStartedAt = System.nanoTime();
             for (BotNavigationGraph.Region region : groundRegions) {
+                checkBuildActive();
                 addDropEdges(region, map, regionsById, regionIdByFootholdId,
                         anchorsByRegionId.getOrDefault(region.id, List.of()), outgoing, edgeKeys, movementProfile);
             }
@@ -698,6 +777,7 @@ final class BotNavigationGraphProvider {
 
             phaseStartedAt = System.nanoTime();
             for (BotNavigationGraph.Region region : groundRegions) {
+                checkBuildActive();
                 addJumpEdges(region, map, regionsById, regionIdByFootholdId,
                         anchorsByRegionId.getOrDefault(region.id, List.of()), outgoing, edgeKeys, jumpLandingCache, movementProfile);
             }
@@ -705,6 +785,7 @@ final class BotNavigationGraphProvider {
 
             phaseStartedAt = System.nanoTime();
             for (BotNavigationGraph.Region region : ropeRegions) {
+                checkBuildActive();
                 addRopeEntryEdges(region, groundRegions, ropeByRegionId, map, anchorsByRegionId,
                         outgoing, edgeKeys, ropeGrabCache, movementProfile);
             }
@@ -712,6 +793,7 @@ final class BotNavigationGraphProvider {
 
             phaseStartedAt = System.nanoTime();
             for (BotNavigationGraph.Region region : ropeRegions) {
+                checkBuildActive();
                 addRopeExitEdges(region, ropeRegions, ropeByRegionId, map, regionsById, regionIdByFootholdId, outgoing, edgeKeys, movementProfile);
             }
             buildProfile.buildRopeExitEdgesNs = System.nanoTime() - phaseStartedAt;

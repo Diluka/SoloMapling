@@ -37,6 +37,11 @@ public final class GCMovement {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
+    /** Reopen navigation work only after the new world's native maps are available. */
+    public static void start() {
+        BotNavigationGraphProvider.resumeLoads();
+    }
+
     /* Put a bot under dynamic control: build its profile, warm the map graph, start the tick. */
     public static void enable(Character bot) {
         if (bot == null || stopping) {
@@ -106,7 +111,9 @@ public final class GCMovement {
                 MovementCommands.releaseMovementLock(state.bot);
             }
             ObserverTracker.stop();
-            BotNavigationGraphProvider.cancelPendingLoads();
+            if (!BotNavigationGraphProvider.stopAndAwaitLoads(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Navigation warmup workers did not drain before native map disposal");
+            }
         } finally {
             stopping = false;
         }

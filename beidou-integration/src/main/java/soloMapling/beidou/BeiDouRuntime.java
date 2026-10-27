@@ -13,6 +13,7 @@ import soloMapling.ArtificialPlayer.BotGeneration;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.MessageQueue;
 import soloMapling.ArtificialPlayer.BotSM;
+import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
 import soloMapling.Environment.EnvironmentManager;
 import soloMapling.Environment.EnvironmentPopulationConfig;
@@ -47,6 +48,7 @@ public final class BeiDouRuntime {
             BotClientHandler.initHeadlessBotClient();
             EquipMetadataCache.initialize();
             DesirableEquipList.load();
+            GCMovement.start();
             BotTickService.start();
             // Manual GM bot creation must receive chat even when startup population
             // is disabled. Only this live lifecycle may restart message workers.
