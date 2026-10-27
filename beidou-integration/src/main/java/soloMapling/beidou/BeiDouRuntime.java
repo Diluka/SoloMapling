@@ -3,6 +3,8 @@ package soloMapling.beidou;
 import org.gms.client.Character;
 import org.gms.manager.ServerManager;
 import org.gms.soloacceptance.AcceptanceObservationRuntime;
+import org.gms.soloacceptance.actor.ActorControlService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
@@ -11,6 +13,7 @@ import soloMapling.ArtificialPlayer.BotGeneration;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.MessageQueue;
 import soloMapling.ArtificialPlayer.BotSM;
+import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
 import soloMapling.Environment.EnvironmentManager;
 import soloMapling.Environment.EnvironmentPopulationConfig;
@@ -36,6 +39,8 @@ public final class BeiDouRuntime {
         }
         try {
             AcceptanceObservationRuntime.onWorldStarted();
+            ActorControlService actors = actorControls();
+            if (actors != null) actors.onWorldStarted();
             Environment environment = ServerManager.getApplicationContext().getEnvironment();
             SoloMaplingLanguageConfig.configure(environment);
             SocialLlmService.configure(environment);
@@ -43,6 +48,7 @@ public final class BeiDouRuntime {
             BotClientHandler.initHeadlessBotClient();
             EquipMetadataCache.initialize();
             DesirableEquipList.load();
+            GCMovement.start();
             BotTickService.start();
             // Manual GM bot creation must receive chat even when startup population
             // is disabled. Only this live lifecycle may restart message workers.
@@ -65,6 +71,8 @@ public final class BeiDouRuntime {
 
     public static void onServerStopping() {
         AcceptanceObservationRuntime.onWorldStopped();
+        ActorControlService actors = actorControls();
+        if (actors != null) actors.onWorldStopping();
         if (!READY.getAndSet(false) && BotRegistry.snapshot().isEmpty()) {
             return;
         }
@@ -114,5 +122,11 @@ public final class BeiDouRuntime {
                 BotRegistry.unregister(character);
             }
         }
+    }
+
+    private static ActorControlService actorControls() {
+        if (ServerManager.getApplicationContext() == null) return null;
+        ObjectProvider<ActorControlService> actors = ServerManager.getApplicationContext().getBeanProvider(ActorControlService.class);
+        return actors == null ? null : actors.getIfAvailable();
     }
 }

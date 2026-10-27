@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "solomapling-acceptance-mcp"
 version = "0.1.0"
-description = "Read-only MCP tools for the SoloMapling BeiDou acceptance bridge"
+description = "Observation and native actor session MCP tools for the SoloMapling BeiDou acceptance bridge"
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"
 dependencies = [

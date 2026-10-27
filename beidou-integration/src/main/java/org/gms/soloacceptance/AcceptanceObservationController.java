@@ -6,8 +6,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,13 +28,13 @@ public final class AcceptanceObservationController {
 
     @GetMapping("/capabilities")
     public ResultBody<Map<String, Object>> capabilities() {
-        requireAdmin();
+        AcceptanceAccess.requireAdmin();
         return ResultBody.success(observations.capabilities());
     }
 
     @PostMapping("/observe")
     public ResultBody<Map<String, Object>> observe(@RequestBody SubmitBody<ObservationRequest> request) {
-        requireAdmin();
+        AcceptanceAccess.requireAdmin();
         return ResultBody.success(request, observations.observe(request == null ? null : request.getData()));
     }
 
@@ -61,13 +59,4 @@ public final class AcceptanceObservationController {
         return ResponseEntity.status(status).body(body);
     }
 
-    private static void requireAdmin() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated()) {
-            throw new ObservationException(HttpStatus.UNAUTHORIZED, "authentication_required");
-        }
-        if (authentication.getAuthorities().stream().noneMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()))) {
-            throw new ObservationException(HttpStatus.FORBIDDEN, "administrator_required");
-        }
-    }
 }

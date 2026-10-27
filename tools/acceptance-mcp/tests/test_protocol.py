@@ -10,7 +10,7 @@ import unittest
 from mcp import Client
 
 from solo_acceptance_mcp.server import build_server
-from solo_acceptance_mcp.smoke import run_smoke
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS, run_smoke
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN
 
 
@@ -21,11 +21,11 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
 
-    async def test_only_two_read_only_tools_and_bounded_schema_are_exposed(self) -> None:
+    async def test_implemented_tools_keep_observation_read_only_and_bounded(self) -> None:
         async with Client(build_server(self.stub.config())) as client:
             tools = (await client.list_tools()).tools
-            self.assertEqual(["game_capabilities", "game_observe"], sorted(tool.name for tool in tools))
-            for tool in tools:
+            self.assertEqual(sorted(IMPLEMENTED_TOOLS), sorted(tool.name for tool in tools))
+            for tool in [tool for tool in tools if tool.name in {"game_capabilities", "game_observe"}]:
                 self.assertTrue(tool.annotations.read_only_hint)
                 self.assertFalse(tool.annotations.destructive_hint)
                 self.assertTrue(tool.annotations.idempotent_hint)

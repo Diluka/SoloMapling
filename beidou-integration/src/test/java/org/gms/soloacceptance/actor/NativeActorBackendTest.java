@@ -1,0 +1,465 @@
+package org.gms.soloacceptance.actor;
+
+import org.gms.client.Character;
+import org.gms.client.Client;
+import org.gms.client.Job;
+import org.gms.client.inventory.Inventory;
+import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
+import org.gms.constants.id.MapId;
+import org.gms.dao.entity.AccountsDO;
+import org.gms.dao.entity.CharactersDO;
+import org.gms.net.server.PlayerStorage;
+import org.gms.net.server.Server;
+import org.gms.net.server.channel.Channel;
+import org.gms.net.server.coordinator.matchchecker.MatchCheckerCoordinator;
+import org.gms.net.server.coordinator.session.Hwid;
+import org.gms.net.server.coordinator.session.SessionCoordinator;
+import org.gms.net.server.world.World;
+import org.gms.server.maps.MapleMap;
+import org.gms.service.AccountService;
+import org.gms.service.CharacterService;
+import org.gms.service.NoteService;
+import org.gms.soloacceptance.ObservationException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.MockedConstruction;
+import soloMapling.beidou.CharacterTestContext;
+
+import java.awt.Point;
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+/** Guard and observable-state tests use in-memory mocks, never a datasource. */
+class NativeActorBackendTest {
+    private ActorProfiles profiles;
+    private AccountService accounts;
+    private CharacterService characters;
+    private Server server;
+    private World world;
+    private Channel channel;
+    private PlayerStorage worldPlayers;
+    private PlayerStorage channelPlayers;
+    private Character character;
+    private AcceptanceClient client;
+    private MapleMap map;
+    private NativeActorHandle handle;
+    private NativeActorBackend backend;
+    private MockedStatic<ActorAccountOwnership> ownership;
+    private ActorAccountOwnership.Lease lease;
+
+    @BeforeEach
+    void setup() {
+        CharacterTestContext.install();
+        profiles = new ActorProfiles();
+        ActorProfiles.Profile profile = new ActorProfiles.Profile();
+        profile.setAccountName("mcp_primary");
+        profile.setAccountPassword("test-private-password");
+        profile.setCharacterName("McpPrimary");
+        profiles.setActorProfiles(Map.of("primary", profile));
+        accounts = mock(AccountService.class);
+        characters = mock(CharacterService.class);
+        server = mock(Server.class);
+        world = mock(World.class);
+        channel = mock(Channel.class);
+        worldPlayers = mock(PlayerStorage.class);
+        channelPlayers = mock(PlayerStorage.class);
+        when(server.getWorld(0)).thenReturn(world);
+        when(server.getWorlds()).thenReturn(List.of(world));
+        when(world.getId()).thenReturn(0);
+        when(channel.getId()).thenReturn(1);
+        when(world.getChannel(1)).thenReturn(channel);
+        when(world.getPlayerStorage()).thenReturn(worldPlayers);
+        when(channel.getPlayerStorage()).thenReturn(channelPlayers);
+        when(worldPlayers.getAllCharacters()).thenReturn(List.of());
+        backend = new NativeActorBackend(profiles, accounts, characters, mock(NoteService.class), () -> server);
+        character = mock(Character.class);
+        client = mock(AcceptanceClient.class);
+        map = mock(MapleMap.class);
+        when(character.getId()).thenReturn(41);
+        when(character.getAccountId()).thenReturn(17);
+        when(character.getName()).thenReturn("McpPrimary");
+        when(character.getClient()).thenReturn(client);
+        when(character.getMap()).thenReturn(map);
+        when(character.getMapId()).thenReturn(10000);
+        when(character.getPosition()).thenReturn(new Point(4, 8));
+        when(character.getLevel()).thenReturn(1);
+        when(character.getHp()).thenReturn(50);
+        when(character.getMp()).thenReturn(5);
+        when(character.getJob()).thenReturn(Job.BEGINNER);
+        when(character.isLoggedIn()).thenReturn(true);
+        when(character.isLoggedInWorld()).thenReturn(true);
+        when(client.getPlayer()).thenReturn(character);
+        when(client.getAccID()).thenReturn(17);
+        when(client.getChannel()).thenReturn(1);
+        when(client.isLoggedIn()).thenReturn(true);
+        when(worldPlayers.getCharacterById(41)).thenReturn(character);
+        when(channelPlayers.getCharacterById(41)).thenReturn(character);
+        when(map.getCharacterById(41)).thenReturn(character);
+        when(map.getId()).thenReturn(10000);
+        when(map.getForcedReturnId()).thenReturn(MapId.NONE);
+        lease = mock(ActorAccountOwnership.Lease.class);
+        ownership = mockStatic(ActorAccountOwnership.class);
+        ownership.when(() -> ActorAccountOwnership.claim(17)).thenReturn(lease);
+        ownership.when(() -> ActorAccountOwnership.owns(lease, client)).thenReturn(true);
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(client);
+        handle = new NativeActorHandle("primary", 17, client, character, world, channel, lease, false, false);
+    }
+
+    @AfterEach
+    void closeStaticOwnershipMock() { ownership.close(); }
+
+    @Test
+    void profileValidationNeverTouchesGameDataOrWorld() {
+        backend.validateProfile("primary", 0, 1);
+        assertEquals("profile_channel_mismatch", assertThrows(ObservationException.class,
+                () -> backend.validateProfile("primary", 0, 2)).reason());
+        verifyNoInteractions(accounts, characters, server);
+    }
+
+    @Test
+    void cancelledOpenDoesNotReadOrWriteFixtures() {
+        assertThrows(CancellationException.class, () -> backend.open("primary", null, null, () -> true));
+        verifyNoInteractions(accounts, characters, server);
+    }
+
+    @Test
+    void missingAccountRequiresExplicitFixtureCreationPermission() throws Exception {
+        assertEquals("actor_account_missing", assertThrows(ObservationException.class,
+                () -> backend.open("primary", null, null, () -> false)).reason());
+        verify(accounts, never()).addAccount(any());
+        verifyNoInteractions(characters);
+    }
+
+    @Test
+    void refusesExistingPrivilegedAndOnlineAccountsBeforeNativeLogin() throws Exception {
+        AccountsDO account = account();
+        account.setWebadmin(1);
+        when(accounts.findByName("mcp_primary")).thenReturn(account);
+        assertEquals("actor_account_not_eligible", assertThrows(ObservationException.class,
+                () -> backend.open("primary", null, null, () -> false)).reason());
+        account.setWebadmin(0);
+        account.setLoggedin(Client.LOGIN_LOGGEDIN);
+        when(accounts.findById(17)).thenReturn(account);
+        assertEquals("actor_account_in_use", assertThrows(ObservationException.class,
+                () -> backend.open("primary", null, null, () -> false)).reason());
+        verify(accounts, never()).update(any());
+        verify(accounts, never()).addAccount(any());
+        verifyNoInteractions(characters);
+    }
+
+    @Test
+    void refusesAnOnlineCharacterEvenWhenSqlLoginStateSaysOffline() {
+        AccountsDO account = account();
+        when(accounts.findByName("mcp_primary")).thenReturn(account);
+        when(accounts.findById(17)).thenReturn(account);
+        when(worldPlayers.getAllCharacters()).thenReturn(List.of(character));
+        assertEquals("actor_account_in_use", assertThrows(ObservationException.class,
+                () -> backend.open("primary", null, null, () -> false)).reason());
+        verifyNoInteractions(characters);
+    }
+
+    @Test
+    void interruptedFixtureBootstrapCanResumeNativeTermsAcceptanceOnRetry() throws Exception {
+        profiles.getActorProfiles().get("primary").setAllowCreate(true);
+        AccountsDO account = account();
+        account.setTos(false);
+        when(accounts.findByName("mcp_primary")).thenReturn(null, account);
+        when(accounts.findById(17)).thenReturn(account);
+        AtomicInteger checks = new AtomicInteger();
+        assertThrows(CancellationException.class,
+                () -> backend.open("primary", null, null, () -> checks.incrementAndGet() > 1));
+        verify(accounts, times(1)).addAccount(any());
+
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+        ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
+        try (MockedStatic<SessionCoordinator> sessions = mockStatic(SessionCoordinator.class);
+             MockedConstruction<AcceptanceClient> clients = mockConstruction(AcceptanceClient.class,
+                     (nativeClient, context) -> {
+                         when(nativeClient.login(eq("mcp_primary"), eq("test-private-password"), any(Hwid.class)))
+                                 .thenReturn(23, 0);
+                         // Stop before native publication; this test deliberately has no datasource.
+                         when(nativeClient.finishLogin()).thenReturn(7);
+                     })) {
+            sessions.when(SessionCoordinator::getInstance).thenReturn(mock(SessionCoordinator.class));
+            assertEquals("actor_native_login_conflict", assertThrows(ObservationException.class,
+                    () -> backend.open("primary", null, null, () -> false)).reason());
+            AcceptanceClient nativeClient = clients.constructed().getFirst();
+            verify(nativeClient, times(1)).acceptToS();
+            verify(nativeClient, times(2)).login(eq("mcp_primary"), eq("test-private-password"), any(Hwid.class));
+        }
+        // Retrying an interrupted bootstrap must not recreate or delete its retained account.
+        verify(accounts, times(1)).addAccount(any());
+        verifyNoInteractions(characters);
+    }
+
+    @Test
+    void existingAccountWithoutBootstrapPermissionDoesNotAcceptTermsOrPublishLogin() {
+        AccountsDO account = account();
+        account.setTos(false);
+        when(accounts.findByName("mcp_primary")).thenReturn(account);
+        when(accounts.findById(17)).thenReturn(account);
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+        ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
+        try (MockedStatic<SessionCoordinator> sessions = mockStatic(SessionCoordinator.class);
+             MockedConstruction<AcceptanceClient> clients = mockConstruction(AcceptanceClient.class,
+                     (nativeClient, context) -> when(nativeClient.login(anyString(), anyString(), any(Hwid.class)))
+                             .thenReturn(23))) {
+            sessions.when(SessionCoordinator::getInstance).thenReturn(mock(SessionCoordinator.class));
+            assertEquals("actor_native_login_rejected", assertThrows(ObservationException.class,
+                    () -> backend.open("primary", null, null, () -> false)).reason());
+            verify(clients.constructed().getFirst(), never()).acceptToS();
+            verify(clients.constructed().getFirst(), never()).finishLogin();
+        }
+        verifyNoInteractions(characters);
+    }
+
+    @Test
+    void currentSessionRequiresExactNativeObjectsAtEveryRegistration() {
+        assertTrue(backend.isCurrent(handle));
+        when(map.getCharacterById(41)).thenReturn(mock(Character.class));
+        assertFalse(backend.isCurrent(handle));
+        when(map.getCharacterById(41)).thenReturn(character);
+        when(server.getWorld(0)).thenReturn(mock(World.class));
+        assertFalse(backend.isCurrent(handle));
+        when(server.getWorld(0)).thenReturn(world);
+        when(client.getChannel()).thenReturn(2);
+        assertFalse(backend.isCurrent(handle));
+        when(client.getChannel()).thenReturn(1);
+        when(client.getAccID()).thenReturn(18);
+        assertFalse(backend.isCurrent(handle));
+        verifyNoInteractions(accounts, characters);
+    }
+
+    @Test
+    void staleCloseCannotStartNativeLogoutOrTouchPersistence() {
+        when(server.getWorld(0)).thenReturn(mock(World.class));
+        ObservationException failure = assertThrows(ObservationException.class, () -> backend.close(handle));
+        assertTrue(failure.reason().contains("cleanup_unverified"));
+        verify(client, never()).disconnect(anyBoolean(), anyBoolean());
+        verifyNoInteractions(accounts, characters);
+    }
+
+    @Test
+    void verifiedCloseEvidenceIsIdempotentAndDoesNotOperateOnAnAlreadyClosedSession() {
+        Map<String, Object> evidence = Map.of("native_cleanup_verified", true, "fixture_retained", true);
+        handle.recordClose(evidence);
+        assertEquals(evidence, backend.close(handle));
+        assertFalse(backend.isCurrent(handle));
+        verifyNoInteractions(accounts, characters);
+        verify(client, never()).disconnect(anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    void timedOutLogoutCanBeVerifiedLaterWithoutLoggingOutAgainOrReadingClearedCharacterFields() {
+        backend = new NativeActorBackend(profiles, accounts, characters, mock(NoteService.class), () -> server, 0);
+        MatchCheckerCoordinator match = mock(MatchCheckerCoordinator.class);
+        when(world.getMatchCheckerCoordinator()).thenReturn(match);
+        when(match.getMatchConfirmationLeaderid(41)).thenReturn(-1);
+        AccountsDO account = account();
+        account.setLoggedin(Client.LOGIN_LOGGEDIN);
+        when(accounts.findById(17)).thenReturn(account);
+
+        ObservationException first = assertThrows(ObservationException.class, () -> backend.close(handle));
+        assertTrue(first.reason().contains("cleanup_unverified"));
+        assertNotNull(handle.closeContext());
+        assertNull(handle.closeEvidence());
+
+        // Model a native logout that completed after the first bounded wait, followed by empty().
+        account.setLoggedin(Client.LOGIN_NOTLOGGEDIN);
+        when(client.getPlayer()).thenReturn(null);
+        when(client.isLoggedIn()).thenReturn(false);
+        when(character.isLoggedIn()).thenReturn(false);
+        when(character.isLoggedInWorld()).thenReturn(false);
+        when(character.getMap()).thenReturn(null);
+        when(character.getClient()).thenReturn(null);
+        when(character.getLevel()).thenReturn(999); // The verification must use its frozen expectation.
+        when(worldPlayers.getCharacterById(41)).thenReturn(null);
+        when(channelPlayers.getCharacterById(41)).thenReturn(null);
+        when(map.getCharacterById(41)).thenReturn(null);
+        when(characters.findById(41)).thenReturn(stored());
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+        ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
+
+        Map<String, Object> evidence = backend.close(handle);
+        assertEquals(true, evidence.get("native_cleanup_verified"));
+        assertEquals(true, evidence.get("persisted_state_verified"));
+        verify(client, times(1)).disconnect(false, false);
+        verify(match, times(1)).dismissMatchConfirmation(41);
+        assertEquals(evidence, backend.close(handle));
+        ownership.verify(() -> ActorAccountOwnership.release(lease), times(1));
+    }
+
+    @Test
+    void resumedCloseRefusesAForeignOwnerAndKeepsOwnershipReserved() {
+        handle.beginClose(new NativeActorHandle.CloseContext(map, 41, 17, 0, "McpPrimary",
+                1, 0, 50, 5, 0, 0, 10000));
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(mock(Client.class));
+        ObservationException failure = assertThrows(ObservationException.class, () -> backend.close(handle));
+        assertEquals("actor_close_cleanup_unverified_stale_owner", failure.reason());
+        verify(client, never()).disconnect(anyBoolean(), anyBoolean());
+        ownership.verify(() -> ActorAccountOwnership.release(lease), never());
+        verifyNoInteractions(accounts, characters);
+    }
+
+    @Test
+    void snapshotReportsNativeIdentityAndBoundedPublicInventoryWithoutPasswordsOrPackets() {
+        when(characters.findById(41)).thenReturn(stored());
+        for (InventoryType type : List.of(InventoryType.EQUIPPED, InventoryType.EQUIP, InventoryType.USE,
+                InventoryType.SETUP, InventoryType.ETC, InventoryType.CASH)) {
+            Inventory inventory = mock(Inventory.class);
+            when(inventory.list()).thenReturn(List.of());
+            when(character.getInventory(type)).thenReturn(inventory);
+        }
+        Item item = mock(Item.class);
+        when(item.getItemId()).thenReturn(2000000);
+        when(item.getPosition()).thenReturn((short) 1);
+        when(item.getQuantity()).thenReturn((short) 7);
+        when(character.getInventory(InventoryType.USE).list()).thenReturn(java.util.Collections.nCopies(101, item));
+        Map<String, Object> snapshot = backend.snapshot(handle);
+        assertEquals(41, snapshot.get("character_id"));
+        assertEquals(17, snapshot.get("account_id"));
+        assertEquals(false, snapshot.get("is_bot"));
+        assertEquals(true, snapshot.get("persisted"));
+        assertEquals(Map.of("x", 4, "y", 8), snapshot.get("position"));
+        Map<?, ?> use = (Map<?, ?>) ((Map<?, ?>) snapshot.get("inventory_summary")).get("use");
+        assertEquals(101, use.get("count"));
+        assertEquals(true, use.get("truncated"));
+        assertEquals(100, ((List<?>) use.get("items")).size());
+        assertFalse(snapshot.toString().contains("test-private-password"));
+        assertFalse(snapshot.containsKey("packet_payload"));
+        verifyNoInteractions(accounts);
+    }
+
+    @Test
+    void persistenceVerificationChecksNativeMapRulesAndRejectsChangedIdentityAndState() {
+        CharactersDO stored = stored();
+        assertTrue(backend.matchesPersistedState(handle, stored, map));
+        when(map.getForcedReturnId()).thenReturn(999);
+        assertFalse(backend.matchesPersistedState(handle, stored, map));
+        stored.setMap(999);
+        assertTrue(backend.matchesPersistedState(handle, stored, map));
+        when(map.getForcedReturnId()).thenReturn(MapId.NONE);
+        when(character.getHp()).thenReturn(0);
+        when(map.getReturnMapId()).thenReturn(100);
+        stored.setMap(100);
+        stored.setHp(0);
+        assertTrue(backend.matchesPersistedState(handle, stored, map));
+        stored.setAccountid(18);
+        assertFalse(backend.matchesPersistedState(handle, stored, map));
+        stored.setAccountid(17);
+        stored.setMeso(1);
+        assertFalse(backend.matchesPersistedState(handle, stored, map));
+        verifyNoInteractions(accounts, characters);
+    }
+
+    @Test
+    void syntheticLoopbackAddressIsStableAndDistinctForProfileAccounts() {
+        assertEquals("127.0.0.17", NativeActorBackend.remoteAddress(17));
+        assertNotEquals(NativeActorBackend.remoteAddress(17), NativeActorBackend.remoteAddress(18));
+        assertEquals("127.1.2.3", NativeActorBackend.remoteAddress(0x010203));
+    }
+
+    @Test
+    void sameJvmWorldRestartInitializesNativeAccountViewBeforeTheNextSave() throws Exception {
+        World restartedWorld = nativeWorldWithEmptyAccountViews();
+        Server retainedServer = mock(Server.class);
+        ReentrantReadWriteLock loginLock = new ReentrantReadWriteLock();
+        Map<Integer, Set<Integer>> retainedAccounts = new HashMap<>();
+        retainedAccounts.put(17, new HashSet<>(Set.of(41)));
+        Map<Integer, Integer> retainedWorlds = new HashMap<>(Map.of(41, 0));
+        Map<Integer, Short> retainedCounts = new HashMap<>(Map.of(17, (short) 1));
+        nativeField(Server.class, retainedServer, "lgnRLock", loginLock.readLock());
+        nativeField(Server.class, retainedServer, "lgnWLock", loginLock.writeLock());
+        nativeField(Server.class, retainedServer, "accountChars", retainedAccounts);
+        nativeField(Server.class, retainedServer, "worldChars", retainedWorlds);
+        nativeField(Server.class, retainedServer, "accountCharacterCount", retainedCounts);
+        when(retainedServer.getWorld(0)).thenReturn(restartedWorld);
+        when(retainedServer.getWorlds()).thenReturn(List.of(restartedWorld));
+        doCallRealMethod().when(retainedServer).loadAccountCharacters(client);
+        doCallRealMethod().when(retainedServer).updateCharacterEntry(character);
+        when(character.generateCharacterEntry()).thenReturn(character);
+
+        // Reproduce #67 using the native cached-account early return and exact failing save prefix.
+        retainedServer.loadAccountCharacters(client);
+        assertThrows(NullPointerException.class, () -> retainedServer.updateCharacterEntry(character));
+
+        NativeActorBackend.prepareCharacterViews(retainedServer, client, restartedWorld);
+        assertDoesNotThrow(() -> retainedServer.updateCharacterEntry(character));
+        assertEquals(List.of(character), restartedWorld.getAccountCharactersView(17));
+        assertEquals(Set.of(41), retainedAccounts.get(17));
+        assertEquals(0, retainedWorlds.get(41));
+        assertEquals((short) 1, retainedCounts.get(17));
+        verifyNoInteractions(accounts, characters);
+    }
+
+    @Test
+    void nativeAccountViewPreparationPreservesExistingOtherCharacters() throws Exception {
+        World currentWorld = nativeWorldWithEmptyAccountViews();
+        Character other = mock(Character.class);
+        when(other.getId()).thenReturn(42);
+        currentWorld.loadAccountCharactersView(17, List.of(other));
+
+        NativeActorBackend.prepareCharacterViews(server, client, currentWorld);
+        currentWorld.registerAccountCharacterView(17, character);
+
+        assertEquals(List.of(character, other), currentWorld.getAccountCharactersView(17));
+        verify(server).loadAccountCharacters(client);
+        verifyNoInteractions(accounts, characters);
+    }
+
+    private static World nativeWorldWithEmptyAccountViews() throws Exception {
+        World nativeWorld = mock(World.class, CALLS_REAL_METHODS);
+        nativeField(World.class, nativeWorld, "accountChars", new HashMap<Integer, SortedMap<Integer, Character>>());
+        nativeField(World.class, nativeWorld, "accountCharsLock", new ReentrantLock());
+        return nativeWorld;
+    }
+
+    private static void nativeField(Class<?> declaringClass, Object target, String name, Object value) throws Exception {
+        Field field = declaringClass.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private AccountsDO account() {
+        AccountsDO account = new AccountsDO();
+        account.setId(17);
+        account.setName("mcp_primary");
+        account.setWebadmin(0);
+        account.setBanned(false);
+        account.setLoggedin(Client.LOGIN_NOTLOGGEDIN);
+        return account;
+    }
+
+    private CharactersDO stored() {
+        CharactersDO row = new CharactersDO();
+        row.setId(41);
+        row.setAccountid(17);
+        row.setName("McpPrimary");
+        row.setWorld(0);
+        row.setGm(0);
+        row.setLevel(1);
+        row.setExp(0);
+        row.setHp(50);
+        row.setMp(5);
+        row.setMeso(0);
+        row.setJob(0);
+        row.setMap(10000);
+        row.setParty(-1);
+        return row;
+    }
+}

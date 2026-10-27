@@ -8,8 +8,10 @@ import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
 import org.apache.logging.log4j.core.layout.PatternLayout;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.MapManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import soloMapling.beidou.CharacterTestContext;
@@ -18,6 +20,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.awt.Point;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -44,9 +47,15 @@ class BotNavigationGraphCancellationTest {
         BotNavigationGraphProvider.cancelPendingLoads();
     }
 
+    @BeforeEach
+    void allowNavigationLoads() {
+        GCMovement.start();
+    }
+
     @AfterEach
     void cleanTestGraph() throws Exception {
         BotNavigationGraphProvider.cancelPendingLoads();
+        GCMovement.start();
         Object key = key();
         for (String name : List.of("GRAPHS", "PENDING_GRAPHS", "LAST_BUILD_REPORTS")) {
             cache(name).remove(key);
@@ -133,6 +142,108 @@ class BotNavigationGraphCancellationTest {
     @Test
     void obsoleteDomainFailureRemainsVisible() throws Exception {
         failureDuringBuild(new NullPointerException("obsolete graph domain failure"), true, true);
+    }
+
+    @Test
+    void stoppingMovementWaitsForOldMapReadersAndCancelsTheirNextPhysicsProbe() throws Exception {
+        MapleMap map = map();
+        CountDownLatch readingMap = new CountDownLatch(1);
+        CountDownLatch releaseReader = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        when(map.getRopes()).thenAnswer(call -> {
+            readingMap.countDown();
+            awaitUninterruptibly(releaseReader, interrupted);
+            // A real warmup next reaches this probe in its jump simulation. Cancellation
+            // must stop it before the native fallback touches a disposed foothold tree.
+            BotPhysicsEngine.pointBelowIndexed(map, new Point());
+            return List.of();
+        });
+        CompletableFuture<CompletableFuture<BotNavigationGraph>> returned = new CompletableFuture<>();
+        Thread reader = runLoad(map, returned);
+        CompletableFuture<Void> stopping = null;
+        try {
+            assertTrue(readingMap.await(3, TimeUnit.SECONDS));
+            stopping = CompletableFuture.runAsync(GCMovement::stopAll);
+            assertTrue(interrupted.await(3, TimeUnit.SECONDS), "Shutdown must interrupt the live warmup");
+            assertFalse(stopping.isDone(), "A cancelled promise must not release native map disposal yet");
+            releaseReader.countDown();
+            stopping.get(3, TimeUnit.SECONDS);
+            assertTrue(returned.get(3, TimeUnit.SECONDS).isCancelled());
+            verify(map, never()).getPointBelow(any());
+            assertNull(BotNavigationGraphProvider.peekGraph(map));
+        } finally {
+            releaseReader.countDown();
+            reader.join(3000);
+            if (stopping != null) stopping.get(3, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void stoppedNavigationRejectsLateRoutesAndResumesOnTheSameExecutor() throws Exception {
+        MapleMap map = map();
+        MapManager maps = mock(MapManager.class);
+        when(maps.getMap(mapId)).thenReturn(map);
+        assertTrue(BotNavigationGraphProvider.stopAndAwaitLoads(1, TimeUnit.SECONDS));
+        BotNavigationGraphProvider.warmGraphsForRouteAsync(maps, List.of(mapId + 1), BotMovementProfile.base());
+        BotNavigationGraphProvider.warmGraphAsync(map, BotMovementProfile.base());
+        verifyNoInteractions(maps);
+        verify(map, never()).getFootholds();
+
+        GCMovement.start();
+        BotNavigationGraphProvider.warmGraphsForRouteAsync(maps, List.of(mapId), BotMovementProfile.base());
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (BotNavigationGraphProvider.peekGraph(map) == null && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertNotNull(BotNavigationGraphProvider.peekGraph(map), "The reusable executor must warm the next world");
+        verify(maps).getMap(mapId);
+        verify(maps, never()).getMap(mapId + 1);
+    }
+
+    @Test
+    void drainTimeoutDoesNotClaimAStillRunningReaderHasStopped() throws Exception {
+        MapleMap map = map();
+        CountDownLatch readingMap = new CountDownLatch(1);
+        CountDownLatch releaseReader = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        when(map.getRopes()).thenAnswer(call -> {
+            readingMap.countDown();
+            awaitUninterruptibly(releaseReader, interrupted);
+            BotNavigationGraphProvider.checkBuildActive();
+            return List.of();
+        });
+        CompletableFuture<CompletableFuture<BotNavigationGraph>> returned = new CompletableFuture<>();
+        Thread reader = runLoad(map, returned);
+        try {
+            assertTrue(readingMap.await(3, TimeUnit.SECONDS));
+            assertFalse(BotNavigationGraphProvider.stopAndAwaitLoads(20, TimeUnit.MILLISECONDS));
+            assertTrue(interrupted.await(3, TimeUnit.SECONDS));
+            assertFalse(returned.isDone(), "Timeout must preserve the running reader's actual state");
+            releaseReader.countDown();
+            assertTrue(BotNavigationGraphProvider.stopAndAwaitLoads(3, TimeUnit.SECONDS));
+            assertTrue(returned.get(3, TimeUnit.SECONDS).isCancelled());
+        } finally {
+            releaseReader.countDown();
+            reader.join(3000);
+        }
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch release, CountDownLatch interrupted) throws InterruptedException {
+        boolean restoreInterrupt = false;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        try {
+            while (true) {
+                try {
+                    assertTrue(release.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS));
+                    return;
+                } catch (InterruptedException cancellation) {
+                    restoreInterrupt = true;
+                    interrupted.countDown();
+                }
+            }
+        } finally {
+            if (restoreInterrupt) Thread.currentThread().interrupt();
+        }
     }
 
     private void failureDuringBuild(RuntimeException failure, boolean cancelGeneration, boolean reported) throws Exception {

@@ -70,6 +70,18 @@ LLM 沿用相同语言选择，静态本地化无须启用模型调用。
 本项不修改北斗资源、配置或迁移。具体来源与持续更新约定见
 [维护说明](MAINTENANCE.md#本地化来源与更新)。
 
+## MCP 验收桥
+
+验收桥默认关闭，使用正常管理端 JWT 与管理员权限。R1 提供只读世界/场景观察；
+R2a 新增专用原生角色的登录、正常退出、存档核验和异步操作查询，须另外启用
+`solomapling.acceptance.actors-enabled` 并在本地配置专用 profile。
+新增代码和账号所有权切面均在 Solo 侧，北斗 submodule 保持原样。
+
+配置、工具能力与当前验收边界见 [MCP 方案与迭代状态](../docs/mcp-acceptance/README.md)；
+安装和显式目标的协议/角色冒烟见 [工具运行说明](../tools/acceptance-mcp/README.md)。
+MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities` 为准。
+普通聊天、NPC 对话和命名 recipe 仍按后续切片交付，角色生命周期不代表这些玩法已通过。
+
 ## 验证边界
 
 构建会验证 submodule 始终干净；默认执行独立的 LLM 与集成 JUnit 测试，

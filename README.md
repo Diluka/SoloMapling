@@ -72,7 +72,7 @@ solomapling:
 
 [组队任务目录与规则设计](docs/party-quests/README.md) 按固定北斗 1.12 源码盘点全部事件，并补查 Java 驱动的挑战和比赛。设计采用通用 `PartyQuestBot`、每任务独立规则，以及每次运行的团队协调器，重点覆盖分工、多人同时站位、目标预约、失败补位与真人协作。每个任务家族都有独立实现和验收 Issue；当前交付是设计与计划，尚未新增可运行的通关机器人。
 
-[MCP 游戏验收机器人](docs/mcp-acceptance/README.md) 按小轮实现和实际验证推进。R1 提供只读 `game_capabilities`、`game_observe` 与默认关闭的正常鉴权观察桥；[安装与配置](tools/acceptance-mcp/README.md)见工具说明。专用验收角色、动作控制、回复捕获和内置流程继续按后续轮次实现，当前不会因接口接通就宣称玩法已验收。
+[MCP 游戏验收机器人](docs/mcp-acceptance/README.md) 按可独立验收的小轮推进。R1 提供只读 `game_capabilities`、`game_observe`；R2a 增加专用原生角色登录、正常保存退出和操作查询/取消，需另外启用角色开关并配置 profile。[安装、配置与生命周期验收](tools/acceptance-mcp/README.md)见工具说明。实际能力以 `game_capabilities` 为准；聊天、NPC 对话和内置流程按后续 Issue 实现，角色控制可用不等于玩法已经验收。
 
 ## 来源与许可
 
