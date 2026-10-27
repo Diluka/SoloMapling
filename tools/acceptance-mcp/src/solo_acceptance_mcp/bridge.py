@@ -166,6 +166,30 @@ def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None
         raise BridgeError("INVALID_ARGUMENTS", label + " 必须是允许范围内的整数。")
 
 
+def validate_chat_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
+    if action != "chat" or not isinstance(action, str):
+        raise BridgeError("INVALID_ARGUMENTS", "action 当前只支持 chat。")
+    if not isinstance(parameters, dict) or set(parameters) != {"text"}:
+        raise BridgeError("INVALID_ARGUMENTS", "parameters 必须且只能包含 text。")
+    text = parameters["text"]
+    if (not isinstance(text, str) or not text or text.isspace() or text[0] in {"@", "/"}
+            or sum(2 if ord(char) > 0xFFFF else 1 for char in text) > 127
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in text)):
+        raise BridgeError("INVALID_ARGUMENTS", "text 必须是1～127个 UTF-16 单元的非空白普通聊天，首字符不能为 @ 或 /。")
+    if not isinstance(expected_context, dict) or set(expected_context) != {"scene_ref", "runtime_generation"}:
+        raise BridgeError("INVALID_ARGUMENTS", "expected_context 必须且只能包含 scene_ref 和 runtime_generation。")
+    for key in ["scene_ref", "runtime_generation"]:
+        validate_identifier(expected_context[key], key)
+
+
+def validate_action_request(session_id: str, expected_generation: int, request_id: str, action: str,
+                            parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
+    validate_identifier(session_id, "session_id")
+    validate_integer(expected_generation, "expected_generation", 1, MAX_LONG)
+    validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+    validate_chat_action(action, parameters, expected_context)
+
+
 class BridgeClient:
     MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
@@ -242,6 +266,16 @@ class BridgeClient:
             "/solo/acceptance/v1/actor/close",
             {"session_id": session_id, "expected_generation": expected_generation}, request_id,
         )
+
+    async def act(
+        self, session_id: str, expected_generation: int, *, request_id: str,
+        action: str, parameters: dict[str, Any], expected_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        validate_action_request(session_id, expected_generation, request_id, action, parameters, expected_context)
+        return await self._mutation("/solo/acceptance/v1/actor/act", {
+            "session_id": session_id, "expected_generation": expected_generation, "action": action,
+            "parameters": dict(parameters), "expected_context": dict(expected_context),
+        }, request_id)
 
     async def operation_get(
         self, operation_id: str, *, since_cursor: int = 0, limit: int = 100,

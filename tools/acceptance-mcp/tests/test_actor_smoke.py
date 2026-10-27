@@ -11,7 +11,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure, checkpoint, require_persistence_summaries, run_actor_smoke
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS
+from solo_acceptance_mcp.smoke import ACTOR_IMPLEMENTED_TOOLS
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 
 
@@ -74,7 +74,7 @@ class ActorSmokeStub(BridgeStub):
         if path == "/solo/acceptance/v1/capabilities":
             caps = deepcopy(CAPABILITIES)
             if self.mode != "disabled":
-                caps.update(implementation_round="R2a", enabled_tools=sorted(IMPLEMENTED_TOOLS))
+                caps.update(implementation_round="R2a", enabled_tools=sorted(ACTOR_IMPLEMENTED_TOOLS))
             return 200, envelope(caps)
         if path == "/solo/acceptance/v1/actor/open":
             if self.mode == "open_timeout":
