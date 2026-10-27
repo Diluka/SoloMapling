@@ -1,0 +1,107 @@
+# 统一角色运行体与模块协议：第一轮
+
+状态：`v0.1` 实现和协议验证中，尚未表示 MCP 已迁入或实际服务已部署。
+阶段入口为 [M1 #79](https://github.com/Diluka/SoloMapling/issues/79)，MCP 首环与次环分别为
+[#139](https://github.com/Diluka/SoloMapling/issues/139)、[#140](https://github.com/Diluka/SoloMapling/issues/140)。
+
+本轮只实现通用角色壳、模块协议和 MCP 首个真实控制模块。生产自主练级、巡逻、刷怪、
+跟随及其策略仍需设计，不是本轮交付或硬前置。测试模块只检验协议机制。
+
+## 分工与迭代
+
+- 运行体会话负责 `soloMapling.game.runtime` 的宿主、模块协议和机制测试。
+- MCP 会话负责后端 MCP 控制模块、`AcceptanceActorExecution`/`ActorControlService`
+  接入和外部协议/真实原生验收。
+- 从单壳聊天/观察闭环开始，再扩展暂停、卸载重挂及完整角色关闭、多实例隔离。
+  接口以实际调用和验证结论逐步扩展，不预先实现槽位系统、所有运行域或通用插件框架。
+
+## 一个实例持有什么
+
+`CharacterRuntime` 在原生 OPEN 前创建并拥有：
+
+- 固定 `WorldEpoch` 与运行身份；
+- 一个根 `ExecutionScope`、原生角色资源握手及来源适配；
+- 唯一 `CharacterCommandLane` 和它借用的承载 executor 的最终关闭责任；
+- 模块实例、各模块的独立作用域/控制 Grant 及有限资源声明；
+- 安全的运行体快照和独立事件窗口。
+
+它不拥有第二份等级、背包、队伍等角色档案，不自行选怪或安排活动。
+`RoleBinding.observe()` 每次读取原生来源事实；宿主只投影这些事实。
+原生包序号、MCP operation 游标、运行体事件游标与对话版本相互独立。
+
+## 来源打开与最终关闭
+
+```java
+CharacterRuntime runtime = new CharacterRuntime(epoch, options, ownedSerialExecutor);
+ExecutionScope.WorkHandle open = runtime.acceptOpeningWork();
+runtime.submitOpening(open, () -> {
+    CharacterRuntime.OriginResource resource = runtime.reserveOrigin(open);
+    // 来源适配器在真正原生创建之前拿到这次握手。
+    // 失败时按原生证据 confirmAbsent/creationFailed；有实际角色时 adopt(binding)。
+    runtime.bindAdoptedOrigin(); // 普通账号/租约/登录等检查由 binding.requireCurrent 保留。
+}, settled);
+```
+
+`OriginResource.adopt(RoleBinding)` 只接受精确来源身份与固定角色引用。
+adopt 不等于在线成功；`bindAdoptedOrigin` 才在来源核验后进入 BOUND。
+同一个实际角色对象不能绑定到第二个活宿主。
+
+`RoleBinding` 保留普通验收角色与环境机器人各自的创建、身份核验、原生事实及退出政策。
+MCP 外部 JWT、profile、request_id、幂等历史和操作记录不移入宿主。
+
+最终退出由 `beginClose(stopTicket)` 停止全部模块，然后对根登记资源调用
+`acquireOriginCleanup` / `submitOriginCleanup` / `releaseOrigin`。
+`RoleBinding.release(DrainPermit)` 只有核实自己的原生退出/存档约定后才返回 released=true。
+原生 OPEN 失败的内联回滚也可在根 scope 内跟踪同一个精确 cleanup attempt，不能再登记第二份角色资源。
+`awaitClosed` / `tryFinalizeClose` 仅在模块、根工作、资源和物理 lane 都已排空后确认 CLOSED。
+SELF_WAIT、未证实创建/释放和失败债务不能当作关闭成功。
+
+## MCP 模块与唯一动作链
+
+`RuntimeModule.Spec` 只声明本轮需要的类型ID、实例ID、有限控制资源和作用域额度。
+实例ID在宿主内唯一，同类型不被统一禁止多实例；冲突控制资源不能同时获授。
+这不是候选装配槽位/容量框架。
+
+```java
+CharacterRuntime.ModuleRef module = runtime.mount(spec, mcpModule, true);
+CharacterRuntime.ModuleContext context = runtime.context(module);
+ExecutionScope.WorkHandle work = context.acceptWork();
+```
+
+短原生调用使用 `context.submit(control, work, preflight, body, settled)`。
+已有 `NativeActionService` 会自己向 lane 提交一次，因此通过
+`context.prepareNative(control, work, preflight, preparation)` 只准备原始 ActionHandle，
+再调用原有 `submitChat`。不得先在宿主排队，再在 body 内 submit/join/get 自己。
+这个准备入口是受信任 Java 适配器边界，不向外开放 handler、原始包或任意脚本。
+
+MCP 原样映射已有 receipt、原生结果和 `work.completion()` 的真实结算，
+不在壳外再造一份可独立改写的动作执行状态。
+`context.recordResult` 记录同角色/同世界的结果事实；模块状态更新另走
+`publishOnce` 和有效代次检查，不能用迟到原生事实重新激活旧模块。
+
+## 暂停、卸载和角色关闭
+
+- `stop(ref, PAUSE)`：停止该次模块执行、撤 Grant、取消/排空自己的 scope，保留配置和模块对象。
+- `activate(ref)`：仅在旧 scope 真正退出且许可有效后恢复；返回新代次的 ModuleRef/Context。
+  旧 Context 不会重新获得资格。
+- `stop(ref, UNLOAD)`：排空后卸载模块；不退出原生角色，不关闭宿主 lane。
+- `setEnabled` 处理配置许可；暂停/条件不满足不会反改这个开关。
+- `beginClose`：所有模块退出后按来源关闭原生角色，最后才关闭唯一 lane。
+
+模块回调必须短且非阻塞，自己的异步任务/资源归自己的 scope。
+激活、停止和卸载回调自身也属于未退出的生命周期工作；线程被抢占或回调未返回时不能确认卸载完成。
+停用/卸载不回滚已发生的游戏结果。MCP 模块卸载后，外层合法 profile 所有者仍须能关闭宿主。
+首轮 MCP 策略保留属于原生 Client 的既有对话：暂停/卸载只撤控制并排空命令，
+显式 `npc_cancel` 或根 `actor_close` 才按正常规则取消/清理。重挂后重新观察来源与最新版本，
+不能复活旧模块已准备的动作。该策略的实际兼容/卸载证据由 #139/#140 分别验证，
+不把聊天首环通过扩大成所有交互都已验。
+
+## 观察与证据
+
+`snapshot()` 提供宿主/模块/作用域/控制资源状态，`events(cursor, limit)` 返回有界非消费事实窗口。
+窗口不保存聊天正文、原生对象或异常正文。角色包/领域结果仍可作为来源证据，由 MCP 授权投影。
+MCP 观察要从同一个宿主和原生来源读取，不建立另一份角色事实账本。
+当前窗口是拉取接口；是否需要订阅、更多域及更高频调度，以后续实际小闭环再扩展。
+
+本轮测试分为宿主机制合同、MCP 同壳接入、隔离原生验证和实际部署证据；
+前一层通过不能代替后一层。已交付 #117/#118/#119 直接组合复用。

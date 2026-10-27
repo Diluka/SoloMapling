@@ -47,6 +47,11 @@ python3 beidou-integration/scripts/build.py --help
 
 ## MCP 迭代与问题闭环
 
+- M1按#79/#139/#140采用统一角色运行体与MCP首个控制模块，按小闭环扩展协议。`soloMapling.game.runtime` 的宿主/模块协议与机制测试属于运行体工作；MCP模块及来源/外部适配由MCP工作接入。首轮不交付生产自主练级、巡逻或刷怪模块，机制测试替身不等于自治能力。
+- 运行体在OPEN前拥有根scope、唯一角色lane和原生来源资源。`RoleBinding`保留AcceptanceClient账号/lease/保存与BotClient/BotRegistry的身份差异；挂载MCP不能改变角色来源。角色资源在adopt时唯一登记，来源释放前核精确根scope/cleanup attempt，不能从另一scope借同identity的permit调用原生退出。
+- 模块scope/Grant与宿主根资源分开；暂停/卸载只排空自己的工作，不登出角色或关闭lane。生命周期hook本身也要退出，不能因动作work已空就提前宣布卸载；根关闭在所有模块真正结束后才退出角色。恢复创建新模块执行代次，旧Context不能复活。
+- 现有NativeActionService自己提交一次lane；宿主`prepareNative`只准备，不先外排再内排。MCP投影同一个结果与真实work结算，不另建动作状态。运行体事件、原生包、operation和对话游标分别使用；窗口只保存安全事实，不存正文或原生对象。协议说明见`docs/robot-runtime/README.md`，源码/机制测试与MCP接线/实际部署分别留证。
+
 - 共享入口为 #116：开始相关MCP切片前核对 #117上下文、#118作用域/时序、#119原生动作证据、#120按需事实/事件、#121NPC及 #122～#129各动作；现有任务树和里程碑不重挂。优先从已验实现小范围提炼一份中立Java后端，MCP和V2分别薄适配，不能各复制一份或让V2经Python/HTTP/MCP动作。
 - MCP保留JWT/admin、owner/profile、外部request_id、幂等历史及原生账号登录/存档；V2保留模块/预设/优先级/资源仲裁。公共层只验证调用方已授控制权和原生规则，不搬整个ActorControlService、不决定V2优先级，也不放宽MCP排除环境bot的身份保护。
 - 世界代次、MCPsession、V2runtime/模块代次、执行句柄、包序号、对话版本分别建模；同一内部执行句柄防重复派发，新的合法重复动作允许，不把攻击tick全部登记为外部operation。公共层不依赖acceptance开关、管理JWT或全世界扫描，不强制所有bot保留256包正文历史。
