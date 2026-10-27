@@ -127,13 +127,24 @@ class ActorAcceptance:
             # Losing an evidence disk must not prevent native actor cleanup.
             self.report.update(passed=False, evidence_error="CHECKPOINT_WRITE_FAILED")
 
+    def prepare_write(self, name: str, args: dict[str, Any], *, business: bool | None = None) -> None:
+        if business is None:
+            business = name == "actor_open" or name == "game_act" and args.get("action") != "npc_cancel"
+        check(not business or "evidence_error" not in self.report, "EVIDENCE_UNAVAILABLE_BEFORE_WRITE")
+        self.unknown_write = {"tool": name, "request_id": args.get("request_id")}
+        self.report["requests"].append(dict(self.unknown_write))
+        self.save()
+        if business and "evidence_error" in self.report:
+            # Nothing was sent. Preserve known sessions for cleanup rather than
+            # treating an unjournaled business request as an unknown native write.
+            self.unknown_write = None
+            raise ActorSmokeFailure("EVIDENCE_UNAVAILABLE_BEFORE_WRITE")
+
     async def call(self, name: str, args: dict[str, Any], *, write: bool = False) -> dict[str, Any]:
         check(self.client is not None, "CLIENT_UNAVAILABLE")
         request_id = args.get("request_id")
         if write:
-            self.unknown_write = {"tool": name, "request_id": request_id}
-            self.report["requests"].append(dict(self.unknown_write))
-            self.save()
+            self.prepare_write(name, args)
         response = await self.client.call_tool(name, args)
         value = response.structured_content
         if response.is_error:
@@ -174,7 +185,7 @@ class ActorAcceptance:
         check(type(value.get("schema_version")) is int and value["schema_version"] == 1, "OPERATION_SCHEMA_INVALID")
         check(value.get("kind") == kind and value.get("profile_id") == self.profile, "OPERATION_IDENTITY_MISMATCH")
         if kind == "ACTION":
-            check(value.get("action") in {"chat", "npc_center_open", "npc_cancel"}, "OPERATION_ACTION_INVALID")
+            check(value.get("action") in {"chat", "npc_center_open", "npc_cancel", "npc_reply"}, "OPERATION_ACTION_INVALID")
         check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
         if operation_id is not None:
             check(value["operation_id"] == operation_id, "OPERATION_ID_MISMATCH")

@@ -12,7 +12,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
-from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, load_config, validate_action_request
+from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, MAX_INT, load_config, validate_action_request
 
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$", strict=True)]
@@ -39,6 +39,19 @@ class NpcCancelParameters(BaseModel):
     dialogue_version: Generation
 
 
+class NpcSelectParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    dialogue_version: Generation
+    kind: Literal["select"]
+    selection: Annotated[int, Field(ge=0, le=MAX_INT, strict=True)]
+
+
+class NpcDeclineParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    dialogue_version: Generation
+    kind: Literal["decline"]
+
+
 class ExpectedContext(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     scene_ref: Identifier
@@ -58,7 +71,9 @@ class AcceptanceMCPServer(MCPServer):
                                     "parameters": {"$ref": "#/$defs/" + model}}}
                     for action, model in [("chat", "ChatParameters"), ("npc_center_open", "CenterOpenParameters"),
                                           ("npc_cancel", "NpcCancelParameters")]
-                ]}]}
+                ] + [{"properties": {"action": {"const": "npc_reply"}, "parameters": {"oneOf": [
+                    {"$ref": "#/$defs/NpcSelectParameters"}, {"$ref": "#/$defs/NpcDeclineParameters"},
+                ]}}}]}]}
         return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
@@ -98,7 +113,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         version=__version__,
         instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
-                      "取消操作不等于结束NPC对话。game_act 支持 chat、固定中心首屏 npc_center_open 和版本绑定 npc_cancel，实际能力以桥公告为准；没有任意NPC、菜单选择、移动或通关工具。"),
+                      "取消操作不等于结束NPC对话。game_act 支持 chat、中心打开、版本绑定取消及有限 npc_reply select/decline；实际能力以桥公告为准，不开放礼包accept、任意NPC、未审查选项、移动或通关工具。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -166,10 +181,11 @@ def build_server(config: BridgeConfig) -> MCPServer:
     @server.tool(annotations=open_annotations)
     async def game_act(
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
-        action: Literal["chat", "npc_center_open", "npc_cancel"],
-        parameters: ChatParameters | CenterOpenParameters | NpcCancelParameters, expected_context: ExpectedContext,
+        action: Literal["chat", "npc_center_open", "npc_cancel", "npc_reply"],
+        parameters: ChatParameters | CenterOpenParameters | NpcCancelParameters | NpcSelectParameters | NpcDeclineParameters,
+        expected_context: ExpectedContext,
     ) -> CallToolResult:
-        """在实际 actor 场景排队普通 chat、固定中心首屏打开或最新dialogue_version取消；同 request_id 恢复，不盲重发。中心不接收NPC模板、脚本、选项或原始封包。"""
+        """在实际 actor 场景排队 chat、中心首屏、最新版本取消或npc_reply的有限select/decline；回复必须来自当前真实完整offer及已审路径，截断菜单不可select。无accept、模板、脚本、原始封包。"""
         try:
             return result(await bridge.act(
                 session_id, expected_generation, request_id=request_id, action=action,

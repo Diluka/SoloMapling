@@ -36,7 +36,7 @@ import static org.mockito.Mockito.*;
 
 class NativeDialogueTrackerTest {
     private static final Set<String> STATE_KEYS = Set.of("dialogue_version", "active", "supported", "entry_type",
-            "npc_template_id", "message_type", "packet_sequence");
+            "npc_template_id", "message_type", "packet_sequence", "path", "reply_options");
     private AcceptanceClient client;
     private NPCConversationManager cm;
 
@@ -254,7 +254,7 @@ class NativeDialogueTrackerTest {
         doAnswer(invocation -> { capturing.countDown(); await(finishCapture); return cm; }).when(client).getCM();
         Packet old = menu("旧首屏");
         try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
-            Future<?> first = workers.submit(() -> client.sendPacket(old));
+            Future<?> first = workers.submit(() -> client.dispatchNativeCenter(() -> client.sendPacket(old)));
             assertTrue(capturing.await(5, TimeUnit.SECONDS));
             try {
                 Future<?> newer = workers.submit(() -> {
@@ -272,7 +272,7 @@ class NativeDialogueTrackerTest {
     }
 
     @Test
-    void slowOldCaptureCannotReplaceANewerMenuEvenWhenBothUseTheSameNativeManager() throws Exception {
+    void slowOldCaptureCannotTrustANewerPacketOutsideItsDispatch() throws Exception {
         CountDownLatch capturing = new CountDownLatch(1);
         CountDownLatch finishCapture = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
@@ -283,15 +283,15 @@ class NativeDialogueTrackerTest {
         Packet old = menu("旧首屏");
         Packet newer = menu("新首屏");
         try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
-            Future<?> first = workers.submit(() -> client.sendPacket(old));
+            Future<?> first = workers.submit(() -> client.dispatchNativeCenter(() -> client.sendPacket(old)));
             assertTrue(capturing.await(5, TimeUnit.SECONDS));
             try { workers.submit(() -> client.sendPacket(newer)).get(5, TimeUnit.SECONDS); }
             finally { finishCapture.countDown(); }
             first.get(5, TimeUnit.SECONDS);
         }
         assertEquals(2L, client.dialogueState().get("dialogue_version"));
-        assertEquals(true, client.dialogueState().get("active"));
-        assertDoesNotThrow(() -> client.requireNativeCenterDialogue(2));
+        assertEquals(false, client.dialogueState().get("active"));
+        assertError(HttpStatus.CONFLICT, "dialogue_not_active", () -> client.requireNativeCenterDialogue(2));
         assertError(HttpStatus.GONE, "stale_dialogue", () -> client.requireNativeCenterDialogue(1));
     }
 
@@ -301,9 +301,9 @@ class NativeDialogueTrackerTest {
         CountDownLatch finishRead = new CountDownLatch(1);
         Packet packet = menu("失效中的首屏");
         try (ExecutorService worker = Executors.newSingleThreadExecutor()) {
-            Future<?> send = worker.submit(() -> client.sendPacket(() -> {
+            Future<?> send = worker.submit(() -> client.dispatchNativeCenter(() -> client.sendPacket(() -> {
                 reading.countDown(); await(finishRead); return packet.getBytes();
-            }));
+            })));
             assertTrue(reading.await(5, TimeUnit.SECONDS));
             try { client.invalidateDialogue(); }
             finally { finishRead.countDown(); }
@@ -321,7 +321,7 @@ class NativeDialogueTrackerTest {
         doAnswer(invocation -> { capturing.countDown(); await(finishCapture); return cm; }).when(client).getCM();
         Packet packet = menu("关闭中的首屏");
         try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
-            Future<?> send = workers.submit(() -> client.sendPacket(packet));
+            Future<?> send = workers.submit(() -> client.dispatchNativeCenter(() -> client.sendPacket(packet)));
             assertTrue(capturing.await(5, TimeUnit.SECONDS));
             try {
                 workers.submit(client::closeSession).get(5, TimeUnit.SECONDS);
@@ -403,7 +403,7 @@ class NativeDialogueTrackerTest {
         catch (InterruptedException failure) { Thread.currentThread().interrupt(); throw new AssertionError(failure); }
     }
 
-    private void sendMenu(String text) { client.sendPacket(menu(text)); }
+    private void sendMenu(String text) { client.dispatchNativeCenter(() -> client.sendPacket(menu(text))); }
     private Packet menu(String text) {
         return nativePacket(() -> PacketCreator.getNPCTalk(9900001, (byte) 4, text, "", (byte) 0));
     }

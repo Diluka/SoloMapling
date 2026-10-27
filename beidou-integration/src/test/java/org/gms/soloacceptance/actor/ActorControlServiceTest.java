@@ -680,7 +680,7 @@ class ActorControlServiceTest {
         verify(backend, times(2)).chat(any(), any());
         assertEquals(7, service.publicCapabilities().get("maximum_pending_actions_per_session"));
         assertEquals(8, service.publicCapabilities().get("actor_executor_queue_capacity"));
-        assertEquals(List.of("chat", "npc_center_open", "npc_cancel"), service.publicCapabilities().get("actions"));
+        assertEquals(List.of("chat", "npc_center_open", "npc_cancel", "npc_reply"), service.publicCapabilities().get("actions"));
     }
 
     @Test
@@ -878,8 +878,8 @@ class ActorControlServiceTest {
             actions.add(service.act("admin", "chat-running", chatRequest(opened, "占住执行线程")));
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             for (int i = 1; i < 7; i++) {
-                ActorActRequest request = i % 2 == 0 ? npcRequest(opened, "npc_center_open", null)
-                        : chatRequest(opened, "排队" + i);
+                ActorActRequest request = i % 3 == 0 ? replyRequest(opened, 37L, "select", 0)
+                        : i % 2 == 0 ? npcRequest(opened, "npc_center_open", null) : chatRequest(opened, "排队" + i);
                 actions.add(service.act("admin", "action-queued-" + i, request));
             }
             assertEquals(6, executor.getQueue().size());
@@ -902,6 +902,7 @@ class ActorControlServiceTest {
             assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
             verify(backend, times(1)).chat(any(), any());
             verify(backend, never()).npcCenterOpen(any());
+            verify(backend, never()).npcReply(any(), anyLong(), any(), any());
             verify(backend).close(handle);
         } finally {
             complete.countDown();
@@ -1078,10 +1079,11 @@ class ActorControlServiceTest {
         verify(backend, never()).close(any());
         Map<?, ?> capability = (Map<?, ?>) service.publicCapabilities().get("npc_dialogue");
         assertEquals(List.of("native_ui_center"), capability.get("entrypoints"));
-        assertEquals(List.of(4), capability.get("message_types"));
+        assertEquals(List.of(4, 12), capability.get("message_types"));
         assertEquals("session_packet_sequence", capability.get("version_scope"));
         assertEquals(true, capability.get("cancel_requires_latest_version"));
         assertEquals(500, capability.get("npc_minimum_interval_ms"));
+        assertEquals(AcceptanceClient.nativeDialogueCapabilities(), capability);
     }
 
     @Test
@@ -1283,6 +1285,340 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(operation), 0, 100)).get("state"));
         verify(backend).close(handle);
+    }
+
+    @Test
+    void npcRepliesDispatchTheirExactKindsAndKeepOnlyBoundedMetadataFromTheNativeOutcome() {
+        ActorControlService service = service(4, 20, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        var selected = service.act("admin", "select-welfare", replyRequest(opened, 37L, "select", 0));
+        executors.getFirst().runNext();
+        var selectedResult = service.get("admin", id(selected), 0, 100);
+        assertEquals("npc_reply", selectedResult.get("action"));
+        assertEquals("SUCCEEDED", selectedResult.get("status"));
+        assertEquals("dialogue_replied", result(selectedResult).get("observed_outcome"));
+        assertEquals("select", result(selectedResult).get("kind"));
+        assertEquals(0, result(selectedResult).get("selection"));
+        assertEquals(38L, result(selectedResult).get("dialogue_version"));
+        assertEquals(true, result(selectedResult).get("reply_version_consumed"));
+        assertEquals("welfare", result(selectedResult).get("dialogue_path"));
+        assertEquals(true, result(selectedResult).get("active"));
+        assertEquals(false, result(selectedResult).get("cancel_too_late"));
+        assertFalse(result(selectedResult).containsKey("text"));
+        assertFalse(result(selectedResult).containsKey("scriptPath"));
+        assertFalse(result(selectedResult).containsKey("choices"));
+
+        var declined = service.act("admin", "decline-welfare", replyRequest(opened, 38L, "decline", null));
+        executors.getFirst().runNext();
+        var declinedResult = service.get("admin", id(declined), 0, 100);
+        assertEquals("SUCCEEDED", declinedResult.get("status"));
+        assertEquals("dialogue_declined", result(declinedResult).get("observed_outcome"));
+        assertEquals("decline", result(declinedResult).get("kind"));
+        assertNull(result(declinedResult).get("selection"));
+        assertEquals("closed", result(declinedResult).get("dialogue_path"));
+        assertEquals(false, result(declinedResult).get("active"));
+        assertEquals(true, result(declinedResult).get("native_dialogue_cleanup_verified"));
+        verify(backend).npcReply(handle, 37L, "select", 0);
+        verify(backend).npcReply(handle, 38L, "decline", null);
+        verify(backend, never()).npcCancel(any(), anyLong());
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void knownNpcReplyIdsRecoverTheOriginalFactAfterVersionConsumptionAndAfterClose() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        ActorActRequest request = replyRequest(opened, 37L, "select", 71);
+        var action = service.act("admin", "reply-one", request);
+        executors.getFirst().runNext();
+        doThrow(new ObservationException(HttpStatus.GONE, "stale_dialogue"))
+                .when(backend).validateNpcReply(handle, 37L, "select", 71);
+        assertEquals(id(action), id(service.act("admin", "reply-one", request)));
+        assertEquals("stale_dialogue", assertThrows(ObservationException.class,
+                () -> service.act("admin", "new-reply-old-version", request)).reason());
+        for (ActorActRequest changed : List.of(replyRequest(opened, 37L, "select", 0),
+                replyRequest(opened, 37L, "decline", null), replyRequest(opened, 38L, "select", 71))) {
+            assertEquals("request_id_conflict", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "reply-one", changed)).reason());
+        }
+        service.close("admin", "close-reply", closeRequest(opened));
+        executors.getFirst().runNext();
+        var recovered = service.act("admin", "reply-one", request);
+        assertEquals("SUCCEEDED", recovered.get("status"));
+        assertEquals("CLOSED", session(recovered).get("state"));
+        verify(backend).npcReply(handle, 37L, "select", 71);
+        var field = ActorControlService.class.getDeclaredField("requests");
+        field.setAccessible(true);
+        String history = field.get(service).toString();
+        assertTrue(history.contains("replyKind=select"));
+        assertTrue(history.contains("selection=71"));
+        assertFalse(history.contains("不能进入历史的菜单正文"));
+    }
+
+    @Test
+    void aConcurrentDuplicateRecoversTheAcceptedReplyWhenItsSlowerValidationSeesTheConsumedVersion() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        ActorActRequest request = replyRequest(opened, 37L, "select", 0);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        AtomicBoolean firstValidation = new AtomicBoolean(true);
+        AtomicBoolean consumed = new AtomicBoolean();
+        doAnswer(invocation -> {
+            if (firstValidation.compareAndSet(true, false)) {
+                entered.countDown();
+                assertTrue(complete.await(5, TimeUnit.SECONDS));
+            }
+            if (consumed.get()) throw new ObservationException(HttpStatus.GONE, "stale_dialogue");
+            return null;
+        }).when(backend).validateNpcReply(handle, 37L, "select", 0);
+        when(backend.npcReply(handle, 37L, "select", 0)).thenAnswer(invocation -> {
+            consumed.set(true);
+            return replySuccess(37L, "select", 0);
+        });
+        AtomicReference<Object> duplicate = new AtomicReference<>();
+        Thread slower = Thread.ofVirtual().start(() -> {
+            try { duplicate.set(service.act("admin", "same-reply", request)); }
+            catch (Throwable failure) { duplicate.set(failure); }
+        });
+        Map<String, Object> accepted;
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            accepted = service.act("admin", "same-reply", request);
+            executors.getFirst().runNext();
+            assertTrue(consumed.get());
+        } finally {
+            complete.countDown();
+            slower.join(5_000);
+        }
+        assertFalse(slower.isAlive());
+        Map<?, ?> recovered = assertInstanceOf(Map.class, duplicate.get());
+        assertEquals(id(accepted), recovered.get("operation_id"));
+        assertEquals("SUCCEEDED", recovered.get("status"));
+        assertEquals(2, service.publicCapabilities().get("operation_history_size"));
+        verify(backend).npcReply(handle, 37L, "select", 0);
+    }
+
+    @Test
+    void npcReplyParametersRejectUnsupportedKindsAndInvalidSelectionsBeforeNativeValidation() {
+        ActorControlService service = service(4, 20, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        for (String kind : java.util.Arrays.asList(null, "accept", "next", "script")) {
+            assertEquals("unsupported_reply_kind", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "invalid-kind", replyRequest(opened, 37L, kind, null))).reason());
+        }
+        for (Integer selection : java.util.Arrays.asList(null, -1)) {
+            assertEquals("invalid_npc_selection", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "invalid-selection", replyRequest(opened, 37L, "select", selection))).reason());
+        }
+        assertEquals("invalid_action_parameters", assertThrows(ObservationException.class,
+                () -> service.act("admin", "decline-with-selection", replyRequest(opened, 37L, "decline", 0))).reason());
+        assertEquals("invalid_dialogue_version", assertThrows(ObservationException.class,
+                () -> service.act("admin", "zero-version", replyRequest(opened, 0L, "select", 0))).reason());
+        ActorActRequest original = chatRequest(opened, "聊天正文");
+        assertEquals("invalid_action_parameters", assertThrows(ObservationException.class,
+                () -> service.act("admin", "mixed-chat", new ActorActRequest(original.sessionId(), original.expectedGeneration(),
+                        "chat", new ActorActRequest.Parameters("聊天正文", null, "select", 0), original.expectedContext()))).reason());
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        verify(backend, never()).validateNpcReply(any(), anyLong(), any(), any());
+        verify(backend, never()).npcReply(any(), anyLong(), any(), any());
+    }
+
+    @Test
+    void incompleteOrUnofferedNpcRepliesAreRejectedAtAcceptanceAndAfterQueueingWithoutDispatch() {
+        ActorControlService service = service(4, 30, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        int sequence = 0;
+        for (String reason : List.of("npc_menu_incomplete", "npc_selection_not_offered", "npc_reply_path_not_supported",
+                "dialogue_not_active", "stale_dialogue")) {
+            HttpStatus status = "stale_dialogue".equals(reason) ? HttpStatus.GONE : HttpStatus.CONFLICT;
+            doThrow(new ObservationException(status, reason)).when(backend).validateNpcReply(handle, 37L, "select", 0);
+            int historyBefore = (int) service.publicCapabilities().get("operation_history_size");
+            assertEquals(reason, assertThrows(ObservationException.class,
+                    () -> service.act("admin", "rejected-" + reason, replyRequest(opened, 37L, "select", 0))).reason());
+            assertEquals(historyBefore, service.publicCapabilities().get("operation_history_size"));
+            doNothing().doThrow(new ObservationException(status, reason)).when(backend).validateNpcReply(handle, 37L, "select", 0);
+            var accepted = service.act("admin", "queued-" + sequence++, replyRequest(opened, 37L, "select", 0));
+            executors.getFirst().runNext();
+            var failed = service.get("admin", id(accepted), 0, 100);
+            assertEquals("FAILED", failed.get("status"));
+            assertEquals(Map.of("reason", reason), failed.get("error"));
+            assertEquals(false, result(failed).get("native_dispatch_started"));
+            assertEquals("OPEN", session(failed).get("state"));
+        }
+        verify(backend, never()).npcReply(any(), anyLong(), any(), any());
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void npcReplyRechecksSceneAtDequeueAndQueuedCancellationDoesNotConsumeTheDialogue() {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationService observations = prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        var cancelled = service.act("admin", "cancelled-select", replyRequest(opened, 37L, "select", 0));
+        service.cancel("admin", "cancel-operation", id(cancelled));
+        executors.getFirst().runNext();
+        assertEquals("CANCELLED", service.get("admin", id(cancelled), 0, 100).get("status"));
+        assertEquals("action_cancelled_before_dispatch", result(service.get("admin", id(cancelled), 0, 100)).get("observed_outcome"));
+        var moved = service.act("admin", "moved-select", replyRequest(opened, 37L, "select", 0));
+        when(observations.contextForActor(any())).thenReturn(Map.of("scene_ref", "scene-replaced",
+                "runtime_generation", opened.get("runtime_generation")));
+        executors.getFirst().runNext();
+        assertEquals(Map.of("reason", "actor_context_mismatch"), service.get("admin", id(moved), 0, 100).get("error"));
+        verify(backend, never()).npcReply(any(), anyLong(), any(), any());
+        verify(backend, never()).close(any());
+    }
+
+    @Test
+    void replyActionsPreserveTheFirstCloseHistoryAndCloseStopsEveryUndispatchedReply() {
+        ActorControlService service = service(4, 6, 64);
+        prepareReply(service);
+        var first = open(service, "open-first");
+        executors.getFirst().runNext();
+        var second = service.open("admin", "open-second", new ActorOpenRequest("secondary", 0, 1));
+        executors.getLast().runNext();
+        var firstReply = service.act("admin", "select-first", replyRequest(first, 37L, "select", 0));
+        var secondReply = service.act("admin", "decline-second", replyRequest(second, 38L, "decline", null));
+        assertEquals("actor_history_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "reply-over-capacity", replyRequest(first, 37L, "select", 71))).reason());
+        service.close("admin", "close-first", closeRequest(first));
+        service.close("admin", "close-second", closeRequest(second));
+        executors.getFirst().runNext();
+        assertEquals("CLOSING", session(service.get("admin", id(firstReply), 0, 100)).get("state"));
+        executors.getFirst().runNext();
+        executors.getLast().drain();
+        for (var reply : List.of(firstReply, secondReply)) {
+            var completed = service.get("admin", id(reply), 0, 100);
+            assertEquals("CANCELLED", completed.get("status"));
+            assertEquals("CLOSED", session(completed).get("state"));
+        }
+        verify(backend, never()).npcReply(any(), anyLong(), any(), any());
+        assertEquals(6, service.publicCapabilities().get("operation_history_size"));
+    }
+
+    @Test
+    void aDispatchedNpcReplyRetainsItsNativeFactAfterLateCancelAndClose() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.npcReply(handle, 37L, "select", 0)).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return replySuccess(37L, "select", 0);
+        });
+        var reply = service.act("admin", "select-running", replyRequest(opened, 37L, "select", 0));
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.cancel("admin", "cancel-late-reply", id(reply));
+            service.close("admin", "close-reply", closeRequest(opened));
+        } finally {
+            complete.countDown();
+            worker.join(5_000);
+        }
+        var result = service.get("admin", id(reply), 0, 100);
+        assertFalse(worker.isAlive());
+        assertEquals("SUCCEEDED", result.get("status"));
+        assertEquals("dialogue_replied", result(result).get("observed_outcome"));
+        assertEquals(true, result(result).get("cancel_too_late"));
+        assertEquals(true, result(result).get("reply_version_consumed"));
+        assertEquals("CLOSING", session(result).get("state"));
+        executors.getFirst().runNext();
+        assertEquals("CLOSED", session(service.get("admin", id(reply), 0, 100)).get("state"));
+        verify(backend).npcReply(handle, 37L, "select", 0);
+    }
+
+    @Test
+    void replySuccessNeedsMatchingKindSelectionConsumedVersionAndNativePostState() {
+        ActorControlService service = service(4, 40, 64);
+        prepareReply(service);
+        var opened = open(service, "open-reply");
+        executors.getFirst().runNext();
+        List<Map<String, Object>> invalidMetadata = new ArrayList<>();
+        for (Map.Entry<String, Object> mutation : List.<Map.Entry<String, Object>>of(Map.entry("kind", "decline"), Map.entry("selection", 71),
+                Map.entry("reply_version_consumed", false), Map.entry("dialogue_version", 37L), Map.entry("active", false))) {
+            Map<String, Object> metadata = new java.util.LinkedHashMap<>((Map<String, Object>) replySuccess(37L, "select", 0).get("result"));
+            metadata.put(mutation.getKey(), mutation.getValue());
+            invalidMetadata.add(metadata);
+        }
+        int request = 0;
+        for (Map<String, Object> invalid : invalidMetadata) {
+            when(backend.npcReply(handle, 37L, "select", 0)).thenReturn(Map.of("status", "SUCCEEDED", "result", invalid));
+            var action = service.act("admin", "invalid-evidence-" + request++, replyRequest(opened, 37L, "select", 0));
+            executors.getFirst().runNext();
+            var completed = service.get("admin", id(action), 0, 100);
+            assertEquals("INDETERMINATE", completed.get("status"));
+            assertEquals("native_dialogue_reply_outcome_unknown", result(completed).get("observed_outcome"));
+        }
+        Map<String, Object> unknown = new java.util.LinkedHashMap<>();
+        unknown.put("native_dispatch_started", false);
+        unknown.put("reply_version_consumed", true);
+        unknown.put("kind", "select");
+        unknown.put("selection", 0);
+        unknown.put("dialogue_path", null);
+        unknown.put("text", "不能进入历史的未知回复正文");
+        when(backend.npcReply(handle, 37L, "select", 0)).thenReturn(Map.of("status", "INDETERMINATE", "result", unknown));
+        var action = service.act("admin", "unknown-evidence", replyRequest(opened, 37L, "select", 0));
+        executors.getFirst().runNext();
+        var completed = service.get("admin", id(action), 0, 100);
+        assertEquals("INDETERMINATE", completed.get("status"));
+        assertEquals(true, result(completed).get("reply_version_consumed"));
+        assertEquals(false, result(completed).get("native_dispatch_started"));
+        assertEquals(false, result(completed).get("cancel_too_late"));
+        assertTrue(result(completed).containsKey("dialogue_path"));
+        assertNull(result(completed).get("dialogue_path"));
+        assertFalse(completed.toString().contains("不能进入历史的未知回复正文"));
+        assertEquals("OPEN", session(completed).get("state"));
+    }
+
+    private AcceptanceObservationService prepareReply(ActorControlService service) {
+        AcceptanceObservationService observations = prepareChat(service);
+        when(backend.npcReply(eq(handle), anyLong(), any(), any())).thenAnswer(invocation -> replySuccess(
+                invocation.getArgument(1), invocation.getArgument(2), invocation.getArgument(3)));
+        return observations;
+    }
+
+    private static Map<String, Object> replySuccess(long version, String kind, Integer selection) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        boolean selecting = "select".equals(kind);
+        result.put("observed_outcome", selecting ? "dialogue_replied" : "dialogue_declined");
+        result.put("native_dispatch_started", true);
+        result.put("reply_version_consumed", true);
+        result.put("dialogue_version", version + 1);
+        result.put("packet_sequence", version + 1);
+        result.put("npc_template_id", 9900001);
+        result.put("message_type", selecting ? 12 : 0);
+        result.put("active", selecting);
+        result.put("native_dialogue_cleanup_verified", !selecting);
+        result.put("kind", kind);
+        result.put("selection", selection);
+        result.put("dialogue_path", selecting ? "welfare" : "closed");
+        result.put("packet_cursor_before", version);
+        result.put("packet_cursor_after", version + 1);
+        result.put("text", "不能进入历史的菜单正文");
+        result.put("scriptPath", "not-public");
+        result.put("choices", List.of("not-public"));
+        return Map.of("status", "SUCCEEDED", "result", result);
+    }
+
+    private static ActorActRequest replyRequest(Map<String, Object> opened, Long version, String kind, Integer selection) {
+        return new ActorActRequest(sessionId(opened), generation(opened), "npc_reply",
+                new ActorActRequest.Parameters(null, version, kind, selection),
+                new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 
     private void prepareNpc(ActorControlService service) {

@@ -22,9 +22,14 @@ public record ActorActRequest(
         @JsonProperty("expected_context") ExpectedContext expectedContext) {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Parameters(String text, @JsonProperty("dialogue_version") Long dialogueVersion) {
+    public record Parameters(String text, @JsonProperty("dialogue_version") Long dialogueVersion,
+                             String kind, Integer selection) {
         public Parameters(String text) {
-            this(text, null);
+            this(text, null, null, null);
+        }
+
+        public Parameters(String text, Long dialogueVersion) {
+            this(text, dialogueVersion, null, null);
         }
     }
 
@@ -37,6 +42,8 @@ public record ActorActRequest(
                 "session_id", "expected_generation", "action", "parameters", "expected_context");
         private static final Set<String> CHAT_PARAMETER_FIELDS = Set.of("text");
         private static final Set<String> NPC_CANCEL_PARAMETER_FIELDS = Set.of("dialogue_version");
+        private static final Set<String> NPC_REPLY_PARAMETER_FIELDS = Set.of("dialogue_version", "kind");
+        private static final Set<String> NPC_SELECT_PARAMETER_FIELDS = Set.of("dialogue_version", "kind", "selection");
         private static final Set<String> KNOWN_PARAMETER_FIELDS = Set.of("text", "dialogue_version");
         private static final Set<String> CONTEXT_FIELDS = Set.of("scene_ref", "runtime_generation");
 
@@ -45,17 +52,25 @@ public record ActorActRequest(
             JsonNode body = object(parser.getCodec().readTree(parser), ROOT_FIELDS, context);
             if (body == null) return null;
             String action = string(body.get("action"), context);
-            Set<String> parameterFields = "chat".equals(action) ? CHAT_PARAMETER_FIELDS
-                    : "npc_center_open".equals(action) ? Set.of()
-                    : "npc_cancel".equals(action) ? NPC_CANCEL_PARAMETER_FIELDS : KNOWN_PARAMETER_FIELDS;
-            JsonNode parameters = object(body.get("parameters"), parameterFields, context);
+            JsonNode rawParameters = body.get("parameters");
+            String kind = "npc_reply".equals(action) && rawParameters != null
+                    ? string(rawParameters.get("kind"), context) : null;
+            Set<String> parameterFields = switch (action == null ? "" : action) {
+                case "chat" -> CHAT_PARAMETER_FIELDS;
+                case "npc_center_open" -> Set.of();
+                case "npc_cancel" -> NPC_CANCEL_PARAMETER_FIELDS;
+                case "npc_reply" -> "select".equals(kind) ? NPC_SELECT_PARAMETER_FIELDS : NPC_REPLY_PARAMETER_FIELDS;
+                default -> KNOWN_PARAMETER_FIELDS;
+            };
+            JsonNode parameters = object(rawParameters, parameterFields, context);
             JsonNode expectedContext = object(body.get("expected_context"), CONTEXT_FIELDS, context);
             return new ActorActRequest(
                     string(body.get("session_id"), context),
                     integer(body.get("expected_generation"), context),
                     action,
                     parameters == null ? null : new Parameters(
-                            string(parameters.get("text"), context), integer(parameters.get("dialogue_version"), context)),
+                            string(parameters.get("text"), context), integer(parameters.get("dialogue_version"), context),
+                            kind, selection(parameters.get("selection"), context)),
                     expectedContext == null ? null : new ExpectedContext(
                             string(expectedContext.get("scene_ref"), context),
                             string(expectedContext.get("runtime_generation"), context)));
@@ -90,6 +105,14 @@ public record ActorActRequest(
                 return context.reportInputMismatch(Long.class, "action numbers must be long integers");
             }
             return value.longValue();
+        }
+
+        private static Integer selection(JsonNode value, DeserializationContext context) throws IOException {
+            if (value == null || value.isNull()) return null;
+            if (!value.isIntegralNumber() || !value.canConvertToInt()) {
+                return context.reportInputMismatch(Integer.class, "selection must be an integer");
+            }
+            return value.intValue();
         }
     }
 }
