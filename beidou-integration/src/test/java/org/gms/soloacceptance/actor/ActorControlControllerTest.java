@@ -323,6 +323,80 @@ class ActorControlControllerTest {
         }
     }
 
+    @Test
+    void actionParametersFollowTheirTagsAndPreserveTheExistingChatConstructor() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (ActorActRequest request : List.of(
+                new ActorActRequest("session-id", 7L, "chat", new ActorActRequest.Parameters("聊天验收 abc123"),
+                        new ActorActRequest.ExpectedContext("scene-id", "runtime-id")),
+                new ActorActRequest("session-id", 7L, "npc_center_open", new ActorActRequest.Parameters(null, null),
+                        new ActorActRequest.ExpectedContext("scene-id", "runtime-id")),
+                new ActorActRequest("session-id", 7L, "npc_cancel", new ActorActRequest.Parameters(null, Long.MAX_VALUE),
+                        new ActorActRequest.ExpectedContext("scene-id", "runtime-id")))) {
+            String serialized = mapper.writeValueAsString(request);
+            assertEquals(request, mapper.readValue(serialized, ActorActRequest.class));
+            assertEquals("npc_center_open".equals(request.action()) ? 0 : 1,
+                    mapper.readTree(serialized).get("parameters").size());
+        }
+        assertEquals(new ActorActRequest.Parameters("chat", null), new ActorActRequest.Parameters("chat"));
+        assertEquals(mapper.readValue(actionJson(), ActorActRequest.class).parameters().text(), "聊天验收 abc123");
+    }
+
+    @Test
+    void npcDialogueVersionRejectsCoercionAndOverflowWhileRangesRemainWithTheService() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String value : List.of("1.0", "\"7\"", "true", "{}", "[]",
+                "9223372036854775808", "-9223372036854775809")) {
+            ObjectNode body = npcActionJson(mapper, "npc_cancel");
+            ((ObjectNode) body.get("parameters")).set("dialogue_version", mapper.readTree(value));
+            assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), value);
+        }
+        for (long value : List.of(0L, -1L, Long.MAX_VALUE)) {
+            ObjectNode body = npcActionJson(mapper, "npc_cancel");
+            ((ObjectNode) body.get("parameters")).put("dialogue_version", value);
+            assertEquals(value, mapper.treeToValue(body, ActorActRequest.class).parameters().dialogueVersion());
+        }
+        ObjectNode missing = npcActionJson(mapper, "npc_cancel");
+        assertNull(mapper.treeToValue(missing, ActorActRequest.class).parameters().dialogueVersion());
+        ((ObjectNode) missing.get("parameters")).putNull("dialogue_version");
+        assertNull(mapper.treeToValue(missing, ActorActRequest.class).parameters().dialogueVersion());
+    }
+
+    @Test
+    void taggedActionParametersRejectFieldsFromOtherActionsEvenWhenExplicitlyNull() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String action : List.of("chat", "npc_center_open", "npc_cancel")) {
+            for (String field : List.of("text", "dialogue_version", "npc_template_id", "script", "selection")) {
+                if ("chat".equals(action) && "text".equals(field)
+                        || "npc_cancel".equals(action) && "dialogue_version".equals(field)) continue;
+                ObjectNode body = npcActionJson(mapper, action);
+                ((ObjectNode) body.get("parameters")).putNull(field);
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), action + "." + field);
+            }
+        }
+    }
+
+    @Test
+    void unsupportedActionsReachTheServiceOnlyWithKnownStrictParameterShapes() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        ObjectNode body = npcActionJson(mapper, "unsupported");
+        assertEquals("unsupported", mapper.treeToValue(body, ActorActRequest.class).action());
+        ObjectNode parameters = (ObjectNode) body.get("parameters");
+        parameters.put("text", "保留给服务校验");
+        parameters.put("dialogue_version", 7);
+        assertEquals(new ActorActRequest.Parameters("保留给服务校验", 7L),
+                mapper.treeToValue(body, ActorActRequest.class).parameters());
+        parameters.put("script", "unavailable");
+        assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class));
+    }
+
+    private static ObjectNode npcActionJson(ObjectMapper mapper, String action) throws Exception {
+        ObjectNode body = (ObjectNode) mapper.readTree(actionJson());
+        body.put("action", action);
+        body.set("parameters", mapper.createObjectNode());
+        return body;
+    }
+
     private static String actionJson() {
         return "{\"session_id\":\"session-id\",\"expected_generation\":7,\"action\":\"chat\","
                 + "\"parameters\":{\"text\":\"聊天验收 abc123\"},\"expected_context\":{"

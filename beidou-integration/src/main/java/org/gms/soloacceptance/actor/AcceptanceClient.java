@@ -5,6 +5,9 @@ import org.gms.client.Client;
 import org.gms.net.packet.Packet;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
+import org.gms.scripting.npc.NPCConversationManager;
+import org.gms.soloacceptance.ObservationException;
+import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -19,10 +22,13 @@ public final class AcceptanceClient extends Client {
                     Map.of("event_type", "chat_text", "opcode", PacketEventDecoder.CHAT_TEXT),
                     Map.of("event_type", "player_hint", "opcode", PacketEventDecoder.PLAYER_HINT),
                     Map.of("event_type", "server_message", "opcode", PacketEventDecoder.SERVER_MESSAGE,
-                            "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7))));
+                            "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7)),
+                    Map.of("event_type", "npc_dialogue", "opcode", PacketEventDecoder.NPC_TALK,
+                            "message_types", List.of(4))));
     private final World boundWorld;
     private final Channel boundChannel;
     private final PacketEventBuffer packets = new PacketEventBuffer();
+    private final NativeDialogueTracker dialogue = new NativeDialogueTracker();
 
     public AcceptanceClient(Type type, long sessionId, String remoteAddress, World world, Channel channel) {
         super(type, sessionId, remoteAddress, null, world.getId(), channel.getId());
@@ -47,7 +53,18 @@ public final class AcceptanceClient extends Client {
 
     @Override
     public void sendPacket(Packet packet) {
-        packets.accept(packet, getLanguage());
+        long epoch = dialogue.epoch();
+        Map<String, Object> event = packets.accept(packet, getLanguage());
+        if (event == null || !Integer.valueOf(PacketEventDecoder.NPC_TALK).equals(event.get("opcode"))) return;
+        NativeDialogueTracker.State pending = dialogue.begin(epoch, event);
+        if (pending == null) return;
+        NPCConversationManager cm = null;
+        try {
+            if (pending.supported && !packets.closed() && getQM() == null) cm = getCM();
+        } catch (RuntimeException ignored) {
+            // Diagnostics must not interrupt the native script which is sending this packet.
+        }
+        dialogue.capture(pending, cm);
     }
 
     public List<Map<String, Object>> packetSummaries() {
@@ -78,9 +95,50 @@ public final class AcceptanceClient extends Client {
         return packets.closed();
     }
 
+    public Map<String, Object> dialogueState() {
+        NativeDialogueTracker.State state = dialogue.current();
+        boolean active = nativeDialogueActive(state, false);
+        if (!dialogue.isCurrent(state)) {
+            state = dialogue.current();
+            active = false;
+        }
+        long latest = packets.latestNpcSequence();
+        if (state.sequence != null && state.sequence != latest) {
+            return NativeDialogueTracker.State.unsupported(latest).view(false);
+        }
+        return state.view(active);
+    }
+
+    public void invalidateDialogue() { dialogue.invalidate(); }
+
+    public void requireNativeCenterDialogue(long version) {
+        NativeDialogueTracker.State state = dialogue.current();
+        if (state.sequence == null || state.sequence != version || state.sequence != packets.latestNpcSequence()) {
+            throw new ObservationException(HttpStatus.GONE, "stale_dialogue");
+        }
+        boolean active = nativeDialogueActive(state, true);
+        if (!dialogue.isCurrent(state) || state.sequence != packets.latestNpcSequence()) {
+            throw new ObservationException(HttpStatus.GONE, "stale_dialogue");
+        }
+        if (!active) throw new ObservationException(HttpStatus.CONFLICT, "dialogue_not_active");
+    }
+
+    private boolean nativeDialogueActive(NativeDialogueTracker.State state, boolean requireLegacyMenu) {
+        if (!state.supported || state.cm == null || packets.closed()) return false;
+        try {
+            return getCM() == state.cm && getQM() == null
+                    && state.cm.getNpc() == 9900001 && state.cm.getScriptName() == null && !state.cm.isItemScript()
+                    && (!requireLegacyMenu || state.cm.getNextLevelContext().getLevelType() == null)
+                    && !packets.closed();
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
     @Override
     public void closeSession() {
         packets.close();
+        invalidateDialogue();
     }
 
     @Override

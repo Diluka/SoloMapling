@@ -153,7 +153,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(self.args), set(tools["game_act"].input_schema["required"]))
         self.assertIs(False, tools["game_act"].input_schema.get("additionalProperties"))
         action_schema = tools["game_act"].input_schema["properties"]["action"]
-        self.assertTrue(action_schema.get("const") == "chat" or action_schema.get("enum") == ["chat"])
+        self.assertEqual(["chat", "npc_center_open", "npc_cancel"], action_schema["enum"])
         self.assertFalse(caps.is_error)
         self.assertEqual(capabilities(TOOLS), caps.structured_content)
         self.assertEqual(sorted(TOOLS), require_capabilities(caps.structured_content, sorted(tools), actors=True))

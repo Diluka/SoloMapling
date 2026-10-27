@@ -258,7 +258,7 @@ class AcceptancePacketEventsTest {
         Map<String, Object> npc = receive(nativePacket(() -> PacketCreator.getNPCTalk(
                 1_012_000, (byte) 0, "private-body", "00 01", (byte) 0)));
         assertEquals(0x130, npc.get("opcode"));
-        assertSummary(npc, "unsupported", "unsupported_opcode");
+        assertSummary(npc, "unsupported", "unsupported_npc_message_type");
         assertEquals(0L, client.packetEvents(0, 100).get("malformed_events_total"));
     }
 
@@ -297,7 +297,9 @@ class AcceptancePacketEventsTest {
                 Map.of("event_type", "chat_text", "opcode", 0xA2),
                 Map.of("event_type", "player_hint", "opcode", 0xD6),
                 Map.of("event_type", "server_message", "opcode", 0x44,
-                        "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7))), capabilities.get("decoded_packets"));
+                        "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7)),
+                Map.of("event_type", "npc_dialogue", "opcode", 0x130,
+                        "message_types", List.of(4))), capabilities.get("decoded_packets"));
     }
 
     private Packet nativePacket(Supplier<Packet> factory) {

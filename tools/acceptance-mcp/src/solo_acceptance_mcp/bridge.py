@@ -167,15 +167,25 @@ def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None
 
 
 def validate_chat_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
-    if action != "chat" or not isinstance(action, str):
-        raise BridgeError("INVALID_ARGUMENTS", "action 当前只支持 chat。")
-    if not isinstance(parameters, dict) or set(parameters) != {"text"}:
-        raise BridgeError("INVALID_ARGUMENTS", "parameters 必须且只能包含 text。")
-    text = parameters["text"]
-    if (not isinstance(text, str) or not text or text.isspace() or text[0] in {"@", "/"}
-            or sum(2 if ord(char) > 0xFFFF else 1 for char in text) > 127
-            or any(0xD800 <= ord(char) <= 0xDFFF for char in text)):
-        raise BridgeError("INVALID_ARGUMENTS", "text 必须是1～127个 UTF-16 单元的非空白普通聊天，首字符不能为 @ 或 /。")
+    if not isinstance(action, str) or action not in {"chat", "npc_center_open", "npc_cancel"}:
+        raise BridgeError("INVALID_ARGUMENTS", "action 只支持 chat、npc_center_open 或 npc_cancel。")
+    if not isinstance(parameters, dict):
+        raise BridgeError("INVALID_ARGUMENTS", "parameters 必须为当前动作对应的对象。")
+    if action == "chat":
+        if set(parameters) != {"text"}:
+            raise BridgeError("INVALID_ARGUMENTS", "chat parameters 必须且只能包含 text。")
+        text = parameters["text"]
+        if (not isinstance(text, str) or not text or text.isspace() or text[0] in {"@", "/"}
+                or sum(2 if ord(char) > 0xFFFF else 1 for char in text) > 127
+                or any(0xD800 <= ord(char) <= 0xDFFF for char in text)):
+            raise BridgeError("INVALID_ARGUMENTS", "text 必须是1～127个 UTF-16 单元的非空白普通聊天，首字符不能为 @ 或 /。")
+    elif action == "npc_center_open":
+        if parameters:
+            raise BridgeError("INVALID_ARGUMENTS", "npc_center_open parameters 必须为空对象。")
+    else:
+        if set(parameters) != {"dialogue_version"}:
+            raise BridgeError("INVALID_ARGUMENTS", "npc_cancel parameters 必须且只能包含 dialogue_version。")
+        validate_integer(parameters["dialogue_version"], "dialogue_version", 1, MAX_LONG)
     if not isinstance(expected_context, dict) or set(expected_context) != {"scene_ref", "runtime_generation"}:
         raise BridgeError("INVALID_ARGUMENTS", "expected_context 必须且只能包含 scene_ref 和 runtime_generation。")
     for key in ["scene_ref", "runtime_generation"]:

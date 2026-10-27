@@ -187,25 +187,15 @@ class ChatAcceptance(ActorEventsAcceptance):
         self.save()
 
     async def cleanup(self) -> None:
-        if self.unknown_write is not None and self.unknown_write.get("tool") == "game_act" and self.active is not None:
-            # The broadcast fact is unknown, but the actor identity is known. Close
-            # through its native queue without replaying chat or losing either ID.
-            unresolved = deepcopy(self.unknown_write)
-            self.unknown_action_write, self.unknown_write = unresolved, None
-            self.report["action_cleanup"] = {"verified": False, "state": "CHAT_BROADCAST_OUTCOME_UNKNOWN"}
-            self.save()
-            await super().cleanup()
-            if self.unknown_write is None:
-                self.unknown_write = unresolved
-            self.save()
-            return
         if self.actioning is not None and self.unknown_write is None:
             try:
                 await self.call("operation_cancel", {"operation_id": self.actioning["operation_id"],
                                                       "request_id": self.prefix + ":chat-cleanup-cancel"}, write=True)
                 terminal = await self.wait(self.actioning, "ACTION")
                 if terminal["status"] == "CANCELLED":
-                    check(terminal.get("result", {}).get("observed_outcome") == "chat_cancelled_before_dispatch"
+                    expected = ("chat_cancelled_before_dispatch" if self.actioning["action"] == "chat"
+                                else "action_cancelled_before_dispatch")
+                    check(terminal.get("result", {}).get("observed_outcome") == expected
                           and terminal["result"].get("native_dispatch_started") is False,
                           "CHAT_CANCEL_OUTCOME_UNVERIFIED")
                 self.report["action_cleanup"] = {"operation_id": terminal["operation_id"], "status": terminal["status"]}
@@ -213,6 +203,19 @@ class ChatAcceptance(ActorEventsAcceptance):
             except Exception:
                 self.report["action_cleanup"] = {"verified": False, "state": "ACTION_OUTCOME_UNCONFIRMED"}
             self.save()
+        if (self.unknown_write is not None and self.unknown_write.get("tool") in {"game_act", "operation_cancel"}
+                and self.active is not None):
+            # An action or its cancellation may be unknown, but actor identity is
+            # known. Preserve that request key separately while closing normally.
+            unresolved = deepcopy(self.unknown_write)
+            self.unknown_action_write, self.unknown_write = unresolved, None
+            self.report["action_cleanup"] = {"verified": False, "state": "ACTION_OUTCOME_UNKNOWN"}
+            self.save()
+            await super().cleanup()
+            if self.unknown_write is None:
+                self.unknown_write = unresolved
+            self.save()
+            return
         await super().cleanup()
 
 

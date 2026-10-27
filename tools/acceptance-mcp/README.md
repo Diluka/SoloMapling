@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制和普通聊天，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、普通聊天和中心首屏，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -10,9 +10,9 @@
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
-| `game_act` | 在真实 actor 场景中排队普通 `chat` | 会产生原生聊天广播；必须有 request_id 和实际 expected_context |
+| `game_act` | 在真实 actor 场景中排队 `chat`、`npc_center_open` 或 `npc_cancel` | 写操作；必须有 request_id 和实际 expected_context |
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。聊天另需实际七工具及顶层和 `actor_control` 中的 `actions=["chat"]`，不因客户端 schema 存在就当作已开启。没有 NPC、移动或任务脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]` 或三种已实现动作 `chat/npc_center_open/npc_cancel`，顶层和 `actor_control` 公告必须一致。客户端 schema 存在不代表后端已开启。中心只开放原生 UI 首屏和按最新版本取消；没有任意 NPC、菜单选择、移动或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 ## 安装与启动
 
@@ -70,6 +70,8 @@ enabled = true
 | `operation_get(operation_id="…", since_cursor=0, limit=100)` | `GET /solo/acceptance/v1/operation/{id}?since_cursor=0&limit=100` |
 | `operation_cancel(operation_id="…", request_id="cancel-unique-1")` | `POST /solo/acceptance/v1/operation/{id}/cancel`，data 为空对象 |
 | `game_act(session_id="…", expected_generation=1, request_id="chat-unique-1", action="chat", parameters={"text":"实际原文"}, expected_context={"scene_ref":"…","runtime_generation":"…"})` | `POST /solo/acceptance/v1/actor/act`，请求 ID 只放外层信封 |
+| `game_act(…, action="npc_center_open", parameters={})` | 同一路由，固定原生中心入口，不接受 NPC 模板或脚本名 |
+| `game_act(…, action="npc_cancel", parameters={"dialogue_version":123})` | 同一路由，版本必须来自当前实际 actor 对话 |
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
 
@@ -79,7 +81,7 @@ enabled = true
 
 `actor_close` 同样可能先排队。需查询到原生关闭结果、`native_cleanup_verified=true` 和 `persisted_state_verified=true`，才能确认保存与离线。`operation_cancel` 仅请求取消；不能把 `CANCEL_REQUESTED` 当作已经停止或已清理。
 
-`game_act` 本轮只允许 `action="chat"`，参数对象仅有 `text`，场景对象仅有 `scene_ref/runtime_generation`；顶层及嵌套多余字段都拒绝。文本按 Java UTF-16 单元计算1～127的长度，拒绝全空白及首字符 `@`、`/`，保留提交原文而不 trim。客户端不猜测角色编码；后端按原生字符集严格编码，中文 GBK 无法表示的字符会失败，不静默替换成问号。`!` 仍按普通角色的原生规则处理。
+`game_act` 的 schema 将动作与参数分支关联：chat 只能有 `text`，中心打开必须 `{}`，取消只能有正的严格 long `dialogue_version`。场景对象仅有 `scene_ref/runtime_generation`；顶层及嵌套多余字段都安全拒绝，不回显非法值。聊天文本按 Java UTF-16 单元计算1～127的长度，拒绝全空白及首字符 `@`、`/`，保留提交原文而不 trim。客户端不猜测角色编码；后端按原生字符集严格编码，中文 GBK 无法表示的字符会失败，不静默替换成问号。`!` 仍按普通角色的原生规则处理。
 
 聊天复用同 session 队列，返回 `kind=ACTION/action=chat`；`QUEUED` 或 handler 返回均不表示已广播。只有实际自身 CID、原文和新包 sequence 匹配的 `CHATTEXT 0xA2` 才能形成 `SUCCEEDED/native_chat_broadcast`。终态历史只保留匹配结果和序号，不保存正文，正文沿当前 session 的有界事件窗口读取。未 dispatch 的取消必须等实际 `CANCELLED/chat_cancelled_before_dispatch`；已广播不能撤回，须保留实际结果及 `cancel_too_late`。取消聊天不关闭角色。
 
@@ -89,7 +91,11 @@ enabled = true
 
 actor 的顶层 `events` 使用每会话独立的包 `sequence`，与 `operation_get.events` 的生命周期 `seq` 完全分开。`since_cursor` 表示已读到的位置，默认0；窗口最多保留256包，每页最多 `limit` 项，读取不消费。`next_cursor` 是本页最后一项，没有项时保留输入游标。`truncated` 表示窗口内还有下一页；`cursor_expired` 表示更早历史已淘汰，两者独立。未来游标返回400，关闭或旧代次的已知会话返回410，进程重启后未知会话可能返回404。不能用 operation 历史接口绕过会话状态读取正文。
 
-当前解码 `CHATTEXT`、`PLAYER_HINT` 和 `SERVERMESSAGE` type0～7，按角色原生字符集读取，正文最多1024个 Unicode 字符并注明截断。未知或畸形包只有有界摘要，不返回原始包。type4 公告在正文前有 ticker flag，不能按普通类型误读。已有 `session.actor.packet_events` 继续只返回摘要；完整正文只在 actor 观察的顶层事件窗口中出现。`actor.scene` 是读取时的当前真实场景，不代表每条历史包发生的场景。R1 目录最多前500个场景、无分页；角色自己的 scene_ref 不受该目录限制。
+按实际能力解码 `CHATTEXT`、`PLAYER_HINT`、`SERVERMESSAGE` type0～7，新增中心后还解码 `NPC_TALK 0x130` type4。旧三类 decoder 公告仍可用于旧后端观察。按角色原生字符集读取，正文最多1024个 Unicode 字符并注明截断；未知或畸形包只有有界摘要，不返回原始包。type4 公告在正文前有 ticker flag，不能按普通类型误读。已有 `session.actor.packet_events` 继续只返回摘要；完整正文只在 actor 观察的顶层事件窗口中出现。`actor.scene` 是读取时的当前真实场景，不代表每条历史包发生的场景。R1 目录最多前500个场景、无分页；角色自己的 scene_ref 不受该目录限制。
+
+中心的 `actor.dialogue` 仅含 `dialogue_version/active/supported/entry_type/npc_template_id/message_type/packet_sequence`。version 取当前 NPC 包的独立 sequence，必须与 session/代次合用；当前 CM 对象仍匹配且没有 QM 才能 active。正文、NPC 名称或相同模板不能代替活跃状态。未知新 NPC 包、取消、关闭或世界换代都使旧版本失效。
+
+中心由原生 `ENTER_MTS` 的 `use_mts=false` 分支打开固定9900001首屏，不要求地图上存在该 NPC，也不把它称为远距离地图点击。取消由最新实际 type4 固定发 `04 ff`，调用方不能传 selection、show、脚本或原始包。成功取消及关闭均要求 `native_dialogue_cleanup_verified=true`，表示原生 CM/QM 映射都已清空。`operation_cancel` 只取消尚未派发的操作，不结束已经打开的 CM。新请求使用已失效的 dialogue_version 返回410，不能当作幂等成功；同 ID 重放仍返回原操作。
 
 ## 本地测试和只读协议冒烟
 
@@ -173,3 +179,21 @@ actor 的顶层 `events` 使用每会话独立的包 `sequence`，与 `operation
 关闭前从最初包游标重新核对两个 nonce 都只有一条自身回声，避免延迟的重复广播被中间观察漏掉。最后正常保存退出，核对旧会话正文被拒和 ACTION 历史不含正文；重新打开同一 CID 的新会话，再正常退出。待执行 ACTION 超时先请求取消并核实终态，再正常关闭角色。ACTION 收据在清除未知标记前必须绑定本次输入会话，陌生操作不会被取消。
 
 写结果未知时保留原请求 ID，不盲重发聊天；会话已知时仍尝试正常 close，广播是否发生与角色是否清理分别报告。若 close 也未知，`recovery.unknown_action_write` 保留原 ACTION ID，`unknown_write` 另存关闭 ID；清理成功也不会把聊天未知或先前失败改为通过。通过只证明原生普通发言及自身回声，系统公告、机器人回复、PLAYER_HINT、NPC 和真实客户端画面不能代替本项证据。
+
+## 显式目标的原生中心首屏验收
+
+```bash
+.venv/bin/python -m solo_acceptance_mcp.npc_center_smoke \
+  --config /absolute/private/solo-acceptance.validation.json \
+  --profile primary \
+  --expected-base-url http://explicitly-verified-isolated-address:8686 \
+  --output /absolute/evidence/new-npc-center-run.json
+```
+
+目标、profile 和新证据路径均必填。流程要求实际三动作、type4 decoder 和 `actor_control.npc_dialogue` 公告。先正常打开 level1/map10000 的原生角色，记录地图/场景/坐标、等级经验、金币、背包任务和 `tickets_summary` 的三种券 `nx_credit/maple_point/nx_prepaid`。然后只打开中心首屏，独立观察真实304/type4、模板9900001、speaker=0、未截断正文与当前活跃版本，不选择任何菜单。
+
+脚本重放同一打开 ID 检查不增加 NPC 包，正常取消后核对原生清理及全部前后态；重放取消 ID，使用新 ID 提交旧版本必须被拒。重新打开后，用旧版本取消也必须被拒且新 CM 保持原样，再用新版正常取消。第三次打开后直接正常退出，明确核对对话清理；同 CID 新会话重开后须无活跃对话、无收益或地图变化，再正常关闭。关闭前从最初窗口重读，NPC 包必须恰好对应三次已验证打开，避免迟到重复包被中间观察略过。存档重开不要求 x/y 与原位置相同。
+
+每次重新打开前按单调时钟等待 `npc_dialogue.npc_minimum_interval_ms + actor_control.native_clock_update_interval_ms + 1`，当前500+777+1为1278ms，额外1ms对应原生严格 `<` 判断。能力缺失、非正整数或超出 `operation-timeout` 时登录前拒绝。失败不会自动重开、重置点击时间或改服务时钟；NPC ACTION 或其取消请求结果未知时，原 ID 保存在 `recovery.unknown_action_write`，仍尝试正常关闭已知角色，若关闭也未知则另存关闭 ID。清理成功不抹去原失败，也不当作对话已经正常取消。
+
+本地测试使用 HTTP 桩；候选实现、隔离原生脚本验收和实际部署证据分别记录。通过本流程只证明中心首屏和取消，不代表菜单选择、礼包、传送、其他 NPC、SocialBot 或真实客户端画面已验收。

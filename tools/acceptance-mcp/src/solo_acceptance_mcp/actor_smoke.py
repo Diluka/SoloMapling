@@ -174,7 +174,7 @@ class ActorAcceptance:
         check(type(value.get("schema_version")) is int and value["schema_version"] == 1, "OPERATION_SCHEMA_INVALID")
         check(value.get("kind") == kind and value.get("profile_id") == self.profile, "OPERATION_IDENTITY_MISMATCH")
         if kind == "ACTION":
-            check(value.get("action") == "chat", "OPERATION_ACTION_INVALID")
+            check(value.get("action") in {"chat", "npc_center_open", "npc_cancel"}, "OPERATION_ACTION_INVALID")
         check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
         if operation_id is not None:
             check(value["operation_id"] == operation_id, "OPERATION_ID_MISMATCH")
@@ -196,6 +196,8 @@ class ActorAcceptance:
             self.operation(value, kind, operation_id)
             check(value["session_id"] == receipt["session_id"]
                   and value["session_generation"] == receipt["session_generation"], "OPERATION_SESSION_CHANGED")
+            if kind == "ACTION":
+                check(value["action"] == receipt["action"], "OPERATION_ACTION_CHANGED")
             if value["status"] in TERMINAL:
                 return value
             check(time.monotonic() < deadline, "OPERATION_TIMEOUT")

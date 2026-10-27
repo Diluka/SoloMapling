@@ -45,7 +45,10 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
     actions = capabilities.get("actions", [])
     if "game_act" in enabled:
         control = capabilities.get("actor_control")
-        if actions != ["chat"] or not isinstance(control, dict) or control.get("actions") != ["chat"]:
+        if (not isinstance(actions, list) or any(not isinstance(value, str) for value in actions)
+                or len(actions) != len(set(actions))
+                or set(actions) not in ({"chat"}, {"chat", "npc_center_open", "npc_cancel"})
+                or not isinstance(control, dict) or control.get("actions") != actions):
             raise RuntimeError("聊天动作与实际工具能力不一致。")
     elif actions != []:
         raise RuntimeError("未开放动作工具的验收桥不能公告聊天能力。")

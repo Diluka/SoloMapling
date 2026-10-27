@@ -16,6 +16,9 @@ import org.gms.net.server.coordinator.matchchecker.MatchCheckerCoordinator;
 import org.gms.net.server.coordinator.session.Hwid;
 import org.gms.net.server.coordinator.session.SessionCoordinator;
 import org.gms.net.server.world.World;
+import org.gms.scripting.npc.NPCConversationManager;
+import org.gms.scripting.quest.QuestActionManager;
+import org.gms.server.CashShop;
 import org.gms.server.maps.MapleMap;
 import org.gms.service.AccountService;
 import org.gms.service.CharacterService;
@@ -295,9 +298,21 @@ class NativeActorBackendTest {
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
         ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
 
+        // Native CM/QM maps must also be empty, even after Character.empty() cleared its client/map.
+        when(client.getCM()).thenReturn(mock(NPCConversationManager.class));
+        assertTrue(assertThrows(ObservationException.class, () -> backend.close(handle)).reason().contains("cleanup_unverified"));
+        ownership.verify(() -> ActorAccountOwnership.release(lease), never());
+        when(client.getCM()).thenReturn(null);
+        when(client.getQM()).thenReturn(mock(QuestActionManager.class));
+        assertTrue(assertThrows(ObservationException.class, () -> backend.close(handle)).reason().contains("cleanup_unverified"));
+        ownership.verify(() -> ActorAccountOwnership.release(lease), never());
+        when(client.getQM()).thenReturn(null);
+
         Map<String, Object> evidence = backend.close(handle);
         assertEquals(true, evidence.get("native_cleanup_verified"));
         assertEquals(true, evidence.get("persisted_state_verified"));
+        assertEquals(true, evidence.get("native_dialogue_cleanup_verified"));
+        verify(client, times(1)).invalidateDialogue();
         verify(client, times(1)).disconnect(false, false);
         verify(match, times(1)).dismissMatchConfirmation(41);
         assertEquals(evidence, backend.close(handle));
@@ -319,6 +334,13 @@ class NativeActorBackendTest {
     @Test
     void snapshotReportsNativeIdentityAndBoundedPublicInventoryWithoutPasswordsOrPackets() {
         when(characters.findById(41)).thenReturn(stored());
+        CashShop cashShop = mock(CashShop.class);
+        when(character.getCashShop()).thenReturn(cashShop);
+        when(cashShop.getCash(CashShop.NX_CREDIT)).thenReturn(101);
+        when(cashShop.getCash(CashShop.MAPLE_POINT)).thenReturn(202);
+        when(cashShop.getCash(CashShop.NX_PREPAID)).thenReturn(404);
+        Map<String, Object> dialogue = Map.of("active", false, "supported", false);
+        when(client.dialogueState()).thenReturn(dialogue);
         for (InventoryType type : List.of(InventoryType.EQUIPPED, InventoryType.EQUIP, InventoryType.USE,
                 InventoryType.SETUP, InventoryType.ETC, InventoryType.CASH)) {
             Inventory inventory = mock(Inventory.class);
@@ -336,6 +358,8 @@ class NativeActorBackendTest {
         assertEquals(false, snapshot.get("is_bot"));
         assertEquals(true, snapshot.get("persisted"));
         assertEquals(Map.of("x", 4, "y", 8), snapshot.get("position"));
+        assertEquals(Map.of("nx_credit", 101, "maple_point", 202, "nx_prepaid", 404), snapshot.get("tickets_summary"));
+        assertEquals(dialogue, snapshot.get("dialogue"));
         Map<?, ?> use = (Map<?, ?>) ((Map<?, ?>) snapshot.get("inventory_summary")).get("use");
         assertEquals(101, use.get("count"));
         assertEquals(true, use.get("truncated"));

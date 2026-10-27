@@ -21,9 +21,10 @@ final class PacketEventBuffer {
     private long dropped;
     private long malformed;
     private volatile boolean closed;
+    private volatile long latestNpcSequence;
 
-    void accept(Packet packet, int language) {
-        if (closed) return;
+    Map<String, Object> accept(Packet packet, int language) {
+        if (closed) return null;
         String receivedAt = Instant.now().toString();
         byte[] bytes = null;
         String failure = null;
@@ -51,7 +52,7 @@ final class PacketEventBuffer {
             }
         }
         synchronized (events) {
-            if (closed) return;
+            if (closed) return null;
             if (events.size() == CAPACITY) {
                 events.removeFirst();
                 dropped++;
@@ -63,7 +64,10 @@ final class PacketEventBuffer {
             event.put("length", bytes == null ? null : bytes.length);
             event.putAll(fields);
             if ("malformed".equals(fields.get("decode_status"))) malformed++;
-            events.addLast(Collections.unmodifiableMap(event));
+            Map<String, Object> immutable = Collections.unmodifiableMap(event);
+            events.addLast(immutable);
+            if (opcode != null && opcode == PacketEventDecoder.NPC_TALK) latestNpcSequence = sequence;
+            return immutable;
         }
     }
 
@@ -119,6 +123,7 @@ final class PacketEventBuffer {
     long dropped() { synchronized (events) { return dropped; } }
     long malformed() { synchronized (events) { return malformed; } }
     long latest() { synchronized (events) { return sequence; } }
+    long latestNpcSequence() { return latestNpcSequence; }
     boolean closed() { return closed; }
     void close() { synchronized (events) { closed = true; } }
 }
