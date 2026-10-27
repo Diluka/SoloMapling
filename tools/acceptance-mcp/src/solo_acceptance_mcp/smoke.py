@@ -47,7 +47,8 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         control = capabilities.get("actor_control")
         if (not isinstance(actions, list) or any(not isinstance(value, str) for value in actions)
                 or len(actions) != len(set(actions))
-                or set(actions) not in ({"chat"}, {"chat", "npc_center_open", "npc_cancel"})
+                or set(actions) not in ({"chat"}, {"chat", "npc_center_open", "npc_cancel"},
+                                       {"chat", "npc_center_open", "npc_cancel", "npc_reply"})
                 or not isinstance(control, dict) or control.get("actions") != actions):
             raise RuntimeError("聊天动作与实际工具能力不一致。")
     elif actions != []:

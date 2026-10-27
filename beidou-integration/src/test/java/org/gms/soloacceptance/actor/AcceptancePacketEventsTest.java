@@ -299,7 +299,7 @@ class AcceptancePacketEventsTest {
                 Map.of("event_type", "server_message", "opcode", 0x44,
                         "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7)),
                 Map.of("event_type", "npc_dialogue", "opcode", 0x130,
-                        "message_types", List.of(4))), capabilities.get("decoded_packets"));
+                        "message_types", List.of(4, 12))), capabilities.get("decoded_packets"));
     }
 
     private Packet nativePacket(Supplier<Packet> factory) {

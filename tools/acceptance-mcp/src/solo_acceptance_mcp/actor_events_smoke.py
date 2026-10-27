@@ -51,9 +51,10 @@ def require_packet_capability(caps: dict[str, Any]) -> dict[str, Any]:
               and actual["opcode"] == expected["opcode"], "PACKET_DECODERS_INVALID")
         if "message_types" in expected:
             types = actual.get("message_types")
+            supported_types = ([4], [4, 12]) if expected["event_type"] == "npc_dialogue" else (expected["message_types"],)
             check(isinstance(types, list) and all(type(value) is int for value in types)
-                  and len(types) == len(expected["message_types"])
-                  and set(types) == set(expected["message_types"]), "PACKET_MESSAGE_TYPES_INVALID")
+                  and any(len(types) == len(candidate) and set(types) == set(candidate) for candidate in supported_types),
+                  "PACKET_MESSAGE_TYPES_INVALID")
     return packet
 
 

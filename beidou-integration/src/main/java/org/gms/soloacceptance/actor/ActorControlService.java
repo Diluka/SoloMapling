@@ -204,9 +204,11 @@ public final class ActorControlService {
         }
         String text = request.parameters() == null ? null : request.parameters().text();
         Long dialogueVersion = request.parameters() == null ? null : request.parameters().dialogueVersion();
+        String replyKind = request.parameters() == null ? null : request.parameters().kind();
+        Integer selection = request.parameters() == null ? null : request.parameters().selection();
         ActorActRequest.ExpectedContext context = request.expectedContext();
         ActionFingerprint fingerprint = new ActionFingerprint(request.expectedGeneration(), request.action(),
-                text == null ? null : textDigest(text), dialogueVersion, context);
+                text == null ? null : textDigest(text), dialogueVersion, replyKind, selection, context);
         RequestKey key = new RequestKey("ACTION", owner, request.sessionId(), requestId);
         Operation prior;
         Session session;
@@ -232,8 +234,14 @@ public final class ActorControlService {
         }
         if (prior != null) return refreshedResponse(prior, 0, 100);
 
-        validateNativeAction(handle, request.action(), text, dialogueVersion);
-        validateActionContext(handle, context);
+        try {
+            validateNativeAction(handle, request.action(), text, dialogueVersion, replyKind, selection);
+            validateActionContext(handle, context);
+        } catch (RuntimeException failure) {
+            synchronized (monitor) { prior = duplicate(key, fingerprint); }
+            if (prior != null) return refreshedResponse(prior, 0, 100);
+            throw failure;
+        }
         synchronized (monitor) {
             // Concurrent callers may have accepted this ID while native validation was running.
             prior = duplicate(key, fingerprint);
@@ -257,7 +265,8 @@ public final class ActorControlService {
                 requests.put(key, new RequestRecord(fingerprint, operation.id));
                 Session acceptedSession = session;
                 NativeActorHandle acceptedHandle = handle;
-                submit(session, () -> runAction(acceptedSession, operation, acceptedHandle, text, dialogueVersion, context), operation);
+                submit(session, () -> runAction(acceptedSession, operation, acceptedHandle, text, dialogueVersion,
+                        replyKind, selection, context), operation);
                 return response(operation, 0, 100);
             }
         }
@@ -395,10 +404,8 @@ public final class ActorControlService {
             if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
-            result.put("actions", List.of("chat", "npc_center_open", "npc_cancel"));
-            result.put("npc_dialogue", Map.of("entrypoints", List.of("native_ui_center"), "message_types", List.of(4),
-                    "version_scope", "session_packet_sequence", "cancel_requires_latest_version", true,
-                    "npc_minimum_interval_ms", 500));
+            result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply"));
+            result.put("npc_dialogue", AcceptanceClient.nativeDialogueCapabilities());
             result.put("maximum_pending_actions_per_session", MAX_PENDING_ACTIONS);
             result.put("actor_executor_queue_capacity", EXECUTOR_QUEUE_CAPACITY);
             result.put("maximum_active_sessions", maxSessions);
@@ -492,6 +499,7 @@ public final class ActorControlService {
     }
 
     private void runAction(Session session, Operation operation, NativeActorHandle handle, String text, Long dialogueVersion,
+                           String replyKind, Integer selection,
                            ActorActRequest.ExpectedContext context) {
         try {
             synchronized (monitor) {
@@ -502,7 +510,7 @@ public final class ActorControlService {
                 requireActionSession(session, handle);
                 running(operation, "chat".equals(operation.action) ? "chat_validation_started" : "npc_validation_started");
             }
-            validateNativeAction(handle, operation.action, text, dialogueVersion);
+            validateNativeAction(handle, operation.action, text, dialogueVersion, replyKind, selection);
             validateActionContext(handle, context);
             synchronized (monitor) {
                 if (actionCancelled(session, operation)) {
@@ -517,11 +525,12 @@ public final class ActorControlService {
                 case "chat" -> backend.chat(handle, text);
                 case "npc_center_open" -> backend.npcCenterOpen(handle);
                 case "npc_cancel" -> backend.npcCancel(handle, dialogueVersion);
+                case "npc_reply" -> backend.npcReply(handle, dialogueVersion, replyKind, selection);
                 default -> throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
             };
             synchronized (monitor) {
                 if ("chat".equals(operation.action)) finishChat(operation, outcome);
-                else finishNpc(operation, outcome);
+                else finishNpc(operation, outcome, dialogueVersion, replyKind, selection);
             }
         } catch (ObservationException failure) {
             synchronized (monitor) {
@@ -581,61 +590,89 @@ public final class ActorControlService {
         finish(operation, status, "SUCCEEDED".equals(status) ? "native_chat_broadcast_observed" : reason);
     }
 
-    private void finishNpc(Operation operation, Map<String, Object> outcome) {
+    private void finishNpc(Operation operation, Map<String, Object> outcome, Long requestedVersion,
+                           String replyKind, Integer selection) {
         boolean opening = "npc_center_open".equals(operation.action);
-        String success = opening ? "center_dialogue_opened" : "dialogue_cancelled";
+        boolean replying = "npc_reply".equals(operation.action);
+        boolean selecting = replying && "select".equals(replyKind);
+        String success = replying ? selecting ? "dialogue_replied" : "dialogue_declined"
+                : opening ? "center_dialogue_opened" : "dialogue_cancelled";
         String failed = opening ? "native_center_not_opened" : "native_dialogue_not_cancelled";
-        String unknown = opening ? "native_center_outcome_unknown" : "native_dialogue_outcome_unknown";
+        String unknown = replying ? "native_dialogue_reply_outcome_unknown"
+                : opening ? "native_center_outcome_unknown" : "native_dialogue_outcome_unknown";
         String status = outcome != null && outcome.get("status") instanceof String value ? value : "INDETERMINATE";
         Map<?, ?> nativeResult = outcome != null && outcome.get("result") instanceof Map<?, ?> value ? value : Map.of();
         boolean dispatched = Boolean.TRUE.equals(nativeResult.get("native_dispatch_started"));
-        boolean activeMatches = opening ? Boolean.TRUE.equals(nativeResult.get("active"))
+        boolean activeMatches = opening || selecting ? Boolean.TRUE.equals(nativeResult.get("active"))
                 : Boolean.FALSE.equals(nativeResult.get("active"))
                 && Boolean.TRUE.equals(nativeResult.get("native_dialogue_cleanup_verified"));
-        if (!List.of("SUCCEEDED", "FAILED", "INDETERMINATE").contains(status)
+        boolean replyMatches = !replying || Boolean.TRUE.equals(nativeResult.get("reply_version_consumed"))
+                && replyKind.equals(nativeResult.get("kind")) && java.util.Objects.equals(selection, nativeResult.get("selection"))
+                && nativeResult.get("dialogue_version") instanceof Number next && next.longValue() > requestedVersion;
+        if (!List.of("SUCCEEDED", "FAILED", "INDETERMINATE").contains(status) || replying && "FAILED".equals(status)
                 || "SUCCEEDED".equals(status) && (!dispatched || !activeMatches
-                || !success.equals(nativeResult.get("observed_outcome")))) status = "INDETERMINATE";
+                || !replyMatches || !success.equals(nativeResult.get("observed_outcome")))) status = "INDETERMINATE";
 
         Map<String, Object> result = new LinkedHashMap<>();
         String observed = "SUCCEEDED".equals(status) ? success : "FAILED".equals(status) ? failed : unknown;
         result.put("observed_outcome", observed);
         result.put("native_dispatch_started", dispatched);
         for (String key : List.of("dialogue_version", "packet_sequence", "packet_cursor_before", "packet_cursor_after",
-                "npc_template_id", "message_type")) {
+                "npc_template_id", "message_type", "selection")) {
             if (nativeResult.get(key) instanceof Number value) result.put(key, value);
             else if (nativeResult.containsKey(key) && nativeResult.get(key) == null) result.put(key, null);
         }
-        for (String key : List.of("active", "native_dialogue_cleanup_verified", "native_handler_error")) {
+        for (String key : List.of("active", "native_dialogue_cleanup_verified", "native_handler_error", "reply_version_consumed")) {
             if (nativeResult.get(key) instanceof Boolean value) result.put(key, value);
             else if (nativeResult.containsKey(key) && nativeResult.get(key) == null) result.put(key, null);
         }
+        if (nativeResult.get("kind") instanceof String kind && List.of("select", "decline").contains(kind)) result.put("kind", kind);
+        if (nativeResult.get("dialogue_path") instanceof String path
+                && List.of("center", "welfare", "transport_category", "transport_town", "unsupported", "closed").contains(path)) {
+            result.put("dialogue_path", path);
+        } else if (nativeResult.containsKey("dialogue_path") && nativeResult.get("dialogue_path") == null) result.put("dialogue_path", null);
         result.put("cancel_too_late", dispatched && operation.cancelRequested);
         operation.result = result;
         operation.error = "SUCCEEDED".equals(status) ? null : Map.of("reason", observed);
         finish(operation, status, observed);
     }
 
-    private void validateNativeAction(NativeActorHandle handle, String action, String text, Long dialogueVersion) {
+    private void validateNativeAction(NativeActorHandle handle, String action, String text, Long dialogueVersion,
+                                      String replyKind, Integer selection) {
         switch (action) {
             case "chat" -> backend.validateChat(handle, text);
             case "npc_center_open" -> backend.validateNpcCenterOpen(handle);
             case "npc_cancel" -> backend.validateNpcCancel(handle, dialogueVersion);
+            case "npc_reply" -> backend.validateNpcReply(handle, dialogueVersion, replyKind, selection);
             default -> throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
         }
     }
 
     private static void validateActionParameters(String action, ActorActRequest.Parameters parameters) {
-        if (action == null || !List.of("chat", "npc_center_open", "npc_cancel").contains(action)) {
+        if (action == null || !List.of("chat", "npc_center_open", "npc_cancel", "npc_reply").contains(action)) {
             throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
         }
         if (parameters == null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+        if (!"npc_reply".equals(action) && (parameters.kind() != null || parameters.selection() != null)) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+        }
         if ("chat".equals(action)) {
             if (parameters.dialogueVersion() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
         } else {
             if (parameters.text() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-            if ("npc_cancel".equals(action)) {
+            if ("npc_cancel".equals(action) || "npc_reply".equals(action)) {
                 if (parameters.dialogueVersion() == null || parameters.dialogueVersion() < 1) {
                     throw error(HttpStatus.BAD_REQUEST, "invalid_dialogue_version");
+                }
+                if ("npc_reply".equals(action)) {
+                    if (parameters.kind() == null || !List.of("select", "decline").contains(parameters.kind())) {
+                        throw error(HttpStatus.BAD_REQUEST, "unsupported_reply_kind");
+                    }
+                    if ("select".equals(parameters.kind())) {
+                        if (parameters.selection() == null || parameters.selection() < 0) {
+                            throw error(HttpStatus.BAD_REQUEST, "invalid_npc_selection");
+                        }
+                    } else if (parameters.selection() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
                 }
             } else if (parameters.dialogueVersion() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
         }
@@ -995,6 +1032,7 @@ public final class ActorControlService {
     private record RequestKey(String kind, String owner, String target, String requestId) { }
     private record RequestRecord(Object fingerprint, String operationId) { }
     private record ActionFingerprint(long generation, String action, String textHash, Long dialogueVersion,
+                                     String replyKind, Integer selection,
                                      ActorActRequest.ExpectedContext context) { }
     private static final class Session {
         final String id;

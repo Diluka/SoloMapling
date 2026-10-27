@@ -220,10 +220,10 @@ public final class NativeActorBackend {
         boolean[] started = {false};
         boolean handlerError = false;
         try {
-            dispatch(new EnterMTSHandler(), client, packet -> { }, () -> {
+            client.dispatchNativeCenter(() -> dispatch(new EnterMTSHandler(), client, packet -> { }, () -> {
                 validateNpcCenterOpen(handle);
                 started[0] = true;
-            });
+            }));
         } catch (RuntimeException failure) {
             if (!started[0]) throw failure;
             handlerError = true;
@@ -277,25 +277,29 @@ public final class NativeActorBackend {
 
     public void validateNpcCancel(NativeActorHandle handle, long version) {
         requireOrdinaryActor(handle);
-        handle.client().requireNativeCenterDialogue(version);
+        handle.client().validateNativeDialogueCancel(version);
     }
 
     public Map<String, Object> npcCancel(NativeActorHandle handle, long version) {
-        validateNpcCancel(handle, version);
+        requireOrdinaryActor(handle);
         AcceptanceClient client = handle.client();
+        AcceptanceClient.NativeDialogueCommand command = client.validateNativeDialogueCancel(version);
         NPCConversationManager original = client.getCM();
         long before = client.latestPacketSequence();
         boolean[] started = {false};
         boolean handlerError = false;
+        boolean dispatchError = false;
         try {
-            dispatch(new NPCMoreTalkHandler(), client, packet -> packet.writeByte(4).writeByte(-1), () -> {
-                validateNpcCancel(handle, version);
+            client.dispatchNativeDialogue(command, () -> dispatch(new NPCMoreTalkHandler(), client,
+                    packet -> packet.writeByte(command.messageType()).writeByte(command.action()), () -> {
+                requireOrdinaryActor(handle);
                 if (client.getCM() != original) throw conflict("dialogue_not_active");
                 started[0] = true;
-            });
+            }));
         } catch (RuntimeException failure) {
-            if (!started[0]) throw failure;
-            handlerError = true;
+            if (!started[0] && !command.consumed()) throw failure;
+            handlerError = started[0];
+            dispatchError = true;
         }
         Boolean active = null;
         boolean cleaned = false;
@@ -308,11 +312,114 @@ public final class NativeActorBackend {
             active = cm != null && noQuest;
             if (cleaned) client.invalidateDialogue();
         } catch (RuntimeException ignored) { active = null; }
-        String status = cleaned ? "SUCCEEDED" : handlerError || active == null || !sameDialogue ? "INDETERMINATE" : "FAILED";
-        String outcome = cleaned ? "dialogue_cancelled" : "INDETERMINATE".equals(status)
+        boolean cancelled = started[0] && cleaned;
+        String status = cancelled ? "SUCCEEDED" : dispatchError || active == null || !sameDialogue ? "INDETERMINATE" : "FAILED";
+        String outcome = cancelled ? "dialogue_cancelled" : "INDETERMINATE".equals(status)
                 ? "native_dialogue_outcome_unknown" : "native_dialogue_not_cancelled";
-        return npcOutcome(status, outcome, started[0], version, active, cleaned,
-                before, latestPacketCursor(client, null), handlerError);
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("message_type", command.messageType());
+        metadata.put("reply_version_consumed", command.consumed());
+        metadata.put("dialogue_path", cancelled ? "closed" : null);
+        return npcMetadata(npcOutcome(status, outcome, started[0], version, active, cleaned,
+                before, latestPacketCursor(client, null), handlerError), metadata);
+    }
+
+    public void validateNpcReply(NativeActorHandle handle, long version, String kind, Integer selection) {
+        requireOrdinaryActor(handle);
+        handle.client().validateNativeDialogueReply(version, kind, selection);
+    }
+
+    public Map<String, Object> npcReply(NativeActorHandle handle, long version, String kind, Integer selection) {
+        requireOrdinaryActor(handle);
+        AcceptanceClient client = handle.client();
+        AcceptanceClient.NativeDialogueCommand command = client.validateNativeDialogueReply(version, kind, selection);
+        long before = client.latestPacketSequence();
+        boolean[] started = {false};
+        boolean handlerError = false;
+        boolean dispatchError = false;
+        try {
+            client.dispatchNativeDialogue(command, () -> dispatch(new NPCMoreTalkHandler(), client, packet -> {
+                packet.writeByte(command.messageType()).writeByte(command.action());
+                if (command.selection() != null) packet.writeIntLE(command.selection());
+            }, () -> {
+                requireOrdinaryActor(handle);
+                started[0] = true;
+            }));
+        } catch (RuntimeException failure) {
+            if (!started[0] && !command.consumed()) throw failure;
+            handlerError = started[0];
+            dispatchError = true;
+        }
+
+        Long after = null;
+        Long sequence = null;
+        Integer messageType = null;
+        Boolean active = null;
+        boolean cleaned = false;
+        boolean complete = false;
+        boolean malformedNpc = false;
+        boolean trusted = false;
+        try {
+            Map<String, Object> window = client.packetEvents(before, 500);
+            after = (Long) window.get("latest_cursor");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> events = (List<Map<String, Object>>) window.get("items");
+            for (Map<String, Object> event : events) {
+                long eventSequence = (Long) event.get("sequence");
+                if (eventSequence <= before || after == null || eventSequence > after) continue;
+                if ("malformed".equals(event.get("decode_status"))
+                        && (event.get("opcode") == null || Integer.valueOf(0x130).equals(event.get("opcode")))) {
+                    malformedNpc = true;
+                }
+                if (Integer.valueOf(0x130).equals(event.get("opcode"))) {
+                    sequence = eventSequence;
+                    messageType = "npc_dialogue".equals(event.get("event_type"))
+                            && "decoded".equals(event.get("decode_status"))
+                            ? (Integer) event.get("message_type") : null;
+                }
+            }
+            complete = after != null && after >= before && Boolean.FALSE.equals(window.get("cursor_expired"))
+                    && Boolean.FALSE.equals(window.get("truncated"));
+        } catch (RuntimeException ignored) { complete = false; }
+        try {
+            NPCConversationManager cm = client.getCM();
+            boolean noQuest = client.getQM() == null;
+            active = cm != null && noQuest;
+            cleaned = cm == null && noQuest;
+            if (sequence != null && Boolean.TRUE.equals(active)) {
+                Map<String, Object> state = client.dialogueState();
+                if (Boolean.TRUE.equals(state.get("active"))
+                        && Objects.equals(state.get("dialogue_version"), sequence)
+                        && Objects.equals(state.get("path"), command.expectedPath())) {
+                    client.validateNativeDialogueCancel(sequence);
+                    trusted = client.getCM() == cm && client.getQM() == null;
+                }
+            }
+        } catch (RuntimeException ignored) { active = null; trusted = false; }
+        boolean succeeded = started[0] && command.consumed() && sequence != null && complete && !malformedNpc && !dispatchError
+                && ("decline".equals(kind)
+                    ? cleaned && Objects.equals(sequence, command.closedPacketSequence()) : trusted);
+        String outcome = succeeded ? "decline".equals(kind) ? "dialogue_declined" : "dialogue_replied"
+                : "native_dialogue_reply_outcome_unknown";
+        if (succeeded && cleaned) client.invalidateDialogue();
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("kind", kind);
+        metadata.put("selection", selection);
+        metadata.put("reply_version_consumed", command.consumed());
+        metadata.put("dialogue_path", succeeded ? cleaned ? "closed" : command.expectedPath() : null);
+        metadata.put("message_type", messageType);
+        return npcMetadata(npcOutcome(succeeded ? "SUCCEEDED" : "INDETERMINATE", outcome, started[0],
+                sequence, active, cleaned, before, latestPacketCursor(client, after), handlerError), metadata);
+    }
+
+    private static Map<String, Object> npcMetadata(Map<String, Object> outcome, Map<String, Object> metadata) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> original = (Map<String, Object>) outcome.get("result");
+        Map<String, Object> result = new LinkedHashMap<>(original);
+        result.putAll(metadata);
+        Map<String, Object> response = new LinkedHashMap<>(outcome);
+        response.put("result", Collections.unmodifiableMap(result));
+        return Collections.unmodifiableMap(response);
     }
 
     private void requireOrdinaryActor(NativeActorHandle handle) {

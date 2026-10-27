@@ -366,7 +366,7 @@ class ActorControlControllerTest {
     void taggedActionParametersRejectFieldsFromOtherActionsEvenWhenExplicitlyNull() throws Exception {
         ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         for (String action : List.of("chat", "npc_center_open", "npc_cancel")) {
-            for (String field : List.of("text", "dialogue_version", "npc_template_id", "script", "selection")) {
+            for (String field : List.of("text", "dialogue_version", "npc_template_id", "script", "kind", "selection")) {
                 if ("chat".equals(action) && "text".equals(field)
                         || "npc_cancel".equals(action) && "dialogue_version".equals(field)) continue;
                 ObjectNode body = npcActionJson(mapper, action);
@@ -387,6 +387,91 @@ class ActorControlControllerTest {
         assertEquals(new ActorActRequest.Parameters("保留给服务校验", 7L),
                 mapper.treeToValue(body, ActorActRequest.class).parameters());
         parameters.put("script", "unavailable");
+        assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class));
+    }
+
+    @Test
+    void npcReplyParametersRoundTripAndPreserveTheExistingParameterConstructors() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (ActorActRequest.Parameters parameters : List.of(
+                new ActorActRequest.Parameters(null, 7L, "select", Integer.MAX_VALUE),
+                new ActorActRequest.Parameters(null, 7L, "decline", null))) {
+            ActorActRequest request = new ActorActRequest("session-id", 7L, "npc_reply", parameters,
+                    new ActorActRequest.ExpectedContext("scene-id", "runtime-id"));
+            String serialized = mapper.writeValueAsString(request);
+            assertEquals(request, mapper.readValue(serialized, ActorActRequest.class));
+            assertEquals("select".equals(parameters.kind()) ? 3 : 2,
+                    mapper.readTree(serialized).get("parameters").size());
+        }
+        assertEquals(new ActorActRequest.Parameters("chat", null, null, null),
+                new ActorActRequest.Parameters("chat"));
+        assertEquals(new ActorActRequest.Parameters(null, 7L, null, null),
+                new ActorActRequest.Parameters(null, 7L));
+    }
+
+    @Test
+    void npcReplyKindsAreMutuallyExclusiveAndRejectUnknownFieldsEvenWhenNull() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String kind : List.of("select", "decline", "accept", "unsupported")) {
+            for (String field : List.of("text", "selection", "lastMsg", "action", "npc_template_id", "script")) {
+                if ("select".equals(kind) && "selection".equals(field)) continue;
+                ObjectNode body = npcActionJson(mapper, "npc_reply");
+                ObjectNode parameters = (ObjectNode) body.get("parameters");
+                parameters.put("dialogue_version", 7);
+                parameters.put("kind", kind);
+                parameters.putNull(field);
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), kind + "." + field);
+            }
+        }
+    }
+
+    @Test
+    void npcReplyFieldsRejectCoercionAndIntegerOverflowWithoutApplyingServiceRanges() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String field : List.of("kind", "selection", "dialogue_version")) {
+            List<String> invalid = "kind".equals(field) ? List.of("1", "1.0", "true", "{}", "[]")
+                    : "selection".equals(field) ? List.of("1.0", "\"7\"", "true", "{}", "[]", "2147483648", "-2147483649")
+                    : List.of("1.0", "\"7\"", "true", "{}", "[]", "9223372036854775808", "-9223372036854775809");
+            for (String value : invalid) {
+                ObjectNode body = npcActionJson(mapper, "npc_reply");
+                ObjectNode parameters = (ObjectNode) body.get("parameters");
+                parameters.put("dialogue_version", 7);
+                parameters.put("kind", "select");
+                parameters.set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class), field + "=" + value);
+            }
+        }
+        ObjectNode body = npcActionJson(mapper, "npc_reply");
+        ObjectNode parameters = (ObjectNode) body.get("parameters");
+        parameters.put("kind", "select");
+        parameters.put("dialogue_version", Long.MAX_VALUE);
+        for (int value : List.of(Integer.MIN_VALUE, -1, 0, Integer.MAX_VALUE)) {
+            parameters.put("selection", value);
+            assertEquals(value, mapper.treeToValue(body, ActorActRequest.class).parameters().selection());
+        }
+        parameters.putNull("selection");
+        assertNull(mapper.treeToValue(body, ActorActRequest.class).parameters().selection());
+        parameters.remove("selection");
+        assertNull(mapper.treeToValue(body, ActorActRequest.class).parameters().selection());
+    }
+
+    @Test
+    void unsupportedNpcReplyKindsReachTheServiceWithoutOpeningAdditionalParameterShapes() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        for (String kind : List.of("accept", "unsupported")) {
+            ObjectNode body = npcActionJson(mapper, "npc_reply");
+            ObjectNode parameters = (ObjectNode) body.get("parameters");
+            parameters.put("dialogue_version", 7);
+            parameters.put("kind", kind);
+            assertEquals(kind, mapper.treeToValue(body, ActorActRequest.class).parameters().kind());
+        }
+        ObjectNode body = npcActionJson(mapper, "npc_reply");
+        ObjectNode parameters = (ObjectNode) body.get("parameters");
+        parameters.put("dialogue_version", 7);
+        assertNull(mapper.treeToValue(body, ActorActRequest.class).parameters().kind());
+        parameters.putNull("kind");
+        assertNull(mapper.treeToValue(body, ActorActRequest.class).parameters().kind());
+        parameters.putNull("selection");
         assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class));
     }
 

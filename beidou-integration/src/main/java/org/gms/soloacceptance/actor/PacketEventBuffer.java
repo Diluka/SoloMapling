@@ -23,7 +23,9 @@ final class PacketEventBuffer {
     private volatile boolean closed;
     private volatile long latestNpcSequence;
 
-    Map<String, Object> accept(Packet packet, int language) {
+    record Receipt(Map<String, Object> event, boolean nativeNpcClose) { }
+
+    Receipt accept(Packet packet, int language) {
         if (closed) return null;
         String receivedAt = Instant.now().toString();
         byte[] bytes = null;
@@ -42,11 +44,13 @@ final class PacketEventBuffer {
         Integer opcode = bytes == null || bytes.length < 2 ? null
                 : (bytes[0] & 0xff) | (bytes[1] & 0xff) << 8;
         Map<String, Object> fields;
+        boolean nativeNpcClose = false;
         if (failure != null) {
             fields = PacketEventDecoder.summary("malformed", failure);
         } else {
             try {
                 fields = PacketEventDecoder.decode(bytes, CharsetConstants.getCharset(language));
+                nativeNpcClose = PacketEventDecoder.nativeNpcClose(bytes, CharsetConstants.getCharset(language));
             } catch (RuntimeException ignored) {
                 fields = PacketEventDecoder.summary("malformed", "packet_decode_failed");
             }
@@ -67,7 +71,7 @@ final class PacketEventBuffer {
             Map<String, Object> immutable = Collections.unmodifiableMap(event);
             events.addLast(immutable);
             if (opcode != null && opcode == PacketEventDecoder.NPC_TALK) latestNpcSequence = sequence;
-            return immutable;
+            return new Receipt(immutable, nativeNpcClose);
         }
     }
 

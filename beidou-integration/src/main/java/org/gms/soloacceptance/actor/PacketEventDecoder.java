@@ -44,7 +44,7 @@ final class PacketEventDecoder {
                 if (speakerType != 4) return summary("unsupported", "unsupported_npc_speaker_type");
                 int npc = reader.integer();
                 int type = reader.unsignedByte();
-                if (type != 4) return summary("unsupported", "unsupported_npc_message_type");
+                if (type != 4 && type != 12) return summary("unsupported", "unsupported_npc_message_type");
                 fields.put("event_type", "npc_dialogue");
                 fields.put("speaker_type", speakerType);
                 fields.put("npc_template_id", npc);
@@ -80,6 +80,20 @@ final class PacketEventDecoder {
 
     static Map<String, Object> summary(String status, String reason) {
         return Map.of("event_type", "packet_summary", "decode_status", status, "reason", reason);
+    }
+
+    /** Internal terminal proof only; type 0 remains an unsupported public packet summary. */
+    static boolean nativeNpcClose(byte[] bytes, Charset charset) {
+        if (bytes == null || bytes.length < 2 || ((bytes[0] & 0xff) | (bytes[1] & 0xff) << 8) != NPC_TALK) return false;
+        try {
+            Reader reader = new Reader(bytes, charset);
+            if (reader.unsignedByte() != 4 || reader.integer() != 9900001
+                    || reader.unsignedByte() != 0 || reader.unsignedByte() != 0) return false;
+            reader.text(new LinkedHashMap<>());
+            if (reader.unsignedByte() != 0 || reader.unsignedByte() != 0) return false;
+            reader.requireEnd();
+            return true;
+        } catch (RuntimeException ignored) { return false; }
     }
 
     private static final class Reader {

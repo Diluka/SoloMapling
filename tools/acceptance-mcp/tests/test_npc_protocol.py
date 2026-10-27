@@ -107,7 +107,7 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
         schema = tools["game_act"].input_schema
         self.assertIs(False, schema.get("additionalProperties"))
         self.assertEqual(set(self.args), set(schema["required"]))
-        self.assertEqual(ACTIONS, schema["properties"]["action"]["enum"])
+        self.assertEqual(ACTIONS + ["npc_reply"], schema["properties"]["action"]["enum"])
         annotations = tools["game_act"].annotations
         self.assertFalse(annotations.read_only_hint)
         self.assertFalse(annotations.destructive_hint)
@@ -117,18 +117,19 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
         variants = parameter_schema.get("anyOf", parameter_schema.get("oneOf", []))
         branches = [schema["$defs"][variant["$ref"].split("/")[-1]] if "$ref" in variant else variant
                     for variant in variants]
-        self.assertEqual(3, len(branches))
-        self.assertEqual({frozenset(), frozenset({"text"}), frozenset({"dialogue_version"})},
+        self.assertEqual(5, len(branches))
+        self.assertEqual({frozenset(), frozenset({"text"}), frozenset({"dialogue_version"}),
+                          frozenset({"dialogue_version", "kind"}), frozenset({"dialogue_version", "kind", "selection"})},
                          {frozenset(branch.get("properties", {})) for branch in branches})
         self.assertTrue(all(branch.get("additionalProperties") is False for branch in branches))
         tagged = schema["allOf"][0]["oneOf"]
-        self.assertEqual(3, len(tagged))
+        self.assertEqual(4, len(tagged))
         self.assertEqual({
             "chat": frozenset({"text"}), "npc_center_open": frozenset(),
             "npc_cancel": frozenset({"dialogue_version"}),
         }, {branch["properties"]["action"]["const"]: frozenset(
             schema["$defs"][branch["properties"]["parameters"]["$ref"].split("/")[-1]].get("properties", {})
-        ) for branch in tagged})
+        ) for branch in tagged if "$ref" in branch["properties"]["parameters"]})
         self.assertEqual([], self.stub.requests)
 
     async def test_npc_and_chat_actions_preserve_jwt_envelope_and_exact_parameter_payload(self) -> None:

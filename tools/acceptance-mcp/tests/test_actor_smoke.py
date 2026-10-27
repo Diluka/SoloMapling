@@ -144,11 +144,8 @@ class ActorSmokeTests(unittest.IsolatedAsyncioTestCase):
                 arguments = dict(profile_id="primary", expected_base_url=stub.base_url, output=output,
                                  operation_timeout=timeout, poll_interval=0.01)
                 if patch_checkpoint:
-                    calls = 0
                     def failing_checkpoint(path, report):
-                        nonlocal calls
-                        calls += 1
-                        if calls > 2:
+                        if report["recovery"]["active_session"] is not None or "evidence_error" in report:
                             raise OSError("simulated local evidence disk failure")
                         checkpoint(path, report)
                     with patch("solo_acceptance_mcp.actor_smoke.checkpoint", failing_checkpoint):
@@ -258,7 +255,9 @@ class ActorSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["passed"])
         self.assertEqual("CHECKPOINT_WRITE_FAILED", report["evidence_error"])
         self.assertTrue(report["cleanup"]["verified"])
-        self.assertEqual(2, len(stub.close_requests))
+        self.assertEqual(1, len(stub.close_requests))
+        self.assertEqual(1, stub.creations)
+        self.assertEqual("EVIDENCE_UNAVAILABLE_BEFORE_WRITE", report["failure"])
 
     def test_missing_or_truncated_persistence_data_cannot_pass_by_equal_null_values(self):
         stub = ActorSmokeStub()

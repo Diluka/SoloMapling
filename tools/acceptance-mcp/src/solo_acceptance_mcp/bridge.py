@@ -151,6 +151,7 @@ def validate_observation(
 
 
 MAX_LONG = 2**63 - 1
+MAX_INT = 2**31 - 1
 IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
@@ -167,8 +168,8 @@ def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None
 
 
 def validate_chat_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
-    if not isinstance(action, str) or action not in {"chat", "npc_center_open", "npc_cancel"}:
-        raise BridgeError("INVALID_ARGUMENTS", "action 只支持 chat、npc_center_open 或 npc_cancel。")
+    if not isinstance(action, str) or action not in {"chat", "npc_center_open", "npc_cancel", "npc_reply"}:
+        raise BridgeError("INVALID_ARGUMENTS", "action 只支持 chat、npc_center_open、npc_cancel 或 npc_reply。")
     if not isinstance(parameters, dict):
         raise BridgeError("INVALID_ARGUMENTS", "parameters 必须为当前动作对应的对象。")
     if action == "chat":
@@ -182,10 +183,20 @@ def validate_chat_action(action: str, parameters: dict[str, Any], expected_conte
     elif action == "npc_center_open":
         if parameters:
             raise BridgeError("INVALID_ARGUMENTS", "npc_center_open parameters 必须为空对象。")
-    else:
+    elif action == "npc_cancel":
         if set(parameters) != {"dialogue_version"}:
             raise BridgeError("INVALID_ARGUMENTS", "npc_cancel parameters 必须且只能包含 dialogue_version。")
         validate_integer(parameters["dialogue_version"], "dialogue_version", 1, MAX_LONG)
+    else:
+        kind = parameters.get("kind")
+        if not isinstance(kind, str) or kind not in {"select", "decline"}:
+            raise BridgeError("INVALID_ARGUMENTS", "npc_reply 当前只支持 select 或 decline。")
+        expected = {"dialogue_version", "kind", "selection"} if kind == "select" else {"dialogue_version", "kind"}
+        if set(parameters) != expected:
+            raise BridgeError("INVALID_ARGUMENTS", "npc_reply 参数必须与 kind 严格匹配。")
+        validate_integer(parameters["dialogue_version"], "dialogue_version", 1, MAX_LONG)
+        if kind == "select":
+            validate_integer(parameters["selection"], "selection", 0, MAX_INT)
     if not isinstance(expected_context, dict) or set(expected_context) != {"scene_ref", "runtime_generation"}:
         raise BridgeError("INVALID_ARGUMENTS", "expected_context 必须且只能包含 scene_ref 和 runtime_generation。")
     for key in ["scene_ref", "runtime_generation"]:

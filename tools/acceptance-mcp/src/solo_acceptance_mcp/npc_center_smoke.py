@@ -35,13 +35,14 @@ class NpcCenterAcceptance(ChatAcceptance):
 
     def capabilities(self, caps: dict[str, Any], names: list[str]) -> None:
         self.report["enabled_tools"] = require_capabilities(caps, names, actors=True)
-        check(set(caps.get("actions", [])) == NPC_ACTIONS, "NPC_ACTIONS_NOT_ENABLED")
+        check(NPC_ACTIONS <= set(caps.get("actions", [])), "NPC_ACTIONS_NOT_ENABLED")
         packet = require_packet_capability(caps)
-        check(NPC_PACKET_CAPABILITY in packet["decoded_packets"], "NPC_PACKET_DECODER_NOT_ENABLED")
+        check(any(row.get("event_type") == "npc_dialogue" for row in packet["decoded_packets"]),
+              "NPC_PACKET_DECODER_NOT_ENABLED")
         control = caps["actor_control"]
         npc = control.get("npc_dialogue")
         check(isinstance(npc, dict) and npc.get("entrypoints") == ["native_ui_center"]
-              and npc.get("message_types") == [4] and npc.get("version_scope") == "session_packet_sequence"
+              and npc.get("message_types") in ([4], [4, 12]) and npc.get("version_scope") == "session_packet_sequence"
               and npc.get("cancel_requires_latest_version") is True, "NPC_DIALOGUE_CAPABILITY_INVALID")
         for value in [npc.get("npc_minimum_interval_ms"), control.get("native_clock_update_interval_ms")]:
             check(type(value) is int and 1 <= value <= MAX_LONG, "NPC_TIMING_CAPABILITY_INVALID")
@@ -165,9 +166,7 @@ class NpcCenterAcceptance(ChatAcceptance):
         args = {"session_id": session["session_id"], "expected_generation": session["session_generation"],
                 "request_id": self.prefix + suffix, "action": "npc_cancel", "parameters": {"dialogue_version": version},
                 "expected_context": {"scene_ref": observation["actor"]["scene"]["scene_ref"], "runtime_generation": self.generation}}
-        self.unknown_write = {"tool": "game_act", "request_id": args["request_id"]}
-        self.report["requests"].append(dict(self.unknown_write))
-        self.save()
+        self.prepare_write("game_act", args, business=True)
         response = await self.client.call_tool("game_act", args)
         value = response.structured_content
         check(response.is_error and isinstance(value, dict) and value.get("request_id") == args["request_id"]

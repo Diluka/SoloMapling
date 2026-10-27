@@ -131,7 +131,7 @@ class NativeActorNpcOutcomeTest {
     }
 
     @Test
-    void nativeFailureAfterTheCenterPacketPreservesItsVerifiedOpenFact() {
+    void nativeFailureAfterTheCenterPacketInvalidatesItsSourceAndLeavesTheOutcomeUnknown() {
         Client previous = mock(Client.class);
         ThreadLocalUtil.setCurrentClient(previous);
         onOpen(() -> {
@@ -139,11 +139,13 @@ class NativeActorNpcOutcomeTest {
             throw new IllegalStateException("private-native-exception");
         });
         Map<String, Object> outcome = backend.npcCenterOpen(handle);
-        assertOutcome(outcome, "SUCCEEDED", "center_dialogue_opened", true, false);
+        // #110 requires an exception-free controlled source, beyond #75's packet/CM observation.
+        assertOutcome(outcome, "INDETERMINATE", "native_center_outcome_unknown", true, false);
         assertEquals(true, result(outcome).get("native_handler_error"));
         assertEquals(1L, result(outcome).get("dialogue_version"));
         assertSame(previous, ThreadLocalUtil.getCurrentClient());
         assertFalse(outcome.toString().contains("private-native-exception"));
+        assertEquals(false, client.dialogueState().get("active"));
         assertActorUntouched();
     }
 
@@ -247,7 +249,7 @@ class NativeActorNpcOutcomeTest {
     private void publishCenterWithThreadLocal() {
         Client previous = ThreadLocalUtil.getCurrentClient();
         ThreadLocalUtil.setCurrentClient(client);
-        try { publishCenter(); }
+        try { client.dispatchNativeCenter(this::publishCenter); }
         finally {
             if (previous == null) ThreadLocalUtil.removeCurrentClient();
             else ThreadLocalUtil.setCurrentClient(previous);
