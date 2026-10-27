@@ -1,6 +1,8 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：接口与流程设计，尚未实现、安装MCP或修改在线服务。** 用户确认本轮先建立基础方案，后续每轮实现一小组能力、用实际游戏结果验证，再决定下一轮；当前不把协议接通称为玩法验收完成。
+**状态：R1 已实现只读 MCP 与游戏观察桥；R2～R5 继续按小轮推进。** 当前提供 `game_capabilities` 和 `game_observe`，角色控制、内置流程与组队任务验收尚未开放。每轮实现一小组能力、用实际游戏结果验证，再决定下一轮；协议接通与玩法验收分别记录。
+
+R1 安装、配置、测试与实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。源码桥默认关闭，在本地 `application.yml` 的现有 `solomapling` 节点添加 `acceptance.enabled: true` 并重启应用后开启；普通项目配置、数据库和人口定制继续保留。
 
 ## 目标与定位
 
@@ -47,7 +49,7 @@ flowchart LR
 
 ## 工具接口草案
 
-以下是后续实现契约，不是当前已经可调用的MCP工具。工具数量保持小，动作按实际能力增量开放。
+以下是完整迭代契约。R1 只注册 `game_capabilities` 和 `game_observe`，其余工具仍待实现；工具数量保持小，动作按实际能力增量开放。
 
 | 工具 | 主要输入 | 实际结果／用途 |
 |---|---|---|
@@ -78,6 +80,10 @@ NPC的`start()`本身可能传送、修改任务或发放物品，尚未选择�
 场景返回`worldId/channelId/mapId/mapInstanceKey/runtimeKey`及实际角色位置；NPC、怪物、门户、机关和地面物品使用运行OID/身份而非模板ID。EIM任务用真实实例对象的本次运行标识，Java挑战/比赛使用其后端身份。
 
 没有actor session时，先读取world/channel及已加载场景摘要，再使用返回的`scene_ref`查看具体场景。不能仅凭mapId访问另一个队伍的私有实例，也不为一次只读查询自动创建任务实例。
+
+R1 的 `game_observe` 仅接受 `scope=world|scene`、`scene_ref` 和整数 `limit`（默认100，1～500）。world 返回 `worlds` 与 `scenes.items`；scene 返回 `context` 及六类 `{total_count,truncated,items}` 对象。快照明确为 `server_diagnostic`、`best_effort`，附 `runtime_generation`；不支持事件流。场景目录来自已加载频道地图及在线成员引用的实例，未被在线成员引用的私人实例不作全局枚举。当前目录没有分页或筛选，超过 `limit` 会标记截断，最大只能取得前500个场景引用；分页/筛选及actor当前场景是后续观察增强项，不能把有限目录称为全量可访问。
+
+同一 `map_id` 的不同实际地图对象得到不同引用，场景卸载、停服或世界重启后旧引用失效。参数错误返回HTTP400，失效引用410，读取中世界代次变化409，离线/停止503。桥默认关闭时沿原生未映射路径处理，可能是HTTP200加业务失败码40001，不能仅凭HTTP200判断桥可用；SDK也检查原生 `code=20000` 与实际结构。
 
 角色快照区分等级/经验、HP/MP、队伍、公会、任务进度和背包；事件返回`seq/cursor/time/actor/session_generation/source/kind/payload`。正文与菜单结构化，必要时保留有界原始包摘要供协议核对，不输出账号密码/JWT。观察缓冲溢出要返回`cursor_expired`及新快照，不能悄悄漏事件仍宣称观察完整。
 
@@ -138,7 +144,7 @@ R5依赖[组队任务计划#13](https://github.com/Diluka/SoloMapling/issues/13)
 
 ## MCP SDK与Codex接入
 
-本轮只核对设计，不安装依赖或改本地Codex配置。2026-10-27实际查阅的官方Python SDK稳定版本为`mcp==2.3.0`，v2使用`MCPServer`；旧`mcp.server.fastmcp.FastMCP`属于v1维护线，若选用必须约束版本`<2`。新实现建议Python3.11以上、固定已验证的v2版本；实施时重新核对当时文档并提交依赖锁定。
+R1 使用官方 `mcp==2.3.0` 的 `MCPServer`，依赖固定于工具工程与 `uv.lock`，Python3.11以上，独立虚拟环境。旧 `mcp.server.fastmcp.FastMCP` 属于v1维护线，不能与v2接口混用。2026-10-27已重新获取官方文档和PyPI元数据；后续升级仍需验证并更新锁定。
 
 stdio只用于本机MCP进程，游戏桥继续正常管理员鉴权；凭据放本地受限文件，MCP参数只传文件路径，不提交到仓库或写入工具输出。示例仅表示结构，路径与包名待实现确定：
 
@@ -148,7 +154,7 @@ command = "/absolute/venv/bin/python"
 args = ["-m", "solo_acceptance_mcp", "--config", "/absolute/local/acceptance-mcp.json"]
 cwd = "/absolute/SoloMapling/tools/acceptance-mcp"
 startup_timeout_sec = 15
-tool_timeout_sec = 30
+tool_timeout_sec = 45
 enabled = true
 ```
 
