@@ -91,6 +91,9 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 本项已完成隔离及实际部署 SDK 验收，PR #115 交付；accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
 
 共享基础的内部ABI及验收范围见 [共享游戏基建](../docs/shared-game-foundation/README.md)。
+统一角色壳与模块协议的首轮入口见 [运行体 v0.1](../docs/robot-runtime/README.md)。
+该宿主组合已有上下文、scope/lane和原生动作，MCP控制模块接线由#139/#140单独验证；
+宿主机制测试不表示MCP已迁入或新版本已经部署，也不包含生产自主行为模块。
 #117 加入中立WorldEpoch、角色/场景结构检查和MCP/Bot薄适配，完整构建、CI、隔离及实际部署原生验证已过，PR #130交付并关闭117；
 实际运行已包含 #117，公共层不增加 MCP 工具或动作。Bot 真实对象/宿主路由替身测试与完整 V2 运行分别留证。
 #118 提供 ExecutionScope、ScopeResources、CharacterCommandLane 及 MCP 薄接线；
