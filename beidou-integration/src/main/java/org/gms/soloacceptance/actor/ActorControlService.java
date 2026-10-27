@@ -717,7 +717,7 @@ public final class ActorControlService {
 
     private void validateActionContext(NativeActorHandle handle, ActorActRequest.ExpectedContext expected) {
         if (observations == null) throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
-        Map<String, Object> actual = observations.contextForActor(handle.character());
+        Map<String, Object> actual = observations.contextForActor(handle.characterRef());
         if (!expected.sceneRef().equals(actual.get("scene_ref"))
                 || !expected.runtimeGeneration().equals(actual.get("runtime_generation"))) {
             throw error(HttpStatus.CONFLICT, "actor_context_mismatch");
@@ -793,8 +793,11 @@ public final class ActorControlService {
         Map<String, Object> snapshot = null;
         try {
             if (backend.isCurrent(handle)) snapshot = actorSnapshot(handle);
+        } catch (ObservationException failure) {
+            throw failure;
         } catch (RuntimeException ignored) {
-            // An unavailable diagnostic projection is not permission to publish a stale actor.
+            // A failed read is neither identity loss nor permission to publish the old projection.
+            throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
         }
         synchronized (monitor) {
             if (session.handle != handle || !"OPEN".equals(session.state)) return;
@@ -821,7 +824,7 @@ public final class ActorControlService {
 
     private Map<String, Object> actorSnapshot(NativeActorHandle handle) {
         Map<String, Object> result = copy(backend.snapshot(handle));
-        if (observations != null) result.put("scene", observations.contextForActor(handle.character()));
+        if (observations != null) result.put("scene", observations.contextForActor(handle.characterRef()));
         return result;
     }
 

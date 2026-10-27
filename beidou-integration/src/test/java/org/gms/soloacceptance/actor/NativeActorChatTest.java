@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.WorldEpoch;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -50,7 +51,9 @@ class NativeActorChatTest {
     @BeforeEach
     void nativeChatFixtureWithoutDatasource() throws Exception {
         CharacterTestContext.install();
+        WorldEpoch.onWorldStarted();
         Server server = mock(Server.class);
+        when(server.isOnline()).thenReturn(true);
         clock = new AtomicLong(1000);
         when(server.getCurrentTime()).thenAnswer(call -> clock.get());
         serverSingleton = mockStatic(Server.class);
@@ -92,6 +95,7 @@ class NativeActorChatTest {
 
     @AfterEach
     void releaseStaticFixtures() {
+        WorldEpoch.onWorldStopping();
         ThreadLocalUtil.removeCurrentClient();
         if (chatLogger != null) chatLogger.close();
         if (serverSingleton != null) serverSingleton.close();

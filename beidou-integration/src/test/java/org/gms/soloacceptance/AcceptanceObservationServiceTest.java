@@ -15,9 +15,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.GameContext;
+import soloMapling.game.context.NativeContextChecks;
+
+import java.awt.Point;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -50,6 +56,7 @@ class AcceptanceObservationServiceTest {
         when(channel.getId()).thenReturn(1);
         when(channel.getMapFactory()).thenReturn(maps);
         when(channel.getPlayerStorage()).thenReturn(players);
+        when(world.getPlayerStorage()).thenReturn(players);
         when(maps.getMaps()).thenReturn(Map.of());
         when(players.getAllCharacters()).thenReturn(List.of());
         observations = service(8_192);
@@ -93,15 +100,7 @@ class AcceptanceObservationServiceTest {
     void currentActorSceneIsResolvedByObjectEvenOutsideTheReturnedDirectorySlice() {
         MapleMap first = map(10000);
         MapleMap actual = map(100000000);
-        Character actor = mock(Character.class);
-        Client client = mock(Client.class);
-        when(actor.getId()).thenReturn(4);
-        when(actor.getWorld()).thenReturn(0);
-        when(actor.getClient()).thenReturn(client);
-        when(client.getChannel()).thenReturn(1);
-        when(actor.isLoggedInWorld()).thenReturn(true);
-        when(actor.getMap()).thenReturn(actual);
-        when(players.getCharacterById(4)).thenReturn(actor);
+        Character actor = actor(actual, 4);
         when(players.getAllCharacters()).thenReturn(List.of(actor));
         when(maps.getMaps()).thenReturn(Map.of(10000, first, 100000000, actual));
 
@@ -118,6 +117,253 @@ class AcceptanceObservationServiceTest {
         when(players.getCharacterById(4)).thenReturn(mock(Character.class));
         assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
                 () -> observations.contextForActor(actor)).status());
+    }
+
+    @Test
+    void boundActorObservationRegistersOneSceneWithoutEnumeratingTheWorldOrLoadingMaps() {
+        MapleMap actual = map(100000000);
+        Character actor = actor(actual, 4);
+        GameContext.CharacterRef binding = binding(actor);
+        clearInvocations(server, world, channel, maps, players);
+
+        Map<String, Object> first = observations.contextForActor(binding);
+        Map<String, Object> repeated = observations.contextForActor(binding);
+        assertEquals(first.get("scene_ref"), repeated.get("scene_ref"));
+        assertEquals(first.get("runtime_key"), repeated.get("runtime_key"));
+        assertEquals(100000000, first.get("map_id"));
+        assertEquals(binding.epoch().value(), first.get("runtime_generation"));
+        verify(server, never()).getWorlds();
+        verify(world, never()).getChannels();
+        verify(players, never()).getAllCharacters();
+        verify(channel, never()).getMapFactory();
+        verifyNoInteractions(maps);
+    }
+
+    @Test
+    void actorSceneDoesNotNeedWorldDirectoryDiscoveryEvenBeyondFiveHundredLoadedMaps() {
+        Map<Integer, MapleMap> loaded = new LinkedHashMap<>();
+        for (int i = 0; i < 501; i++) loaded.put(10000 + i, map(10000 + i));
+        MapleMap actual = loaded.get(10500);
+        Character actor = actor(actual, 4);
+        GameContext.CharacterRef binding = binding(actor);
+        when(maps.getMaps()).thenReturn(loaded);
+        when(players.getAllCharacters()).thenReturn(List.of(actor));
+        Map<String, Object> directory = observations.observe(new ObservationRequest("world", null, 500));
+        assertEquals(501, envelope(directory, "scenes").get("total_count"));
+        assertEquals(true, envelope(directory, "scenes").get("truncated"));
+        assertTrue(sceneItems(directory).stream().noneMatch(row -> row.get("map_id").equals(10500)));
+        clearInvocations(server, world, maps, players);
+        when(server.getWorlds()).thenThrow(new AssertionError("A single actor cannot scan the directory"));
+        when(maps.getMaps()).thenThrow(new AssertionError("A single actor cannot enumerate loaded maps"));
+
+        Map<String, Object> context = observations.contextForActor(binding);
+        assertEquals(10500, context.get("map_id"));
+        assertNotNull(context.get("scene_ref"));
+        verify(server, never()).getWorlds();
+        verify(maps, never()).getMaps();
+        verify(players, never()).getAllCharacters();
+    }
+
+    @Test
+    void anActorsOldWorldBindingCannotAcquireANewEpochByBeingObserved() {
+        Character actor = actor(map(10000), 4);
+        GameContext.CharacterRef binding = binding(actor);
+        String firstRef = (String) observations.contextForActor(binding).get("scene_ref");
+        AcceptanceObservationRuntime.onWorldStopped();
+        AcceptanceObservationRuntime.onWorldStarted();
+
+        assertActorFailure(HttpStatus.GONE, "actor_not_in_current_world", binding);
+        GameContext.CharacterRef reopened = binding(actor);
+        assertNotEquals(firstRef, observations.contextForActor(reopened).get("scene_ref"));
+    }
+
+    @Test
+    void directActorReferencesKeepTheRegistryBoundWithoutEvictingAnExistingScene() {
+        observations = service(1);
+        MapleMap firstMap = map(10000);
+        MapleMap secondMap = map(10001);
+        Character actor = actor(firstMap, 4);
+        GameContext.CharacterRef binding = binding(actor);
+        String ref = (String) observations.contextForActor(binding).get("scene_ref");
+        when(actor.getMap()).thenReturn(secondMap);
+        when(secondMap.getCharacterById(4)).thenReturn(actor);
+
+        assertActorFailure(HttpStatus.SERVICE_UNAVAILABLE, "scene_capacity_exceeded", binding);
+        when(actor.getMap()).thenReturn(firstMap);
+        assertEquals(ref, observations.contextForActor(binding).get("scene_ref"));
+    }
+
+    @Test
+    void movingToAnotherSameIdInstanceChangesTheActorSceneButKeepsItsCharacterBinding() {
+        MapleMap firstMap = map(920010000);
+        MapleMap secondMap = map(920010000);
+        Character actor = actor(firstMap, 4);
+        EventInstanceManager firstEvent = eventFor(actor);
+        EventInstanceManager secondEvent = eventFor(actor);
+        when(actor.getEventInstance()).thenReturn(firstEvent);
+        when(firstMap.getEventInstance()).thenReturn(firstEvent);
+        GameContext.CharacterRef binding = binding(actor);
+        Map<String, Object> first = observations.contextForActor(binding);
+        when(actor.getMap()).thenReturn(secondMap);
+        when(secondMap.getCharacterById(4)).thenReturn(actor);
+        when(actor.getEventInstance()).thenReturn(secondEvent);
+        when(secondMap.getEventInstance()).thenReturn(secondEvent);
+
+        Map<String, Object> current = observations.contextForActor(binding);
+        assertNotEquals(first.get("scene_ref"), current.get("scene_ref"));
+        assertNotEquals(first.get("runtime_key"), current.get("runtime_key"));
+        assertEquals(binding.epoch().value(), current.get("runtime_generation"));
+    }
+
+    @Test
+    void aLoadedGlobalSceneReferenceSurvivesTheActorsRemoval() {
+        MapleMap actual = map(10000);
+        Character actor = actor(actual, 4);
+        when(maps.getMaps()).thenReturn(Map.of(10000, actual));
+        String ref = (String) observations.contextForActor(binding(actor)).get("scene_ref");
+        when(players.getCharacterById(4)).thenReturn(null);
+        when(players.getAllCharacters()).thenReturn(List.of());
+        when(actual.getCharacterById(4)).thenReturn(null);
+        when(actual.getAllPlayers()).thenReturn(List.of());
+
+        Map<String, Object> result = observations.observe(new ObservationRequest("scene", ref, 100));
+        assertEquals(ref, envelope(result, "context").get("scene_ref"));
+    }
+
+    @Test
+    void memberAndMapEventsAreValidatedIndependentlyWithoutUsingTheirNamesAsIdentity() {
+        MapleMap actual = map(920010000);
+        Character actor = actor(actual, 4);
+        EventInstanceManager member = eventFor(actor);
+        EventInstanceManager mapEvent = eventFor(actor);
+        when(actor.getEventInstance()).thenReturn(member);
+        when(actual.getEventInstance()).thenReturn(mapEvent);
+        GameContext.CharacterRef binding = binding(actor);
+        String firstRef = (String) observations.contextForActor(binding).get("scene_ref");
+        when(member.getPlayerById(4)).thenReturn(null);
+        assertActorFailure(HttpStatus.CONFLICT, "actor_context_mismatch", binding);
+        when(member.getPlayerById(4)).thenReturn(actor);
+        when(mapEvent.isEventDisposed()).thenReturn(true);
+        assertActorFailure(HttpStatus.CONFLICT, "actor_context_mismatch", binding);
+        when(mapEvent.isEventDisposed()).thenReturn(false);
+        assertEquals(firstRef, observations.contextForActor(binding).get("scene_ref"));
+        verify(member, never()).getMapFactory();
+        verify(mapEvent, never()).getMapFactory();
+    }
+
+    @Test
+    void changingTheMapsEventInvalidatesItsOldOpaqueReference() {
+        MapleMap actual = map(920010000);
+        Character actor = actor(actual, 4);
+        EventInstanceManager firstEvent = eventFor(actor);
+        EventInstanceManager secondEvent = eventFor(actor);
+        when(actual.getEventInstance()).thenReturn(firstEvent);
+        GameContext.CharacterRef binding = binding(actor);
+        Map<String, Object> first = observations.contextForActor(binding);
+        when(actual.getEventInstance()).thenReturn(secondEvent);
+        Map<String, Object> second = observations.contextForActor(binding);
+        assertNotEquals(first.get("scene_ref"), second.get("scene_ref"));
+        assertNotEquals(first.get("runtime_key"), second.get("runtime_key"));
+        when(maps.getMaps()).thenReturn(Map.of(920010000, actual));
+        assertFailure(HttpStatus.GONE, "stale_scene_ref", new ObservationRequest(
+                "scene", (String) first.get("scene_ref"), 100));
+    }
+
+    @Test
+    void eventChangeWhileReadingTheProjectionIsASceneConflictWithoutInvalidatingTheCharacter() {
+        MapleMap actual = map(920010000);
+        Character actor = actor(actual, 4);
+        EventInstanceManager member = eventFor(actor);
+        when(actor.getEventInstance()).thenReturn(member);
+        GameContext.CharacterRef binding = binding(actor);
+        when(actual.getAllPlayers()).thenAnswer(ignored -> {
+            when(actor.getEventInstance()).thenReturn(null);
+            return List.of(actor);
+        });
+        assertActorFailure(HttpStatus.CONFLICT, "actor_context_mismatch", binding);
+        NativeContextChecks.requireCharacterCurrent(server, binding);
+    }
+
+    @Test
+    void actorReadFailureIsUnavailableAndDoesNotPublishNativeExceptionText() {
+        MapleMap actual = map(10000);
+        Character actor = actor(actual, 4);
+        GameContext.CharacterRef binding = binding(actor);
+        when(actual.getAllPlayers()).thenThrow(new IllegalStateException("private-native-detail"));
+        ObservationException unavailable = assertActorFailure(
+                HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable", binding);
+        assertFalse(unavailable.toString().contains("private-native-detail"));
+        doReturn(List.of(actor)).when(actual).getAllPlayers();
+        assertNotNull(observations.contextForActor(binding).get("scene_ref"));
+    }
+
+    @Test
+    void aSharedNativeReadFailureKeepsItsUnavailableBoundaryAndTheBindingCanRecover() {
+        MapleMap actual = map(10000);
+        Character actor = actor(actual, 4);
+        GameContext.CharacterRef binding = binding(actor);
+        when(actor.getEventInstance()).thenThrow(new IllegalStateException("private-event-detail"));
+
+        ObservationException unavailable = assertActorFailure(
+                HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable", binding);
+        assertFalse(unavailable.toString().contains("private-event-detail"));
+        doReturn(null).when(actor).getEventInstance();
+        assertNotNull(observations.contextForActor(binding).get("scene_ref"));
+    }
+
+    @Test
+    void worldChangeWhileReadingAnActorProjectionRejectsItsOldBinding() {
+        MapleMap actual = map(10000);
+        Character actor = actor(actual, 4);
+        GameContext.CharacterRef binding = binding(actor);
+        when(actual.getAllPlayers()).thenAnswer(ignored -> {
+            AcceptanceObservationRuntime.onWorldStopped();
+            return List.of(actor);
+        });
+        assertActorFailure(HttpStatus.CONFLICT, "runtime_changed", binding);
+    }
+
+    @Test
+    void anEpochChangeDuringTheFinalActorOnlineReadCannotPublishThePreviousGeneration() {
+        Character actor = actor(map(10000), 4);
+        GameContext.CharacterRef binding = binding(actor);
+        AtomicInteger nativeReads = new AtomicInteger();
+        when(server.isOnline()).thenAnswer(ignored -> {
+            // Initial readiness, two capture reads, two revalidation reads, then the final native read.
+            if (nativeReads.incrementAndGet() == 6) AcceptanceObservationRuntime.onWorldStarted();
+            return true;
+        });
+
+        assertActorFailure(HttpStatus.CONFLICT, "runtime_changed", binding);
+        assertEquals(6, nativeReads.get());
+    }
+
+    @Test
+    void aDirectoryObservationAlsoChecksItsEpochAfterTheLastNativeOnlineRead() {
+        AtomicInteger nativeReads = new AtomicInteger();
+        when(server.isOnline()).thenAnswer(ignored -> {
+            if (nativeReads.incrementAndGet() == 2) AcceptanceObservationRuntime.onWorldStarted();
+            return true;
+        });
+
+        assertFailure(HttpStatus.CONFLICT, "runtime_changed", new ObservationRequest("world", null, 100));
+        assertEquals(2, nativeReads.get());
+    }
+
+    @Test
+    void oldInternalCharacterEntryKeepsItsLegacyMissingActorAndSceneReasons() {
+        ObservationException absent = assertThrows(ObservationException.class,
+                () -> observations.contextForActor((Character) null));
+        assertEquals("actor_not_in_world", absent.reason());
+        MapleMap actual = map(10000);
+        Character actor = actor(actual, 4);
+        EventInstanceManager event = eventFor(actor);
+        when(actor.getEventInstance()).thenReturn(event);
+        when(event.isEventDisposed()).thenReturn(true);
+        ObservationException scene = assertThrows(ObservationException.class,
+                () -> observations.contextForActor(actor));
+        assertEquals(HttpStatus.GONE, scene.status());
+        assertEquals("actor_scene_unavailable", scene.reason());
     }
 
     @Test
@@ -212,6 +458,42 @@ class AcceptanceObservationServiceTest {
         ObservationException failure = assertThrows(ObservationException.class, () -> observations.observe(request));
         assertEquals(status, failure.status());
         assertEquals(reason, failure.reason());
+    }
+
+    private ObservationException assertActorFailure(HttpStatus status, String reason, GameContext.CharacterRef actor) {
+        ObservationException failure = assertThrows(ObservationException.class,
+                () -> observations.contextForActor(actor));
+        assertEquals(status, failure.status());
+        assertEquals(reason, failure.reason());
+        return failure;
+    }
+
+    private Character actor(MapleMap map, int id) {
+        Character actor = mock(Character.class);
+        Client client = mock(Client.class);
+        when(actor.getId()).thenReturn(id);
+        when(actor.getWorld()).thenReturn(0);
+        when(actor.getClient()).thenReturn(client);
+        when(client.getPlayer()).thenReturn(actor);
+        when(client.getWorld()).thenReturn(0);
+        when(client.getChannel()).thenReturn(1);
+        when(actor.isLoggedInWorld()).thenReturn(true);
+        when(actor.getPosition()).thenReturn(new Point(0, 0));
+        when(actor.getMap()).thenReturn(map);
+        when(players.getCharacterById(id)).thenReturn(actor);
+        when(map.getCharacterById(id)).thenReturn(actor);
+        when(map.getAllPlayers()).thenReturn(List.of(actor));
+        return actor;
+    }
+
+    private GameContext.CharacterRef binding(Character actor) {
+        return NativeContextChecks.captureCharacter(server, actor, actor.getClient(), world, channel);
+    }
+
+    private static EventInstanceManager eventFor(Character actor) {
+        EventInstanceManager event = mock(EventInstanceManager.class);
+        when(event.getPlayerById(actor.getId())).thenReturn(actor);
+        return event;
     }
 
     private static MapleMap map(int id) {

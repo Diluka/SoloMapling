@@ -4,6 +4,8 @@ import org.gms.client.Character;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.server.maps.MapleMap;
+import soloMapling.game.context.GameContext;
+import soloMapling.game.context.WorldEpoch;
 
 import java.util.Map;
 import java.util.Objects;
@@ -16,6 +18,7 @@ public final class NativeActorHandle {
     private final Character character;
     private final World world;
     private final Channel channel;
+    private final GameContext.CharacterRef characterRef;
     private final ActorAccountOwnership.Lease ownership;
     private final boolean accountCreated;
     private final boolean characterCreated;
@@ -31,6 +34,7 @@ public final class NativeActorHandle {
         this.character = Objects.requireNonNull(character);
         this.world = Objects.requireNonNull(world);
         this.channel = Objects.requireNonNull(channel);
+        this.characterRef = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), character, client, world, channel);
         this.ownership = Objects.requireNonNull(ownership);
         this.accountCreated = accountCreated;
         this.characterCreated = characterCreated;
@@ -42,6 +46,7 @@ public final class NativeActorHandle {
     public Character character() { return character; }
     public World world() { return world; }
     public Channel channel() { return channel; }
+    public GameContext.CharacterRef characterRef() { return characterRef; }
     ActorAccountOwnership.Lease ownership() { return ownership; }
     public boolean accountCreated() { return accountCreated; }
     public boolean characterCreated() { return characterCreated; }

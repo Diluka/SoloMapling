@@ -3,6 +3,7 @@ package soloMapling.beidou;
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.manager.ServerManager;
+import org.gms.soloacceptance.AcceptanceObservationRuntime;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.springframework.core.env.MapPropertySource;
@@ -18,6 +19,7 @@ import soloMapling.Environment.SoloMaplingLanguageConfig;
 import soloMapling.itemPool.DesirableEquipList;
 import soloMapling.itemPool.EquipMetadataCache;
 import soloMapling.server.BotTickService;
+import soloMapling.game.context.WorldEpoch;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,6 +44,7 @@ class BeiDouRuntimeLifecycleTest {
              MockedStatic<BotTickService> ticks = mockStatic(BotTickService.class)) {
             machines.when(() -> CharacterStorage.getBotById(716)).thenReturn(machine);
             doAnswer(ignored -> {
+                assertFalse(WorldEpoch.snapshot().active());
                 ticks.verify(BotTickService::interruptCancelledRunning);
                 environment.verify(EnvironmentManager::stop);
                 return null;
@@ -90,7 +93,8 @@ class BeiDouRuntimeLifecycleTest {
         CharacterTestContext.install();
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("test",
-                Map.of("solomapling.spawn-bots-on-startup", false, "gms.service.language", "zh-CN")));
+                Map.of("solomapling.spawn-bots-on-startup", false, "gms.service.language", "zh-CN",
+                        "solomapling.acceptance.enabled", false)));
         when(ServerManager.getApplicationContext().getEnvironment()).thenReturn(environment);
         Character partial = mock(Character.class);
         when(partial.getId()).thenReturn(713);
@@ -112,16 +116,22 @@ class BeiDouRuntimeLifecycleTest {
                 return null;
             });
             assertThrows(IllegalStateException.class, BeiDouRuntime::onServerReady);
+            assertFalse(WorldEpoch.snapshot().active());
             assertFalse(BotRegistry.isRegistered(partial));
             generation.verify(() -> BotGeneration.removeBotFromServer(partial), times(1));
             environmentTasks.verify(EnvironmentManager::stop, times(1));
             llm.verify(SocialLlmService::shutdown, times(1));
             BeiDouRuntime.onServerReady();
+            WorldEpoch.State commonWorld = WorldEpoch.snapshot();
+            assertTrue(commonWorld.active());
+            assertEquals(commonWorld.token().value(), AcceptanceObservationRuntime.snapshot().generation());
             assertEquals("zh-CN", SoloMaplingLanguageConfig.languageTag());
             assertEquals(2, starts.get());
             clients.verify(BotClientHandler::initHeadlessBotClient, times(2));
             messages.verify(MessageQueue::start, times(1));
             BeiDouRuntime.onServerStopping();
+            assertFalse(WorldEpoch.snapshot().active());
+            assertNotSame(commonWorld.token(), WorldEpoch.snapshot().token());
             llm.verify(SocialLlmService::shutdown, times(2));
             environmentTasks.verify(EnvironmentManager::stop, times(2));
             BeiDouRuntime.onServerStopping();

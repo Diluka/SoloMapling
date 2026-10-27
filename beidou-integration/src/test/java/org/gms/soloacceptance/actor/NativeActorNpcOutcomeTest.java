@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.WorldEpoch;
 
 import java.lang.reflect.Field;
 import java.util.Map;
@@ -50,6 +51,7 @@ class NativeActorNpcOutcomeTest {
     @BeforeEach
     void controlledScriptBoundaryWithoutDatasource() throws Exception {
         CharacterTestContext.install();
+        WorldEpoch.onWorldStarted();
         config = mockStatic(GameConfig.class);
         scripts = mock(NPCScriptManager.class);
         quests = mock(QuestScriptManager.class);
@@ -86,6 +88,7 @@ class NativeActorNpcOutcomeTest {
 
     @AfterEach
     void releaseMocks() {
+        WorldEpoch.onWorldStopping();
         ThreadLocalUtil.removeCurrentClient();
         if (questSingleton != null) questSingleton.close();
         if (scriptSingleton != null) scriptSingleton.close();

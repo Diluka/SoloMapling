@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.context.WorldEpoch;
 
 import java.lang.reflect.Field;
 import java.util.LinkedHashMap;
@@ -51,6 +52,7 @@ class NativeActorNpcReplyOutcomeTest {
     @BeforeEach
     void trustedNativeCenterWithoutDatasource() throws Exception {
         CharacterTestContext.install();
+        WorldEpoch.onWorldStarted();
         config = mockStatic(GameConfig.class);
         scripts = mock(NPCScriptManager.class);
         scriptSingleton = mockStatic(NPCScriptManager.class);
@@ -100,6 +102,7 @@ class NativeActorNpcReplyOutcomeTest {
             verify(scripts, never()).dispose(any(Client.class), anyBoolean());
             verifyNoInteractions(accounts, characters, notes);
         } finally {
+            WorldEpoch.onWorldStopping();
             ThreadLocalUtil.removeCurrentClient();
             if (questSingleton != null) questSingleton.close();
             if (scriptSingleton != null) scriptSingleton.close();

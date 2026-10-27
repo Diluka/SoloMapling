@@ -274,6 +274,115 @@ class ActorObserveProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PASSWORD, response.model_dump_json())
         self.assertNotIn(TOKEN, response.model_dump_json())
 
+    async def test_stdio_actor_410_requires_a_new_actor_session_without_replaying_or_echoing_backend_body(self) -> None:
+        private = "private-expired-actor-" + uuid4().hex
+        self.stub.responder = lambda request: (
+            self.stub.default_response(request) if request["path"] == "/auth/v1/login"
+            else (410, {"message": private + PASSWORD + TOKEN, "requestId": private})
+        )
+        async with self.stdio_client() as client:
+            response = await client.call_tool("game_observe", self.actor_args)
+        self.assertTrue(response.is_error)
+        error = response.structured_content["error"]
+        self.assertEqual("SESSION_EXPIRED", error["code"])
+        self.assertEqual(410, error["http_status"])
+        self.assertFalse(error["retryable"])
+        self.assertIn("重新打开角色", error["message"])
+        self.assertIn("session_id", error["message"])
+        self.assertIn("expected_generation", error["message"])
+        self.assertNotIn("world", error["message"])
+        self.assertNotIn("scene_ref", error["message"])
+        for sensitive in [private, PASSWORD, TOKEN]:
+            self.assertNotIn(sensitive, response.model_dump_json())
+        self.assertNotIn("request_id", response.structured_content)
+        self.assertEqual(1, self.stub.login_count)
+        self.assertEqual([ACTOR_PATH], [request["path"] for request in self.stub.requests
+                                      if request["path"] != "/auth/v1/login"])
+
+    async def test_stdio_scene_410_keeps_stale_scene_and_world_recovery_instead_of_actor_recovery(self) -> None:
+        private = "private-stale-scene-" + uuid4().hex
+        self.stub.responder = lambda request: (
+            self.stub.default_response(request) if request["path"] == "/auth/v1/login"
+            else (410, {"message": private + PASSWORD + TOKEN})
+        )
+        async with self.stdio_client() as client:
+            response = await client.call_tool("game_observe", {
+                "scope": "scene", "scene_ref": SCENE_CONTEXT["scene_ref"], "limit": 13,
+            })
+        self.assertTrue(response.is_error)
+        error = response.structured_content["error"]
+        self.assertEqual("STALE_SCENE", error["code"])
+        self.assertEqual(410, error["http_status"])
+        self.assertEqual("场景引用已失效，请重新观察 world。", error["message"])
+        self.assertFalse(error["retryable"])
+        self.assertNotIn("session_id", error["message"])
+        self.assertNotIn("expected_generation", error["message"])
+        for sensitive in [private, PASSWORD, TOKEN]:
+            self.assertNotIn(sensitive, response.model_dump_json())
+        resources = [request for request in self.stub.requests if request["path"] != "/auth/v1/login"]
+        self.assertEqual(["/solo/acceptance/v1/observe"], [request["path"] for request in resources])
+        self.assertEqual({"scope": "scene", "scene_ref": SCENE_CONTEXT["scene_ref"], "limit": 13}, resources[0]["body"]["data"])
+
+    async def test_stdio_actor_401_refresh_then_410_retains_session_semantics_and_identical_request_body(self) -> None:
+        private = "private-refreshed-actor-" + uuid4().hex
+
+        def respond(request: dict) -> tuple[int, object]:
+            if request["path"] == "/auth/v1/login":
+                return self.stub.default_response(request)
+            count = sum(row["path"] == ACTOR_PATH for row in self.stub.requests)
+            return 401 if count == 1 else 410, {"message": private + PASSWORD + TOKEN}
+
+        self.stub.responder = respond
+        args = {**self.actor_args, "since_cursor": 17, "limit": 1}
+        async with self.stdio_client() as client:
+            response = await client.call_tool("game_observe", args)
+        self.assertTrue(response.is_error)
+        error = response.structured_content["error"]
+        self.assertEqual("SESSION_EXPIRED", error["code"])
+        self.assertEqual(410, error["http_status"])
+        self.assertIn("重新打开角色", error["message"])
+        self.assertIn("session_id", error["message"])
+        self.assertIn("expected_generation", error["message"])
+        self.assertNotIn("world", error["message"])
+        requests = [request for request in self.stub.requests if request["path"] != "/auth/v1/login"]
+        self.assertEqual([ACTOR_PATH, ACTOR_PATH], [request["path"] for request in requests])
+        self.assertEqual(2, self.stub.login_count)
+        self.assertEqual(requests[0]["body"], requests[1]["body"])
+        self.assertEqual({"session_id": self.session_id, "expected_generation": self.generation,
+                          "since_cursor": 17, "limit": 1}, requests[1]["body"]["data"])
+        self.assertNotEqual(requests[0]["headers"]["authorization"], requests[1]["headers"]["authorization"])
+        for sensitive in [private, PASSWORD, TOKEN]:
+            self.assertNotIn(sensitive, response.model_dump_json())
+
+    async def test_stdio_actor_non_410_errors_keep_their_existing_public_codes_and_messages(self) -> None:
+        status = 400
+        self.stub.responder = lambda request: (
+            self.stub.default_response(request) if request["path"] == "/auth/v1/login"
+            else (status, {"message": PASSWORD + TOKEN})
+        )
+        cases = [
+            (400, "INVALID_ARGUMENTS", "验收桥拒绝了请求参数。"),
+            (403, "ACCESS_DENIED", "当前管理账号无权调用验收桥。"),
+            (404, "BRIDGE_UNAVAILABLE", "验收桥未启用或此接口不可用。"),
+            (409, "STALE_OBSERVATION", "读取期间游戏运行代次变化，请重新观察 world。"),
+            (429, "CAPACITY_REACHED", "验收操作或角色会话已达到当前限额。"),
+            (503, "SERVER_OFFLINE", "游戏后端当前不可观察。"),
+        ]
+        async with self.stdio_client() as client:
+            for status, code, message in cases:
+                with self.subTest(status=status):
+                    response = await client.call_tool("game_observe", self.actor_args)
+                    self.assertTrue(response.is_error)
+                    error = response.structured_content["error"]
+                    self.assertEqual(code, error["code"])
+                    self.assertEqual(status, error["http_status"])
+                    self.assertEqual(message, error["message"])
+                    self.assertEqual(status == 503, error["retryable"])
+                    self.assertNotIn(PASSWORD, response.model_dump_json())
+                    self.assertNotIn(TOKEN, response.model_dump_json())
+        self.assertEqual(1, self.stub.login_count)
+        self.assertEqual(len(cases), self.stub.resource_count)
+
     async def test_stdio_client_schema_does_not_invent_disabled_backend_actor_capabilities(self) -> None:
         capabilities = deepcopy(CAPABILITIES)
         capabilities.update(implementation_round="R2a", enabled_tools=sorted(TOOLS),

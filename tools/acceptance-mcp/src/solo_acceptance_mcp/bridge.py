@@ -246,13 +246,23 @@ class BridgeClient:
         validate_observation(scope, scene_ref, limit, session_id=session_id,
                              expected_generation=expected_generation, since_cursor=since_cursor)
         if scope == "actor":
-            return await self._authorized_request(
-                "POST", "/solo/acceptance/v1/actor/observe",
-                {"requestId": str(uuid4()), "data": {
-                    "session_id": session_id, "expected_generation": expected_generation,
-                    "since_cursor": since_cursor, "limit": limit,
-                }},
-            )
+            try:
+                return await self._authorized_request(
+                    "POST", "/solo/acceptance/v1/actor/observe",
+                    {"requestId": str(uuid4()), "data": {
+                        "session_id": session_id, "expected_generation": expected_generation,
+                        "since_cursor": since_cursor, "limit": limit,
+                    }},
+                )
+            except BridgeError as failure:
+                if failure.http_status != 410:
+                    raise
+                raise BridgeError(
+                    "SESSION_EXPIRED",
+                    "角色会话已失效，请重新取得有效的 session_id 和 session_generation（作为 expected_generation）；"
+                    "需要重新打开角色时，用新 request_id 调用 actor_open 并确认成功。",
+                    http_status=410, retryable=False, backend_code=failure.backend_code,
+                ) from None
         data: dict[str, Any] = {"scope": scope, "limit": limit}
         if scene_ref is not None:
             data["scene_ref"] = scene_ref
