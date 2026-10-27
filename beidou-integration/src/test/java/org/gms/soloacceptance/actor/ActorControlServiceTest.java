@@ -41,6 +41,8 @@ class ActorControlServiceTest {
         CharacterTestContext.install();
         AcceptanceObservationRuntime.onWorldStarted();
         backend = mock(NativeActorBackend.class);
+        when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200L,
+                "native_clock_update_interval_ms", 777L));
         handle = mock(NativeActorHandle.class);
         client = mock(AcceptanceClient.class);
         when(handle.client()).thenReturn(client);
@@ -967,6 +969,70 @@ class ActorControlServiceTest {
         assertEquals(1, service.publicCapabilities().get("active_sessions"));
         verify(backend, never()).chat(any(), any());
         verify(backend, never()).close(any());
+    }
+
+    @Test
+    void capabilitiesPublishTheActualNativeTimingFieldsWithoutAddingDefaultsOrOtherBackendData() {
+        ActorControlService service = service(4, 20, 64);
+        when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200,
+                "native_clock_update_interval_ms", 319L, "internal_value", "not-public"));
+        var capabilities = service.publicCapabilities();
+        assertEquals(true, capabilities.get("actor_accepting_requests"));
+        assertEquals(200, capabilities.get("chat_minimum_interval_ms"));
+        assertEquals(319L, capabilities.get("native_clock_update_interval_ms"));
+        assertFalse(capabilities.containsKey("internal_value"));
+        verify(backend).chatTimingCapabilities();
+    }
+
+    @Test
+    void offlineCapabilitiesDoNotInitializeOrReadNativeTimingAndPublishNoClockValue() {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationRuntime.onWorldStopped();
+        var capabilities = service.publicCapabilities();
+        assertEquals(false, capabilities.get("actor_accepting_requests"));
+        assertFalse(capabilities.containsKey("native_clock_update_interval_ms"));
+        assertFalse(capabilities.containsKey("chat_minimum_interval_ms"));
+        verify(backend, never()).chatTimingCapabilities();
+    }
+
+    @Test
+    void missingNativeTimingKeepsItsFixedServiceUnavailableFailureWithoutPublishingZero() {
+        ActorControlService service = service(4, 20, 64);
+        ObservationException unavailable = new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_chat_timing_unavailable");
+        when(backend.chatTimingCapabilities()).thenThrow(unavailable);
+        assertSame(unavailable, assertThrows(ObservationException.class, service::publicCapabilities));
+    }
+
+    @Test
+    void slowNativeTimingReadDoesNotHoldTheControlLockOrPublishThePreviousWorldsTiming() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.chatTimingCapabilities()).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return Map.of("chat_minimum_interval_ms", 200, "native_clock_update_interval_ms", 319L);
+        });
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        Thread reader = Thread.ofVirtual().start(() -> {
+            try { outcome.set(service.publicCapabilities()); }
+            catch (Throwable failure) { outcome.set(failure); }
+        });
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            AcceptanceObservationRuntime.onWorldStopped();
+            service.onWorldStopping();
+            AcceptanceObservationRuntime.onWorldStarted();
+            service.onWorldStarted();
+        } finally {
+            complete.countDown();
+            reader.join(5_000);
+        }
+        assertFalse(reader.isAlive());
+        Map<?, ?> capabilities = assertInstanceOf(Map.class, outcome.get());
+        assertEquals(false, capabilities.get("actor_accepting_requests"));
+        assertFalse(capabilities.containsKey("native_clock_update_interval_ms"));
+        assertFalse(capabilities.containsKey("chat_minimum_interval_ms"));
     }
 
     private AcceptanceObservationService prepareChat(ActorControlService service) {

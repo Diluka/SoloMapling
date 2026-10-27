@@ -11,6 +11,7 @@ import unittest
 from urllib.parse import urlsplit
 
 from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure
+from solo_acceptance_mcp.bridge import MAX_LONG
 from solo_acceptance_mcp.chat_action_smoke import run_chat_action_smoke
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests.test_actor_events_smoke import ActorEventsStub
@@ -34,6 +35,7 @@ class ChatActionStub(ActorEventsStub):
         self.delayed_duplicate: tuple[str, float] | None = None
         self.delayed_duplicate_injected = False
         self.cancelled_operation_ids: list[str] = []
+        self.first_action_completed_at: float | None = None
         super().__init__(mode)
         self.initial_packet_events = deepcopy(self.packet_events)
 
@@ -71,6 +73,8 @@ class ChatActionStub(ActorEventsStub):
             caps.update(enabled_tools=sorted(CHAT_TOOLS), actions=["chat"])
             caps["actor_control"].update(ACTION_QUEUE_CAPABILITIES)
             caps["actor_control"]["actions"] = ["chat"]
+            caps["actor_control"].update(chat_minimum_interval_ms=200,
+                                         native_clock_update_interval_ms=777 if self.mode == "cached_clock" else 1)
             if self.mode == "chat_not_enabled":
                 caps["enabled_tools"].remove("game_act")
             elif self.mode == "missing_chat_action":
@@ -78,6 +82,16 @@ class ChatActionStub(ActorEventsStub):
             elif self.mode == "wrong_action_capacity":
                 for key in ACTION_QUEUE_CAPABILITIES:
                     caps["actor_control"][key] += 1
+            elif self.mode.startswith("invalid_timing_"):
+                field, _, variant = self.mode[len("invalid_timing_"):].partition(":")
+                key = "chat_minimum_interval_ms" if field == "minimum" else "native_clock_update_interval_ms"
+                if variant == "missing":
+                    caps["actor_control"].pop(key)
+                else:
+                    caps["actor_control"][key] = {
+                        "boolean": True, "string": "200", "negative": -1, "zero": 0,
+                        "overflow": MAX_LONG + 1, "timeout": 3000,
+                    }[variant]
             return status, payload
         if path == "/solo/acceptance/v1/actor/open":
             prior = self.creations
@@ -110,8 +124,19 @@ class ChatActionStub(ActorEventsStub):
                 return 409, {"sensitive": "never return original chat text or internal scene details"}
             self.accepted_actions.append({"request_id": request_id, "data": deepcopy(data), "at": time.monotonic()})
             self.action_parameters[request_id] = deepcopy(data)
+            second_refused = len(self.accepted_actions) == 2 and (
+                self.mode == "explicit_second_refused"
+                or self.mode == "cached_clock" and (
+                    self.first_action_completed_at is None
+                    or time.monotonic() - self.first_action_completed_at < 0.977
+                )
+            )
             if self.mode == "pending_action":
                 result, operation_status = {}, "RUNNING"
+            elif second_refused:
+                result = {"observed_outcome": "native_chat_not_broadcast", "native_dispatch_started": True,
+                          "echo_matched": False}
+                operation_status = "FAILED"
             else:
                 before, sequence = self.broadcast(request_id, data)
                 result = {"observed_outcome": "native_chat_broadcast", "native_dispatch_started": True,
@@ -141,6 +166,11 @@ class ChatActionStub(ActorEventsStub):
                 # Cleanup may close the actor while this response is in flight.
                 time.sleep(0.3)
             return 200, envelope(receipt)
+        if path.startswith("/solo/acceptance/v1/operation/") and not path.endswith("/cancel"):
+            operation = self.operations.get(path.rsplit("/", 1)[-1])
+            if (self.first_action_completed_at is None and operation is not None
+                    and operation["kind"] == "ACTION" and operation["status"] == "SUCCEEDED"):
+                self.first_action_completed_at = time.monotonic()
         if path.startswith("/solo/acceptance/v1/operation/") and path.endswith("/cancel"):
             operation_id = path.split("/")[-2]
             self.cancelled_operation_ids.append(operation_id)
@@ -194,6 +224,10 @@ class ChatActionSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(3, len(action_posts))
         self.assertEqual(action_posts[0]["body"], action_posts[1]["body"])
         self.assertGreaterEqual(stub.accepted_actions[1]["at"] - stub.accepted_actions[0]["at"], 0.25)
+        self.assertEqual(200, report["chat_timing"]["chat_minimum_interval_ms"])
+        self.assertEqual(1, report["chat_timing"]["native_clock_update_interval_ms"])
+        self.assertEqual(250, report["chat_timing"]["required_wait_ms"])
+        self.assertGreaterEqual(report["chat_timing"]["actual_wait_after_first_completion_ms"], 250)
         texts = [action["data"]["parameters"]["text"] for action in stub.accepted_actions]
         self.assertNotEqual(*texts)
         self.assertTrue(all(any("\u4e00" <= char <= "\u9fff" for char in text) for text in texts))
@@ -300,7 +334,7 @@ class ChatActionSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(session["state"] == "CLOSED" for session in stub.sessions.values()))
 
     async def test_pending_action_is_cancelled_without_cancelling_the_actor_before_normal_close(self):
-        stub, report = await self.run_fixture("pending_action", timeout=0.1)
+        stub, report = await self.run_fixture("pending_action", timeout=0.3)
         self.assertFalse(report["passed"])
         self.assertTrue(report["cleanup"]["verified"])
         self.assertEqual([], stub.broadcasts)
@@ -311,6 +345,44 @@ class ChatActionSmokeTests(unittest.IsolatedAsyncioTestCase):
         requests = [request["path"] for request in stub.requests]
         cancel_index = next(index for index, path in enumerate(requests) if path.endswith("/cancel"))
         self.assertLess(cancel_index, requests.index("/solo/acceptance/v1/actor/close"))
+
+    async def test_cached_native_clock_capability_waits_past_its_full_update_interval(self):
+        stub, report = await self.run_fixture("cached_clock")
+        self.assertTrue(report["passed"], report)
+        self.assertTrue(report["cleanup"]["verified"])
+        self.assertEqual(2, len(stub.accepted_actions))
+        self.assertEqual(2, len(stub.broadcasts))
+        self.assertIsNotNone(stub.first_action_completed_at)
+        self.assertGreaterEqual(stub.accepted_actions[1]["at"] - stub.first_action_completed_at, 0.977)
+        self.assertEqual(200, report["chat_timing"]["chat_minimum_interval_ms"])
+        self.assertEqual(777, report["chat_timing"]["native_clock_update_interval_ms"])
+        self.assertEqual(977, report["chat_timing"]["required_wait_ms"])
+        self.assertGreaterEqual(report["chat_timing"]["actual_wait_after_first_completion_ms"], 977)
+        self.assertEqual(2, len(stub.close_requests))
+
+    async def test_timing_capabilities_are_required_strict_positive_and_fit_the_operation_timeout_before_login(self):
+        for field in ["minimum", "clock"]:
+            for variant in ["missing", "boolean", "string", "negative", "zero", "overflow", "timeout"]:
+                with self.subTest(field=field, variant=variant):
+                    stub, report = await self.run_fixture("invalid_timing_" + field + ":" + variant)
+                    self.assertFalse(report["passed"])
+                    self.assertEqual("CHAT_TIMING_EXCEEDS_TIMEOUT" if variant == "timeout"
+                                     else "CHAT_TIMING_CAPABILITY_INVALID", report["failure"])
+                    self.assertTrue(report["cleanup"]["verified"])
+                    self.assertEqual(0, stub.creations)
+                    self.assertEqual([], stub.accepted_actions)
+                    self.assertEqual([], stub.broadcasts)
+                    self.assertEqual(0, len(stub.close_requests))
+
+    async def test_native_second_chat_refusal_is_reported_without_retrying_the_message(self):
+        stub, report = await self.run_fixture("explicit_second_refused")
+        self.assertFalse(report["passed"])
+        self.assertTrue(report["cleanup"]["verified"])
+        self.assertEqual(2, len(stub.accepted_actions))
+        self.assertEqual(1, len(stub.broadcasts))
+        posts = [request for request in stub.requests if request["path"].endswith("/actor/act")]
+        self.assertEqual(3, len(posts), "only the deliberate first-action replay is allowed")
+        self.assertEqual(1, len(stub.close_requests))
 
     async def test_existing_recovery_output_is_refused_before_any_http(self):
         stub = ChatActionStub().start()

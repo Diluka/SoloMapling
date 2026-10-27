@@ -214,7 +214,7 @@ ACTION 复用该 session 的单线程执行器，与 OPEN/CLOSE 保持顺序，�
 
 原生 handler 返回不代表成功；旧回声、其他角色的同文消息、0x44 系统公告均不能代替本次自身回声。完整窗口内无匹配回声为 `FAILED/native_chat_not_broadcast`；原生异常或必要事件已丢失且无法确认时为 `INDETERMINATE/native_chat_outcome_unknown`，保留原请求ID、不盲重放。已观测到的广播事实不能因后续日志/观察异常被改写为未发送。
 
-候选 capabilities 在顶层 `enabled_tools` 增加 game_act，`actions=["chat"]`；`actor_control.maximum_pending_actions_per_session=7`、`actor_executor_queue_capacity=8`。`implementation_round` 继续为 `R2a`，以明确工具与动作字段判断可用性。NPC、移动、脚本和 recipe 仍未实现。
+候选 capabilities 在顶层 `enabled_tools` 增加 game_act，`actions=["chat"]`；`actor_control.maximum_pending_actions_per_session=7`、`actor_executor_queue_capacity=8`。在线时另公告原生 `chat_minimum_interval_ms=200` 和实际 `native_clock_update_interval_ms`；后者来自北斗配置，不猜测默认值。原生限频使用缓存时钟，墙钟等待250ms不一定足够；验收脚本正常发送第二条前等待 `max(250, 最小间隔 + 时钟更新间隔)`，超过本轮操作超时则在登录前拒绝，失败不自动重发。该实物问题由 #72 子项 [#74](https://github.com/Diluka/SoloMapling/issues/74) 跟踪。`implementation_round` 继续为 `R2a`，以明确工具与动作字段判断可用性。NPC、移动、脚本和 recipe 仍未实现。
 
 本项计划先隔离、再实际部署，用官方 MCP SDK 在出生地图发出带运行 nonce 的中文普通聊天，独立读取实际0xA2自身回声，核对相同请求不重复广播、新请求有新序号、错误/旧context不广播、关闭后旧正文拒绝及同CID存档连续。排队满额仍能 close、取消和原生200ms未广播等边界补确定性测试；真实客户端画面另验。通过后只关闭 #72，#64 继续保留 SocialBot 回复、提示菜单、话题与告别等实际交互，NPC 出行前置由 #65 继续推进。命令与恢复检查点见 [工具运行说明](../../tools/acceptance-mcp/README.md)。
 

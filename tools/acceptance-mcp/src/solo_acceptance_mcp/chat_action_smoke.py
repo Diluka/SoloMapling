@@ -106,6 +106,19 @@ class ChatAcceptance(ActorEventsAcceptance):
         control = caps["actor_control"]
         for key, expected in [("maximum_pending_actions_per_session", 7), ("actor_executor_queue_capacity", 8)]:
             check(type(control.get(key)) is int and control[key] == expected, "CHAT_QUEUE_CAPABILITY_INVALID")
+        for key in ["chat_minimum_interval_ms", "native_clock_update_interval_ms"]:
+            check(type(control.get(key)) is int and 1 <= control[key] <= MAX_LONG,
+                  "CHAT_TIMING_CAPABILITY_INVALID")
+        # Native spam timestamps use Server's periodically cached clock. A wall
+        # clock delay of 250ms alone need not advance that clock by its 200ms rule.
+        required_wait_ms = max(250, control["chat_minimum_interval_ms"] + control["native_clock_update_interval_ms"])
+        check(required_wait_ms <= self.timeout * 1000, "CHAT_TIMING_EXCEEDS_TIMEOUT")
+        self.report["chat_timing"] = {
+            "chat_minimum_interval_ms": control["chat_minimum_interval_ms"],
+            "native_clock_update_interval_ms": control["native_clock_update_interval_ms"],
+            "required_wait_ms": required_wait_ms,
+            "clock": "monotonic wall time since first ACTION completion",
+        }
         self.generation = require_generation(caps)
         self.report.update(source=caps["source"], runtime_generation=self.generation)
 
@@ -130,10 +143,12 @@ class ChatAcceptance(ActorEventsAcceptance):
               "CHAT_DUPLICATE_BROADCAST")
         self.report["duplicate_request_verified"] = True
 
-        await asyncio.sleep(max(0, 0.25 - (time.monotonic() - first_completed)))
+        await asyncio.sleep(max(0, required_wait_ms / 1000 - (time.monotonic() - first_completed)))
         observation, _, baseline2 = await self.read_packets(first, latest)
         await self.verify_scene(observation["actor"])
         self.report["second_chat_wait_after_first_completion_ms"] = (time.monotonic() - first_completed) * 1000
+        self.report["chat_timing"]["actual_wait_after_first_completion_ms"] = self.report["second_chat_wait_after_first_completion_ms"]
+        self.save()
         action2, _ = await self.submit_chat(first, observation["actor"]["scene"], text2, ":chat2", baseline2)
         await self.verified_echo(first, baseline2, text2, action2)
         check(action2["result"]["echo_sequence"] > action1["result"]["echo_sequence"], "SECOND_CHAT_REUSED_OLD_ECHO")

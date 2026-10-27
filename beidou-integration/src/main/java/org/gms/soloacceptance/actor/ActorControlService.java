@@ -381,7 +381,17 @@ public final class ActorControlService {
     }
 
     public Map<String, Object> publicCapabilities() {
+        String timingGeneration;
+        synchronized (monitor) { timingGeneration = live() ? worldGeneration : null; }
+        Map<String, Object> timing = null;
+        ObservationException timingFailure = null;
+        if (timingGeneration != null) {
+            try { timing = backend.chatTimingCapabilities(); }
+            catch (ObservationException failure) { timingFailure = failure; }
+        }
         synchronized (monitor) {
+            boolean sameRuntime = timingGeneration != null && live() && timingGeneration.equals(worldGeneration);
+            if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
             result.put("actions", List.of("chat"));
@@ -397,7 +407,11 @@ public final class ActorControlService {
             result.put("idempotency_scope", "process_lifetime");
             result.put("reserved_first_closes", reservedFirstCloses());
             result.put("close_retry_history_policy", "unreserved_capacity_only_then_quarantine_until_lifecycle_cleanup");
-            result.put("actor_accepting_requests", live());
+            result.put("actor_accepting_requests", sameRuntime);
+            if (sameRuntime) {
+                result.put("chat_minimum_interval_ms", timing.get("chat_minimum_interval_ms"));
+                result.put("native_clock_update_interval_ms", timing.get("native_clock_update_interval_ms"));
+            }
             result.put("operation_event_kind", "lifecycle");
             result.put("close_cancellation", "native_cleanup_continues_after_acceptance");
             result.put("packet_observation", AcceptanceClient.packetObservationCapabilities());

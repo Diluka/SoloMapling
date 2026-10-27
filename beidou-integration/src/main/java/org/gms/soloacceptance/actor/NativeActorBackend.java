@@ -102,6 +102,13 @@ public final class NativeActorBackend {
         encodeChat(handle, text);
     }
 
+    public Map<String, Object> chatTimingCapabilities() {
+        long updateInterval = GameConfig.getServerLong("update_interval");
+        if (updateInterval <= 0) throw unavailable("actor_chat_timing_unavailable");
+        return Map.of("chat_minimum_interval_ms", 200,
+                "native_clock_update_interval_ms", updateInterval);
+    }
+
     /** Dispatches ordinary native chat once; only a matching player-visible native echo proves success. */
     public Map<String, Object> chat(NativeActorHandle handle, String text) {
         byte[] encoded = encodeChat(handle, text);

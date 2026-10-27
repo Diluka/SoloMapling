@@ -83,7 +83,7 @@ enabled = true
 
 聊天复用同 session 队列，返回 `kind=ACTION/action=chat`；`QUEUED` 或 handler 返回均不表示已广播。只有实际自身 CID、原文和新包 sequence 匹配的 `CHATTEXT 0xA2` 才能形成 `SUCCEEDED/native_chat_broadcast`。终态历史只保留匹配结果和序号，不保存正文，正文沿当前 session 的有界事件窗口读取。未 dispatch 的取消必须等实际 `CANCELLED/chat_cancelled_before_dispatch`；已广播不能撤回，须保留实际结果及 `cancel_too_late`。取消聊天不关闭角色。
 
-实际能力公告 `actor_control.maximum_pending_actions_per_session=7` 和 `actor_executor_queue_capacity=8`；后端为首次 close 保留历史及物理队列额度。客户端不通过自动等待/重试绕过原生限频，聊天没有广播或结果未知时不会自动再说一次。
+实际能力公告 `actor_control.maximum_pending_actions_per_session=7` 和 `actor_executor_queue_capacity=8`；后端为首次 close 保留历史及物理队列额度。聊天时钟另公告 `chat_minimum_interval_ms` 和实际 `native_clock_update_interval_ms`。客户端不通过自动重试绕过原生限频，聊天没有广播或结果未知时不会自动再说一次。
 
 角色和事件观察不改变已有游戏状态。`limit` 为 `1`～`500` 的严格整数，world 不接受 scene_ref；scene 必须使用实际返回的引用。world/scene 不接受角色会话参数或非零包游标，既有请求正文保持原样。actor 必须提供 `session_id` 和正整数 `expected_generation`，不接受 `scene_ref`。新参数在 Python `BridgeClient.observe` 中为 keyword-only，原有前三个位置参数保持兼容。所有整数拒绝 bool、浮点数和数值字符串。actor 只读 POST 的请求 UUID 不作为写操作去重键，不创建 operation 或占用历史/关闭额度。
 
@@ -166,7 +166,9 @@ actor 的顶层 `events` 使用每会话独立的包 `sequence`，与 `operation
   --output /absolute/evidence/new-chat-run.json
 ```
 
-四个目标/证据参数均必填，输出路径必须是本轮新路径。流程先验证实际聊天和事件能力，正常登录并从 actor 观察获取真实场景；发送带随机 nonce 的中文普通聊天，轮询 ACTION，并独立读取新包窗口核对同一 CID、完整原文、show=0 和返回的 echo_sequence。同 ID 重放后重新遍历窗口，确认没有第二次广播；第一条完成至少250ms后以新 ID 再发一条，不改变原生200ms限频规则。
+四个目标/证据参数均必填，输出路径必须是本轮新路径。流程先验证实际聊天、事件和时钟能力，正常登录并从 actor 观察获取真实场景；发送带随机 nonce 的中文普通聊天，轮询 ACTION，并独立读取新包窗口核对同一 CID、完整原文、show=0 和返回的 echo_sequence。同 ID 重放后重新遍历窗口，确认没有第二次广播。
+
+第二条以新 ID 发出前，从第一条 ACTION 完成起按单调时钟等待 `max(250, chat_minimum_interval_ms + native_clock_update_interval_ms)` 毫秒。北斗原生限频使用周期更新的缓存时钟，250ms 墙钟并不保证原生200ms已经过去；默认时钟更新777ms时需等待977ms。两项能力必须为正的严格整数，缺失或总等待超出 `operation-timeout` 时登录前拒绝，不退回固定250ms或截短等待。报告保留实际时钟参数、要求间隔和实测间隔；原生拒绝仍按失败处理，不自动再发，也不修改服务时钟或角色限频状态。
 
 关闭前从最初包游标重新核对两个 nonce 都只有一条自身回声，避免延迟的重复广播被中间观察漏掉。最后正常保存退出，核对旧会话正文被拒和 ACTION 历史不含正文；重新打开同一 CID 的新会话，再正常退出。待执行 ACTION 超时先请求取消并核实终态，再正常关闭角色。ACTION 收据在清除未知标记前必须绑定本次输入会话，陌生操作不会被取消。
 
