@@ -1,6 +1,6 @@
 # 共享游戏基建：角色上下文与世界代次
 
-**状态：[#117](https://github.com/Diluka/SoloMapling/issues/117) 为候选实现，尚待完整构建、隔离及实际部署验收。** 当前代码已加入三种中立上下文类型，并由 MCP 和 Bot 两种薄适配消费；公共结构检查、MCP 资格及 Bot 适配已有定向测试。实际部署仍为 #110 验收版本 `53504cb6440d02cde21b4abf876fb80f7e9b82c4`，不能把本目录说明当成共享层已经上线。
+**状态：[#117](https://github.com/Diluka/SoloMapling/issues/117) 已实现并通过完整构建、CI与隔离原生验证，实际部署验收待完成。** 当前代码已加入三种中立上下文类型，并由 MCP 和 Bot 两种薄适配消费；公共结构检查、MCP 资格及 Bot 适配已有定向测试。实际部署仍为 #110 验收版本 `53504cb6440d02cde21b4abf876fb80f7e9b82c4`，不能把本目录说明当成共享层已经上线。
 
 本目录说明内部 Java 接口与使用边界。MCP 的工具、配置和实际玩法记录见 [MCP 验收说明](../mcp-acceptance/README.md)，构建入口见 [集成构建](../../beidou-integration/README.md)。所有新增实现都在 Solo，官方北斗 submodule 仍固定 `75a86268738ca8845e06ea9d59ec36d15b22c91b`，受控文件保持原样。
 
@@ -111,11 +111,11 @@ public final class NativeContextChecks {
 
 本轮已有公共上下文、MCP适配和Bot适配的定向测试。Bot测试使用真实Character、BotClient、Map和PlayerStorage登记对象，宿主路由使用受控替身；覆盖实际V1登录标志、跨图后旧场景失效、同ID换对象、注销、世界换代和读取故障。它证明第二种薄适配可以独立消费公共结构，未执行完整V2模块或PQ玩法。
 
-测试源码见 [公共角色检查](../../beidou-integration/src/test/java/soloMapling/game/context/NativeContextChecksTest.java)、[公共场景检查](../../beidou-integration/src/test/java/soloMapling/game/context/NativeContextSceneTest.java)、[MCP身份适配](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/AcceptanceActorContextsTest.java) 与 [Bot适配](../../beidou-integration/src/test/java/soloMapling/beidou/BotGameContextsTest.java)。本轮尚待完整构建、隔离MCP原生循环、同JVM停启、实际部署和独立验收证据；不将定向测试当成真实游戏验收。
+测试源码见 [公共角色检查](../../beidou-integration/src/test/java/soloMapling/game/context/NativeContextChecksTest.java)、[公共场景检查](../../beidou-integration/src/test/java/soloMapling/game/context/NativeContextSceneTest.java)、[MCP身份适配](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/AcceptanceActorContextsTest.java) 与 [Bot适配](../../beidou-integration/src/test/java/soloMapling/beidou/BotGameContextsTest.java)。完整469项Java、5项打包和216项MCP测试及CI已通过；隔离SDK实际完成普通角色登录/中文发言/活跃NPC、同JVM世界停启、停代次后的原归属角色正常保存退出、同CID重开及旧NPC回复回归。#114另以同一世界内的已关闭会话、仍加载场景与真正过期场景分别验证，未用共享通过代替错误恢复验收。实际部署仍需对应产物身份的相同短流程；Bot14项合同证据不冒称V2/PQ实物。
 
 | [#116共享入口](https://github.com/Diluka/SoloMapling/issues/116) 下的切片 | 本文对应状态 |
 |---|---|
-| [#117上下文与世界代次](https://github.com/Diluka/SoloMapling/issues/117) | 候选，已有定向测试，完整/隔离/实际验收待完成 |
+| [#117上下文与世界代次](https://github.com/Diluka/SoloMapling/issues/117) | 完整构建、CI与隔离原生循环已过；Bot薄适配合同另列，实际部署待验 |
 | [#118作用域与排空](https://github.com/Diluka/SoloMapling/issues/118) | 待实现；承接停止接收、旧回调失效与已拥有角色收尾 |
 | [#119原生动作与证据](https://github.com/Diluka/SoloMapling/issues/119) | 待实现；保留原生资格、编码、执行及实际后态 |
 | [#120按需事实与事件](https://github.com/Diluka/SoloMapling/issues/120) | 待实现；不把MCP全局目录变成所有消费侧依赖 |

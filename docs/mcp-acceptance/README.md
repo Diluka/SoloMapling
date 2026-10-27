@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复也已完成隔离及实际部署验收。** #117 共享上下文现为候选，尚待完整构建、隔离与实际部署验收。当前部署源码为 `53504cb6440d02cde21b4abf876fb80f7e9b82c4`（[PR #115](https://github.com/Diluka/SoloMapling/pull/115)）；#63、#67～#70、#72、限频验收修正 #74、#75 和 #110 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply`，回复仅开放 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。#110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复也已完成隔离及实际部署验收。** #117 共享上下文已通过完整构建、CI与隔离原生循环，实际部署仍待验。当前部署源码为 `53504cb6440d02cde21b4abf876fb80f7e9b82c4`（[PR #115](https://github.com/Diluka/SoloMapling/pull/115)）；#63、#67～#70、#72、限频验收修正 #74、#75 和 #110 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply`，回复仅开放 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。#110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -31,7 +31,7 @@ solomapling:
 
 ## 与二代、PQ 共享基础
 
-[共享入口 #116](https://github.com/Diluka/SoloMapling/issues/116) 统一跟踪一份中立Java后端，接口及作用域见 [共享游戏基建说明](../shared-game-foundation/README.md)。[#117 中立上下文](https://github.com/Diluka/SoloMapling/issues/117) 已加入 WorldEpoch、角色/场景结构检查和 MCP/Bot 两种薄适配，现为候选；定向测试不等于完整构建、隔离游戏或实际部署验收。当前实际运行仍是上面的 #110 交付版本，七工具和四种动作的公开契约不因本轮提炼增加。
+[共享入口 #116](https://github.com/Diluka/SoloMapling/issues/116) 统一跟踪一份中立Java后端，接口及作用域见 [共享游戏基建说明](../shared-game-foundation/README.md)。[#117 中立上下文](https://github.com/Diluka/SoloMapling/issues/117) 已加入 WorldEpoch、角色/场景结构检查和 MCP/Bot 两种薄适配，已过完整构建、CI和隔离原生循环；第二类Bot合同测试与实际MCP证据分开，正式部署仍待验。当前实际运行仍是上面的 #110 交付版本，七工具和四种动作的公开契约不因本轮提炼增加。
 
 共享上下文只核对已指定的原生对象关系，不读普通登录标志，不依赖验收开关、`Server.getInstance()`、全世界目录或包捕获。MCP继续保留JWT/admin、owner/profile、账号lease/在线Client、GM0、排除bot、普通登录状态和request_id历史。Bot薄适配以BotClient及精确BotRegistry登记授信，保持V1角色真实loggedIn=false；其真实原生对象/宿主路由替身测试不代表完整V2模块已经运行。V2/PQ通过内部Java适配消费，不经Python/HTTP/MCP发动作，也不复制整个ActorControlService。
 

@@ -91,7 +91,7 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 本项已完成隔离及实际部署 SDK 验收，PR #115 交付；accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
 
 共享基础的内部ABI及验收范围见 [共享游戏基建](../docs/shared-game-foundation/README.md)。
-#117 候选加入中立WorldEpoch、角色/场景结构检查和MCP/Bot薄适配，仍待完整构建、隔离及实际部署验收；
+#117 加入中立WorldEpoch、角色/场景结构检查和MCP/Bot薄适配，完整构建、CI与隔离原生验证已过，实际部署仍待验；
 实际部署保持#110源码身份，公共层不增加MCP工具或动作。Bot真实对象/宿主路由替身测试与完整V2运行分别留证。
 后续按 [共享基础 #116](https://github.com/Diluka/SoloMapling/issues/116) 的#118～#129实际依赖推进，
 不扩展平行实现；已有MCP交付不冒充公共动作/NPC层完成，礼包及出行暂后排。
