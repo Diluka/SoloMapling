@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static soloMapling.ArtificialPlayer.BotDialogueHandler.getRandomResolvedLine;
 import static soloMapling.ArtificialPlayer.BotCommandsPack.MapleMessengerCommands.botLeaveMessenger;
 import static soloMapling.ArtificialPlayer.BotCommandsPack.MapleMessengerCommands.botSendChatFull;
 import static soloMapling.ArtificialPlayer.BotCommandsPack.MapleMessengerCommands.isMessengerInviteAccepted;
@@ -67,16 +68,21 @@ public class NXMerchantBot extends BotSM {
     }
 
     private void advertise() {
-        List<String> messages = List.of(
-                "Selling 10k nx cash code, 50m TRADE ME!",
-                "S> 10k NX code 50m, no lowballs",
-                "NX CODE 10k >> 50m trade me!! legit only",
-                "10k nx cash code for 50m, Pros only",
-                "SELLING NX 10K CODE!! 50m!! no scammers",
-                "S>> 10,000 NX code, 50m, serious offers only",
-                "got nx codes, 10k for 50m, trade me fast"
-        );
-        SocialCommands.BotSpeak(getChr(), getRandomElement(messages));
+        speakLine("NXAdvertise");
+    }
+
+    private void speakLine(String node) {
+        String line = getRandomResolvedLine(this, node);
+        if (line != null) {
+            SocialCommands.BotSpeak(getChr(), line);
+        }
+    }
+
+    private void messengerLine(String node, int holdMs) {
+        String line = getRandomResolvedLine(this, node);
+        if (line != null) {
+            botSendChatFull(getChr(), line, holdMs);
+        }
     }
 
     private void deliverNXCode() {
@@ -85,7 +91,7 @@ public class NXMerchantBot extends BotSM {
             return;
         }
 
-        SocialCommands.BotSpeak(getChr(), "messaging you.");
+        speakLine("NXContactNotice");
         sendMessengerInviteComplete(getChr(), getLastTradedCharacter());
 
         boolean accepted = waitForCondition(
@@ -96,14 +102,14 @@ public class NXMerchantBot extends BotSM {
             String nxCode = generateGiftCardCode();
             createCompleteNXCode(nxCode);
 
-            botSendChatFull(getChr(), "here is the 10k nx code... be sure to write it down. Remember to NOT include dashes", 3000);
+            messengerLine("NXCodeHandoff", 3000);
             botSendChatFull(getChr(), nxCode, 7000);
-            botSendChatFull(getChr(), "enjoy it!", 2000);
+            messengerLine("NXCodeThanks", 2000);
 
             BotTiming.after(2000, () -> botLeaveMessenger(getChr()));
             waitFor(2500); // hold CONVERT_BACK until the messenger leave lands
         } else {
-            SocialCommands.BotSpeak(getChr(), "You didn't accept the messenger invite... too bad noob.");
+            speakLine("NXInviteIgnored");
         }
 
         resetLastTradeResult();

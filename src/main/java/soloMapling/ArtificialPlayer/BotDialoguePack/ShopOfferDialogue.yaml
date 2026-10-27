@@ -622,3 +622,22 @@ ShopOffer:
       - "yo {player} welcome. lmk if you got questions"
     emote: 2
     wait: 0
+  # Whispered later on when an AFK shop owner "accepts" an offer. {room} is the FM room label.
+  AFKPriceUpdate:
+    text:
+      - "Hey, I updated the price on {item} to {price}. Come grab it! {room}"
+      - "Yo, dropped {item} to {price} for you. Still there if you want it. {room}"
+      - "Sorry was afk. Priced {item} at {price} like you asked. {room}"
+      - "Just got back. {item} is {price} now, go ahead and grab it. {room}"
+      - "Ok {price} works for {item}. Updated the shop. {room}"
+      - "Hey saw your offer. {item} is yours at {price}. {room}"
+      - "Was afk sorry. Changed {item} to {price}. Come by. {room}"
+      - "Updated {item} to {price}. First come first serve tho. {room}"
+    emote: 0
+    wait: 0
+  # Nudge for visitors who chat at the shop without a parsable offer.
+  OfferHint:
+    text:
+      - "Tip: To offer, type the price (50m, 1.5b) and item name. Use 1st/2nd/3rd for duplicates!"
+    emote: 0
+    wait: 0

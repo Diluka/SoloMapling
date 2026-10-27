@@ -308,9 +308,7 @@ public class FMShopDescriptionManager {
                 DescriptionEntry.DescriptionType.WELCOME,
                 List.of("B"),
                 List.of(13),
-                () -> {
-                    return ("Welcome to " + owner + "'s Shop!");
-                });
+                () -> FMShopDescGen.getWelcomeDescription(owner));
         welcomeDesc.addRoomRange(13, 22);
 
         return welcomeDesc;

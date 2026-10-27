@@ -1,6 +1,7 @@
 package soloMapling.ArtificialPlayer.LlmSystem;
 
 import org.springframework.core.env.Environment;
+import soloMapling.Environment.SoloMaplingLanguageConfig;
 
 /** Reads SocialBot LLM settings from the host's existing application configuration. */
 public final class SocialLlmConfig {
@@ -30,7 +31,6 @@ public final class SocialLlmConfig {
     private static volatile int timeoutMs = DEFAULT_TIMEOUT_MS;
     private static volatile int historyTurns = DEFAULT_HISTORY_TURNS;
     private static volatile boolean fallbackToYaml = true;
-    private static volatile String languageTag = "en-US";
 
     public static void configure(Environment environment) {
         enabled = bool(environment, KEY_ENABLED, false);
@@ -43,10 +43,7 @@ public final class SocialLlmConfig {
         timeoutMs = clamp(integer(environment, KEY_TIMEOUT_MS, DEFAULT_TIMEOUT_MS), 2_000, 60_000);
         historyTurns = clamp(integer(environment, KEY_HISTORY_TURNS, DEFAULT_HISTORY_TURNS), 0, 20);
         fallbackToYaml = bool(environment, KEY_FALLBACK_YAML, true);
-        languageTag = string(environment, "solomapling.language", "").trim();
-        if (languageTag.isEmpty()) {
-            languageTag = string(environment, "gms.service.language", "en-US").trim();
-        }
+        SoloMaplingLanguageConfig.configure(environment);
     }
 
     public static boolean enabled() {
@@ -78,7 +75,7 @@ public final class SocialLlmConfig {
     }
 
     public static String languageTag() {
-        return languageTag;
+        return SoloMaplingLanguageConfig.languageTag();
     }
 
     private static String string(Environment environment, String key, String fallback) {

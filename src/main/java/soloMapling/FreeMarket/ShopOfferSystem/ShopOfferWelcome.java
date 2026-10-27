@@ -22,9 +22,6 @@ public class ShopOfferWelcome {
     private static final double WELCOME_CHANCE = 0.60;
     private static final int HINT_AFTER_MESSAGES = 2;
 
-    private static final String HINT_MSG =
-            "Tip: To offer, type the price (50m, 1.5b) and item name. Use 1st/2nd/3rd for duplicates!";
-
     private static final Map<String, Integer> playerMessageCounts = new ConcurrentHashMap<>();
     private static final Set<String> hintedPlayers = ConcurrentHashMap.newKeySet();
 
@@ -64,7 +61,10 @@ public class ShopOfferWelcome {
             int delay = 2000 + random.nextInt(2000);
             MethodScheduler.runAfterDelay(() -> {
                 if (player.getPlayerShop() != shop) return;
-                shop.chat(shop.getOwner(), HINT_MSG);
+                String hint = getRandomLine("OfferHint");
+                if (hint != null) {
+                    shop.chat(shop.getOwner(), hint);
+                }
             }, delay);
         }
     }
@@ -75,8 +75,12 @@ public class ShopOfferWelcome {
     }
 
     private static String getWelcomeLine() {
+        return getRandomLine("WelcomeResponse");
+    }
+
+    private static String getRandomLine(String node) {
         BotDialogueHandler.DialogueConstructor dialog =
-                BotDialogueHandler.getDialogueCon(DIALOGUE_PATH, BOT_TYPE, "WelcomeResponse");
+                BotDialogueHandler.getDialogueCon(DIALOGUE_PATH, BOT_TYPE, node);
         if (dialog == null || dialog.getDialogue().isEmpty()) return null;
         List<String> lines = dialog.getDialogue();
         return lines.get(random.nextInt(lines.size()));

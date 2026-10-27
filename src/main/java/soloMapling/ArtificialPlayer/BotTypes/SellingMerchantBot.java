@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import static soloMapling.ArtificialPlayer.BotDialogueHandler.getRandomResolvedLine;
 import static soloMapling.ArtificialPlayer.BotTypeManager.BotType.NX_MERCHANT_BOT;
 import static soloMapling.ArtificialPlayer.BotTypeManager.convertBotType;
 import static soloMapling.BotLogger.log;
@@ -113,19 +114,19 @@ public class SellingMerchantBot extends BotSM {
         }
         String itemName = getItemName(itm.getItemId());
         if (itemName != null) {
-            String msg = buildSellingMessage(itemName);
-            SocialCommands.BotSpeak(getChr(), msg);
+            String msg = buildSellingMessage(this, itemName);
+            if (msg != null) {
+                SocialCommands.BotSpeak(getChr(), msg);
+            }
         }
     }
 
-    static String buildSellingMessage(String itemName) {
-        List<String> prefixes = List.of("Selling", "S>", "S>>", "SELL>", "Selling>");
-        List<String> suffixes = List.of("You Offer", "Offer", "Trade Me", "just trade me!", "PM me",
-                "no lowball", "no noobs", "no scammers", "Pros only", "hotties only", "no nx h0es",
-                "baddies only", "no weebs", "English Only", "No Spanish",
-                "serious offers only", "dont waste my time", "legit only", "no time wasters");
-
-        String msg = getRandomElement(prefixes) + " " + itemName + " " + getRandomElement(suffixes);
+    static String buildSellingMessage(BotSM bot, String itemName) {
+        String template = getRandomResolvedLine(bot, "SellAdvertise");
+        if (template == null) {
+            return null;
+        }
+        String msg = template.replace("%ITEM%", itemName);
 
         int fillerCount = random.nextInt(4);
         for (int i = 0; i < fillerCount; i++) {

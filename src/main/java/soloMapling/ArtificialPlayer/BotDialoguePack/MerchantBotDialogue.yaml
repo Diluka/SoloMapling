@@ -539,3 +539,122 @@ MerchantBot:
       - 2
       - 3
     wait: 1
+  # Shouted by SellingMerchantBot while standing in the FM. %ITEM% is the item on offer.
+  SellAdvertise:
+    text:
+      - "Selling %ITEM% You Offer"
+      - "S> %ITEM% Offer"
+      - "S>> %ITEM% Trade Me"
+      - "SELL> %ITEM% just trade me!"
+      - "Selling> %ITEM% PM me"
+      - "S> %ITEM% no lowball"
+      - "Selling %ITEM% no noobs"
+      - "S>> %ITEM% no scammers"
+      - "SELL> %ITEM% Pros only"
+      - "Selling> %ITEM% hotties only"
+      - "S> %ITEM% no nx h0es"
+      - "Selling %ITEM% baddies only"
+      - "S>> %ITEM% no weebs"
+      - "SELL> %ITEM% English Only"
+      - "Selling> %ITEM% No Spanish"
+      - "S> %ITEM% serious offers only"
+      - "Selling %ITEM% dont waste my time"
+      - "S>> %ITEM% legit only"
+      - "SELL> %ITEM% no time wasters"
+      - "Selling> %ITEM% You Offer"
+      - "S> %ITEM% Trade Me"
+      - "Selling %ITEM% PM me"
+      - "S>> %ITEM% Offer"
+      - "SELL> %ITEM% no lowball"
+      - "Selling> %ITEM% legit only"
+      - "S> %ITEM% just trade me!"
+      - "Selling %ITEM% serious offers only"
+      - "S>> %ITEM% no scammers"
+      - "SELL> %ITEM% Trade Me"
+      - "Selling> %ITEM% no time wasters"
+      - "S> %ITEM% Pros only"
+      - "Selling %ITEM% Offer"
+      - "S>> %ITEM% just trade me!"
+      - "SELL> %ITEM% dont waste my time"
+      - "Selling> %ITEM% no scammers"
+      - "S> %ITEM% no time wasters"
+    emote:
+      - 2
+      - 3
+    wait: 1
+  # Shouted by BuyingMerchantBot. %ITEM% is the wanted item, %PRICE% the offered meso price.
+  BuyAdvertise:
+    text:
+      - "Buying %ITEM% %PRICE% Trade Me"
+      - "B> %ITEM% %PRICE% PM me"
+      - "B>> %ITEM% %PRICE% just trade me!"
+      - "BUY> %ITEM% %PRICE% hmu"
+      - "Buying> %ITEM% %PRICE% whisp me"
+      - "B> %ITEM% %PRICE% no lowball"
+      - "Buying %ITEM% %PRICE% no noobs"
+      - "B>> %ITEM% %PRICE% no scammers"
+      - "BUY> %ITEM% %PRICE% Pros only"
+      - "Buying> %ITEM% %PRICE% hotties only"
+      - "B> %ITEM% %PRICE% no nx h0es"
+      - "Buying %ITEM% %PRICE% baddies only"
+      - "B>> %ITEM% %PRICE% no weebs"
+      - "BUY> %ITEM% %PRICE% English Only"
+      - "Buying> %ITEM% %PRICE% No Spanish"
+      - "B> %ITEM% %PRICE% serious offers only"
+      - "Buying %ITEM% %PRICE% dont waste my time"
+      - "B>> %ITEM% %PRICE% legit only"
+      - "BUY> %ITEM% %PRICE% fair price only"
+      - "Buying> %ITEM% %PRICE% Trade Me"
+      - "B> %ITEM% %PRICE% hmu"
+      - "Buying %ITEM% %PRICE% whisp me"
+      - "B>> %ITEM% %PRICE% PM me"
+      - "BUY> %ITEM% %PRICE% no lowball"
+      - "Buying> %ITEM% %PRICE% legit only"
+      - "B> %ITEM% %PRICE% just trade me!"
+      - "Buying %ITEM% %PRICE% serious offers only"
+      - "B>> %ITEM% %PRICE% no scammers"
+      - "BUY> %ITEM% %PRICE% Trade Me"
+      - "Buying> %ITEM% %PRICE% fair price only"
+      - "B> %ITEM% %PRICE% Pros only"
+      - "Buying %ITEM% %PRICE% hmu"
+      - "B>> %ITEM% %PRICE% dont waste my time"
+      - "BUY> %ITEM% %PRICE% whisp me"
+      - "Buying> %ITEM% %PRICE% no noobs"
+      - "B> %ITEM% %PRICE% fair price only"
+    emote:
+      - 2
+      - 3
+    wait: 1
+  # NXMerchantBot: shouted while hawking a 10k NX cash code for 50m.
+  NXAdvertise:
+    text:
+      - "Selling 10k nx cash code, 50m TRADE ME!"
+      - "S> 10k NX code 50m, no lowballs"
+      - "NX CODE 10k >> 50m trade me!! legit only"
+      - "10k nx cash code for 50m, Pros only"
+      - "SELLING NX 10K CODE!! 50m!! no scammers"
+      - "S>> 10,000 NX code, 50m, serious offers only"
+      - "got nx codes, 10k for 50m, trade me fast"
+    emote: 3
+    wait: 1
+  # NXMerchantBot hand-off after a successful trade (spoken, then over messenger).
+  NXContactNotice:
+    text:
+      - "messaging you."
+    emote: 0
+    wait: 1
+  NXCodeHandoff:
+    text:
+      - "here is the 10k nx code... be sure to write it down. Remember to NOT include dashes"
+    emote: 0
+    wait: 1
+  NXCodeThanks:
+    text:
+      - "enjoy it!"
+    emote: 0
+    wait: 1
+  NXInviteIgnored:
+    text:
+      - "You didn't accept the messenger invite... too bad noob."
+    emote: 0
+    wait: 1

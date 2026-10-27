@@ -1,0 +1,3295 @@
+conversations:
+
+  # ═══════════════════════════════════════
+  #  双人对话
+  # ═══════════════════════════════════════
+
+  training_spot_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你在哪练级？"}
+      - {speaker: B, text: "基本猪海滩"}
+      - {speaker: A, text: "那不是有点慢？", emote: 5}
+      - {speaker: B, text: "对但舒服 没人烦我"}
+      - {speaker: A, text: "行吧哈哈"}
+
+  training_spot_debate_2:
+    participants: 2
+    lines:
+      - {speaker: A, text: "45级该去哪练？"}
+      - {speaker: B, text: "猴子公园3或者虾兵"}
+      - {speaker: A, text: "哪个快"}
+      - {speaker: B, text: "有宠去虾兵 没宠猴子公园3"}
+      - {speaker: A, text: "好谢啦！", emote: 2}
+
+  class_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "游戏最强职业是啥"}
+      - {speaker: B, text: "夜使者啊显然", emote: 3}
+      - {speaker: A, text: "哈哈不可能。主教有用多了"}
+      - {speaker: B, text: "有用是有用但夜使者伤害最高"}
+      - {speaker: A, text: "随便吧哥们", emote: 1}
+      - {speaker: B, text: "继续气哈哈", emote: 3}
+
+  class_debate_2:
+    participants: 2
+    lines:
+      - {speaker: A, text: "该建战士还是法师"}
+      - {speaker: B, text: "看你想要啥。战士肉 法师大AOE"}
+      - {speaker: A, text: "我想看起来酷"}
+      - {speaker: B, text: "那就黑暗骑士哈哈", emote: 2}
+      - {speaker: A, text: "成"}
+
+  item_price_haggle:
+    participants: 2
+    lines:
+      - {speaker: A, text: "那些飞镖多少钱？"}
+      - {speaker: B, text: "一套450万"}
+      - {speaker: A, text: "有点贵…350？"}
+      - {speaker: B, text: "最低400万"}
+      - {speaker: A, text: "成交", emote: 2}
+      - {speaker: B, text: "交易我"}
+
+  item_price_haggle_2:
+    participants: 2
+    lines:
+      - {speaker: A, text: "出 10%手套攻击"}
+      - {speaker: B, text: "多少"}
+      - {speaker: A, text: "6000万"}
+      - {speaker: B, text: "笑死不要谢", emote: 4}
+      - {speaker: A, text: "好5000万最终价"}
+      - {speaker: B, text: "不要 卖的好运吧"}
+
+  quest_help:
+    participants: 2
+    lines:
+      - {speaker: A, text: "知道蘑菇神社在哪吗？"}
+      - {speaker: B, text: "知道 从天空之城坐船"}
+      - {speaker: A, text: "有船？？", emote: 5}
+      - {speaker: B, text: "哈哈对 天空之城塔顶。有售票处"}
+      - {speaker: A, text: "哦哦好好谢谢谢谢", emote: 2}
+
+  quest_help_2:
+    participants: 2
+    lines:
+      - {speaker: A, text: "谁知道怎么去冰峰雪域？"}
+      - {speaker: B, text: "去天空之城然后下塔"}
+      - {speaker: A, text: "整座塔？？要多久"}
+      - {speaker: B, text: "大概20层哈哈"}
+      - {speaker: A, text: "兄弟", emote: 7}
+
+  real_life_school:
+    participants: 2
+    lines:
+      - {speaker: A, text: "唉明天有考试"}
+      - {speaker: B, text: "其实一样。数学？"}
+      - {speaker: A, text: "对。一点没复习", emote: 7}
+      - {speaker: B, text: "哈哈一样。我们没事"}
+      - {speaker: A, text: "一厢情愿哈哈"}
+
+  real_life_food:
+    participants: 2
+    lines:
+      - {speaker: A, text: "晚饭吃啥了"}
+      - {speaker: B, text: "方便面哈哈"}
+      - {speaker: A, text: "经典游戏人燃料", emote: 2}
+      - {speaker: B, text: "不是自愿的相信我", emote: 4}
+
+  real_life_late_night:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们凌晨三点了"}
+      - {speaker: B, text: "然后呢？"}
+      - {speaker: A, text: "明天不上学吗"}
+      - {speaker: B, text: "上但再一趟"}
+      - {speaker: A, text: "你一小时前也这么说哈哈", emote: 2}
+
+  real_life_weather:
+    participants: 2
+    lines:
+      - {speaker: A, text: "外面雨下得真大"}
+      - {speaker: B, text: "完美天气待屋里玩冒险岛", emote: 0}
+      - {speaker: A, text: "真的啊啊"}
+
+  nostalgia_old_maple:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们记得射手村猎场人挤爆吗"}
+      - {speaker: B, text: "好耶 大家抢频道", emote: 2}
+      - {speaker: A, text: "然后有人抢你怪你就踩人气"}
+      - {speaker: B, text: "笑死 人气战争。经典冒险岛"}
+      - {speaker: A, text: "那日子啊", emote: 4}
+
+  nostalgia_maple_island:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你记得枫叶岛吗"}
+      - {speaker: B, text: "哥们当然。蜗牛"}
+      - {speaker: A, text: "我记得死在蓝蜗牛上因为不会用药", emote: 7}
+      - {speaker: B, text: "笑死那真惨", emote: 2}
+      - {speaker: A, text: "我们都曾是萌新"}
+
+  flex_compare:
+    participants: 2
+    lines:
+      - {speaker: A, text: "看我新武器", emote: 3}
+      - {speaker: B, text: "不错。花了多少"}
+      - {speaker: A, text: "2亿"}
+      - {speaker: B, text: "哥们我能给你搞到1.5亿的", emote: 5}
+      - {speaker: A, text: "…别告诉我", emote: 4}
+
+  flex_level:
+    participants: 2
+    lines:
+      - {speaker: A, text: "今天刚到70！！", emote: 2}
+      - {speaker: B, text: "不错恭喜！", emote: 2}
+      - {speaker: A, text: "三转比二转爽多了"}
+      - {speaker: B, text: "等你四转。完全新游戏"}
+      - {speaker: A, text: "等不及"}
+
+  afk_check:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你在吗？"}
+      - {speaker: B, text: "在抱歉挂机了"}
+      - {speaker: A, text: "哈哈没事以为你掉线了"}
+      - {speaker: B, text: "没有就倒了杯水"}
+
+  scam_warning:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们刚有人在自由市场想骗我"}
+      - {speaker: B, text: "怎么了"}
+      - {speaker: A, text: "他挂上白卷最后一秒换成10%卷"}
+      - {speaker: B, text: "经典骗局。点交易前一定再看一眼", emote: 1}
+      - {speaker: A, text: "对惨痛教训学到了", emote: 4}
+
+  guild_talk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你有公会吗？"}
+      - {speaker: B, text: "有 Resilience。挺活跃"}
+      - {speaker: A, text: "他们招人吗？一直在找"}
+      - {speaker: B, text: "有 密会长。说我介绍的"}
+      - {speaker: A, text: "成谢啦！", emote: 2}
+
+  boss_planning:
+    participants: 2
+    lines:
+      - {speaker: A, text: "今晚打扎昆吗？"}
+      - {speaker: B, text: "几点"}
+      - {speaker: A, text: "大概美东8点？需要主教"}
+      - {speaker: B, text: "我可以问公会人。他13x主教"}
+      - {speaker: A, text: "完美搞起来", emote: 2}
+
+  scroll_results:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我刚砸60%武器连续炸了5次", emote: 6}
+      - {speaker: B, text: "哥们60%卷是谎言。感觉像30%"}
+      - {speaker: A, text: "字面意思。2亿打水漂"}
+      - {speaker: B, text: "F"}
+
+  scroll_results_2:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我刚60%卷7/7全过", emote: 2}
+      - {speaker: B, text: "不可能。举证", emote: 5}
+      - {speaker: A, text: "认真的。手在抖"}
+      - {speaker: B, text: "哥们去买彩票"}
+      - {speaker: A, text: "笑死真的"}
+
+  fashion_talk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟那套衣服哪来的"}
+      - {speaker: B, text: "商城。刚花大概10刀点券"}
+      - {speaker: A, text: "值了你看着新鲜", emote: 2}
+      - {speaker: B, text: "谢谢。射手村得好看你懂", emote: 3}
+
+  money_problems:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我好穷", emote: 4}
+      - {speaker: B, text: "多穷"}
+      - {speaker: A, text: "大概5万金币穷"}
+      - {speaker: B, text: "哥们那真的啥也不是笑死", emote: 2}
+      - {speaker: A, text: "我知道所以才是问题", emote: 7}
+
+  pet_talk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "养宠值得吗？"}
+      - {speaker: B, text: "百分百。自动捡改变人生"}
+      - {speaker: A, text: "该买哪个"}
+      - {speaker: B, text: "无所谓功能一样。买你觉得可爱的"}
+      - {speaker: A, text: "那就哈士奇", emote: 0}
+
+  maple_gf:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我冒险岛女友刚跟我分手", emote: 4}
+      - {speaker: B, text: "哥们啥"}
+      - {speaker: A, text: "她说找到更高等级的了"}
+      - {speaker: B, text: "笑死好冷", emote: 2}
+      - {speaker: A, text: "痛"}
+
+  random_encounter:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿"}
+      - {speaker: B, text: "嘿"}
+      - {speaker: A, text: "..."}
+      - {speaker: B, text: "..."}
+      - {speaker: A, text: "天气不错"}
+      - {speaker: B, text: "哈哈"}
+
+  coming_back:
+    participants: 2
+    lines:
+      - {speaker: A, text: "三年后刚回冒险岛"}
+      - {speaker: B, text: "欢迎回来！几级"}
+      - {speaker: A, text: "52。感觉又是萌新哈哈"}
+      - {speaker: B, text: "不会很快追上。现在升级容易多了"}
+      - {speaker: A, text: "好消息", emote: 0}
+
+  dc_frustration:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我刚boss半路掉线了", emote: 6}
+      - {speaker: B, text: "RIP。丢点了吗？"}
+      - {speaker: A, text: "对buff全没了"}
+      - {speaker: B, text: "惨。这服最近卡死了"}
+      - {speaker: A, text: "我心态崩了", emote: 1}
+
+  fame_exchange:
+    participants: 2
+    lines:
+      - {speaker: A, text: "人气换人气？"}
+      - {speaker: B, text: "行"}
+      - {speaker: A, text: "好我给你点了"}
+      - {speaker: B, text: "回你了", emote: 2}
+      - {speaker: A, text: "谢啦！"}
+
+  job_advancement:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我要三转了！！", emote: 2}
+      - {speaker: B, text: "不错！啥职业？"}
+      - {speaker: A, text: "走游侠"}
+      - {speaker: B, text: "扎实选择。侧移打得好疼"}
+      - {speaker: A, text: "等不及试试"}
+
+  server_drama:
+    participants: 2
+    lines:
+      - {speaker: A, text: "听说昨天自由市场那戏了吗"}
+      - {speaker: B, text: "没有咋了"}
+      - {speaker: A, text: "有人被抓复制封号了"}
+      - {speaker: B, text: "笑死好。复制毁经济"}
+      - {speaker: A, text: "真的"}
+
+  # ═══════════════════════════════════════
+  #  三人对话
+  # ═══════════════════════════════════════
+
+  pq_planning:
+    participants: 3
+    lines:
+      - {speaker: A, text: "有人打天空组队吗？"}
+      - {speaker: B, text: "我愿意。你几级？"}
+      - {speaker: A, text: "58主教"}
+      - {speaker: C, text: "我也进。55隐士"}
+      - {speaker: B, text: "完美。再找3个"}
+      - {speaker: A, text: "天空之城2频见"}
+      - {speaker: C, text: "在路上"}
+
+  pq_planning_2:
+    participants: 3
+    lines:
+      - {speaker: A, text: "组>废弃组队缺2"}
+      - {speaker: B, text: "你几级"}
+      - {speaker: A, text: "25刺客"}
+      - {speaker: C, text: "我来。28牧师"}
+      - {speaker: B, text: "好我也来。废弃见"}
+      - {speaker: A, text: "冲啊", emote: 2}
+
+  best_town_debate:
+    participants: 3
+    lines:
+      - {speaker: A, text: "射手村是冒险岛最好城镇改变我想法"}
+      - {speaker: B, text: "不魔法密林酷多了。音乐和树"}
+      - {speaker: C, text: "废弃都市氛围最好。黑巷审美"}
+      - {speaker: A, text: "哥们废弃字面是垃圾场哈哈", emote: 2}
+      - {speaker: B, text: "他说得对。废弃有味"}
+      - {speaker: C, text: "你们就是不懂欣赏", emote: 1}
+
+  guild_drama:
+    participants: 3
+    lines:
+      - {speaker: A, text: "哥们我们会长两周没上了"}
+      - {speaker: B, text: "又？？上个月不也这样"}
+      - {speaker: C, text: "这节点该自己建公会了"}
+      - {speaker: A, text: "我就这意思。我有够金币建会"}
+      - {speaker: B, text: "叫啥"}
+      - {speaker: C, text: "酷点的。比如Oblivion之类"}
+      - {speaker: A, text: "哈哈好想想"}
+
+  someone_flexing:
+    participants: 3
+    lines:
+      - {speaker: A, text: "哟哟哟我扭蛋出混沌卷了", emote: 2}
+      - {speaker: B, text: "不可能", emote: 5}
+      - {speaker: C, text: "没图没真相"}
+      - {speaker: A, text: "字面在背包里看"}
+      - {speaker: B, text: "哥们卖个1亿+"}
+      - {speaker: C, text: "或者用了求欧", emote: 3}
+      - {speaker: A, text: "我要用。yolo"}
+      - {speaker: B, text: "你疯了", emote: 5}
+
+  boss_fight_recap:
+    participants: 3
+    lines:
+      - {speaker: A, text: "那趟扎昆好激烈"}
+      - {speaker: B, text: "兄弟我差点死三次", emote: 7}
+      - {speaker: C, text: "我死了。两次。哈哈", emote: 4}
+      - {speaker: A, text: "至少掉头盔了"}
+      - {speaker: B, text: "谁拿到？"}
+      - {speaker: A, text: "我哈哈", emote: 3}
+      - {speaker: C, text: "兄弟"}
+
+  whos_strongest:
+    participants: 3
+    lines:
+      - {speaker: A, text: "好谁这儿最强"}
+      - {speaker: B, text: "我显然", emote: 3}
+      - {speaker: C, text: "你字面60级冷静", emote: 2}
+      - {speaker: B, text: "等级不是一切好吗"}
+      - {speaker: A, text: "其实有点是"}
+      - {speaker: C, text: "笑死"}
+
+  late_night_group:
+    participants: 3
+    lines:
+      - {speaker: A, text: "为啥凌晨四点全在线"}
+      - {speaker: B, text: "因为没自制力"}
+      - {speaker: C, text: "我字面7点上班", emote: 7}
+      - {speaker: A, text: "那去睡？？"}
+      - {speaker: C, text: "再一趟"}
+      - {speaker: B, text: "这才对", emote: 2}
+
+  training_recommendations:
+    participants: 3
+    lines:
+      - {speaker: A, text: "嘿我35该去哪练"}
+      - {speaker: B, text: "僵尸蘑菇不错"}
+      - {speaker: C, text: "不打玩具组队快多了"}
+      - {speaker: B, text: "玩具组队有队才好"}
+      - {speaker: A, text: "我没队哈哈"}
+      - {speaker: C, text: "我来。走"}
+      - {speaker: A, text: "冲啊", emote: 2}
+
+  real_life_group:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们哪国人"}
+      - {speaker: B, text: "美国。加州"}
+      - {speaker: C, text: "加拿大"}
+      - {speaker: A, text: "巴西！"}
+      - {speaker: B, text: "酷。冒险岛真全球啊", emote: 2}
+      - {speaker: C, text: "爱了"}
+
+  two_argue_third_mediates:
+    participants: 3
+    lines:
+      - {speaker: A, text: "战士打boss字面没用"}
+      - {speaker: B, text: "抱歉？那谁给你抗", emote: 6}
+      - {speaker: A, text: "吃药够快谁都能抗"}
+      - {speaker: C, text: "好冷静。每职业有角色"}
+      - {speaker: B, text: "谢谢。至少有人懂"}
+      - {speaker: A, text: "好好吧。战士还行吧"}
+      - {speaker: C, text: "这就对了", emote: 0}
+
+  halloween_event:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们做万圣节活动吗？"}
+      - {speaker: B, text: "做 这次奖励其实不错"}
+      - {speaker: C, text: "奖励啥？"}
+      - {speaker: A, text: "有披风和椅子"}
+      - {speaker: B, text: "披风属性也还行"}
+      - {speaker: C, text: "好我进。任务哪开始"}
+      - {speaker: A, text: "射手村公园找NPC"}
+
+  # ═══════════════════════════════════════
+  #  四人对话
+  # ═══════════════════════════════════════
+
+  party_formation:
+    participants: 4
+    lines:
+      - {speaker: A, text: "好谁来打天空组队"}
+      - {speaker: B, text: "我。57牧师"}
+      - {speaker: C, text: "进。54游侠"}
+      - {speaker: D, text: "62隐士在这"}
+      - {speaker: A, text: "完美。最好再2个战士"}
+      - {speaker: B, text: "问朋友他是黑骑"}
+      - {speaker: D, text: "搞起来", emote: 2}
+
+  group_reaction:
+    participants: 4
+    lines:
+      - {speaker: A, text: "你们刚看见吗", emote: 5}
+      - {speaker: B, text: "啥"}
+      - {speaker: C, text: "看见啥？"}
+      - {speaker: A, text: "有人刚掉白卷地上"}
+      - {speaker: D, text: "笑死谁干这事", emote: 2}
+      - {speaker: B, text: "意外？？"}
+      - {speaker: C, text: "可能秀。或者意外哈哈"}
+      - {speaker: A, text: "反正心脏停了一秒"}
+
+  debate_2v2:
+    participants: 4
+    lines:
+      - {speaker: A, text: "天空之城比玩具城强来打我"}
+      - {speaker: B, text: "同意。天空音乐好太多"}
+      - {speaker: C, text: "你们疯了？？玩具有组队有塔还有玩具工厂"}
+      - {speaker: D, text: "对玩具明显更强。天空就是船停站", emote: 1}
+      - {speaker: A, text: "船停站？？天空有花园和云公园！"}
+      - {speaker: B, text: "天空组队也被低估"}
+      - {speaker: C, text: "求同存异吧"}
+      - {speaker: D, text: "但玩具赢", emote: 3}
+
+  guild_meeting:
+    participants: 4
+    lines:
+      - {speaker: A, text: "好公会开会。第一项"}
+      - {speaker: B, text: "能谈扎昆排期吗"}
+      - {speaker: A, text: "能。每周六美东8点。大家都要到"}
+      - {speaker: C, text: "周六来不了呢？"}
+      - {speaker: A, text: "周日补跑"}
+      - {speaker: D, text: "我觉得公平"}
+      - {speaker: B, text: "还能搞公会旗帜吗"}
+      - {speaker: A, text: "我去看。散会哈哈", emote: 0}
+
+  roast_session:
+    participants: 4
+    lines:
+      - {speaker: A, text: "披风不错哥们"}
+      - {speaker: B, text: "谢！", emote: 2}
+      - {speaker: A, text: "我在阴阳", emote: 3}
+      - {speaker: C, text: "笑死", emote: 2}
+      - {speaker: B, text: "哇好", emote: 4}
+      - {speaker: D, text: "说真的你该升级了伙计"}
+      - {speaker: B, text: "我恨你们所有人"}
+      - {speaker: C, text: "也爱你 <3", emote: 0}
+
+  maple_memories:
+    participants: 4
+    lines:
+      - {speaker: A, text: "你们第一次玩冒险岛啥时候"}
+      - {speaker: B, text: "2006。朋友在学校图书馆给我看"}
+      - {speaker: C, text: "我2005。内测年代", emote: 3}
+      - {speaker: D, text: "2008但从此上瘾"}
+      - {speaker: A, text: "一样2007。记得建第一个角色懵懵的"}
+      - {speaker: B, text: "哥们枫叶岛教程我迷路一小时", emote: 2}
+      - {speaker: C, text: "美好旧日"}
+      - {speaker: D, text: "真的。这游戏永恒", emote: 0}
+
+  # ═══════════════════════════════════════
+  #  ADDITIONAL 双人对话
+  # ═══════════════════════════════════════
+
+  scroll_advice:
+    participants: 2
+    lines:
+      - {speaker: A, text: "武器该砸60%还是10%？"}
+      - {speaker: B, text: "看情况。你金币多少以及多爱痛"}
+      - {speaker: A, text: "哈哈大概8000万"}
+      - {speaker: B, text: "砸60%。10%是有钱又恨自己才用"}
+      - {speaker: A, text: "笑死好60%"}
+      - {speaker: B, text: "好运哥们。每次砸前祈祷", emote: 2}
+
+  new_player_help:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿我全新。怎么出城？"}
+      - {speaker: B, text: "你在哪个城？"}
+      - {speaker: A, text: "好像射手村？到处蘑菇"}
+      - {speaker: B, text: "对射手村。往右有传送门去猎场"}
+      - {speaker: A, text: "哦好！外面安全吗？"}
+      - {speaker: B, text: "哈哈对城外怪挺弱。带药就行", emote: 2}
+      - {speaker: A, text: "谢！！这儿大家好友善"}
+
+  maple_marriage_talk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你们办过冒险岛婚礼吗？"}
+      - {speaker: B, text: "办过会长跟冒险岛女友结了。其实好可爱"}
+      - {speaker: A, text: "真有人来吗？"}
+      - {speaker: B, text: "大概20人。还有人带礼物哈哈", emote: 2}
+      - {speaker: A, text: "好可爱。这游戏疯了"}
+      - {speaker: B, text: "对还有哪能周二凌晨两点参加虚拟婚礼"}
+
+  zakum_prequest_pain:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们扎昆前置要弄死我"}
+      - {speaker: B, text: "哪部分？"}
+      - {speaker: A, text: "跳跳部分。一直掉"}
+      - {speaker: B, text: "哦那部分可怕。我花了大概两小时", emote: 7}
+      - {speaker: A, text: "两小时？？"}
+      - {speaker: B, text: "对但做完就永远完了至少"}
+      - {speaker: A, text: "小安慰", emote: 4}
+
+  class_regret:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我觉得职业选错了"}
+      - {speaker: B, text: "你啥职业？"}
+      - {speaker: A, text: "见习骑士。想当英雄结果误选见习", emote: 4}
+      - {speaker: B, text: "哦不哈哈。见习也行。白骑士酷"}
+      - {speaker: A, text: "对但英雄看着酷太多了"}
+      - {speaker: B, text: "总能新建角色"}
+      - {speaker: A, text: "但这号花的小时数…"}
+      - {speaker: B, text: "RIP。欢迎来冒险岛 选择永远缠着你", emote: 2}
+
+  meso_making_tips:
+    participants: 2
+    lines:
+      - {speaker: A, text: "大家怎么赚这么多金币？我总穷"}
+      - {speaker: B, text: "说实话倒卖是正道。自由市场低买高卖"}
+      - {speaker: A, text: "试过但老买没人要的"}
+      - {speaker: B, text: "哈哈对你得学啥好卖。卷和干净装备稳"}
+      - {speaker: A, text: "记下。还有提示？"}
+      - {speaker: B, text: "对别花金币买不需要的。比听着难"}
+      - {speaker: A, text: "这建议太晚了", emote: 4}
+
+  keyboard_setup:
+    participants: 2
+    lines:
+      - {speaker: A, text: "键盘怎么设的？"}
+      - {speaker: B, text: "药ASDF 主技能QWE buff1234"}
+      - {speaker: A, text: "有意思。我全在数字键"}
+      - {speaker: B, text: "兄弟移动时怎么够到", emote: 5}
+      - {speaker: A, text: "手大哈哈"}
+      - {speaker: B, text: "行吧"}
+
+  inventory_hoarder:
+    participants: 2
+    lines:
+      - {speaker: A, text: "背包满到字面捡不了东西"}
+      - {speaker: B, text: "卖不需要的"}
+      - {speaker: A, text: "但以后万一要呢？？"}
+      - {speaker: B, text: "你真需要47个绿蘑菇盖吗", emote: 2}
+      - {speaker: A, text: "…也许"}
+      - {speaker: B, text: "你有问题"}
+      - {speaker: A, text: "我有收藏"}
+
+  waiting_for_friend:
+    participants: 2
+    lines:
+      - {speaker: A, text: "朋友说30分钟前上线"}
+      - {speaker: B, text: "也许现实耽搁了"}
+      - {speaker: A, text: "他密我‘马上回五分钟’30分钟前哈哈"}
+      - {speaker: B, text: "经典。冒险岛五分钟等于5到500分钟", emote: 2}
+      - {speaker: A, text: "笑死真的"}
+
+  training_burnout:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们好厌刷。同图连刷三天"}
+      - {speaker: B, text: "也许换点？换风景有帮助"}
+      - {speaker: A, text: "但这点我这级经验最好"}
+      - {speaker: B, text: "好但不爽有啥意义"}
+      - {speaker: A, text: "…其实有道理"}
+      - {speaker: B, text: "去打组队啥的。换换", emote: 2}
+      - {speaker: A, text: "也许会。谢"}
+
+  first_boss_kill:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刚杀了第一个真boss！！", emote: 2}
+      - {speaker: B, text: "哪个？"}
+      - {speaker: A, text: "蘑菇王哈哈。知道不难但还是"}
+      - {speaker: B, text: "不那酷！大家都从哪开始"}
+      - {speaker: A, text: "全程心跳加速"}
+      - {speaker: B, text: "等你打扎昆。需要除颤器", emote: 2}
+
+  chair_collection:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你收集椅子吗？"}
+      - {speaker: B, text: "哥们我大概30把椅子。上瘾"}
+      - {speaker: A, text: "哪个最稀？"}
+      - {speaker: B, text: "大概钓鱼那个。刷好久"}
+      - {speaker: A, text: "不错。我只有基础的哈哈"}
+      - {speaker: B, text: "得从哪开始。椅子是马拉松不是冲刺", emote: 3}
+
+  nx_discussion:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你花真钱买点券吗？"}
+      - {speaker: B, text: "我是说…会。大概比该花的多"}
+      - {speaker: A, text: "多少说"}
+      - {speaker: B, text: "就说父母知道会不开心", emote: 7}
+      - {speaker: A, text: "笑死。至少看着帅对吧？"}
+      - {speaker: B, text: "射手村最新鲜角色。每分钱值"}
+
+  late_night_philosophy:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你想过这游戏像自己的小世界吗？"}
+      - {speaker: B, text: "啥意思"}
+      - {speaker: A, text: "有经济、社交、戏、友谊…基本是个社会"}
+      - {speaker: B, text: "呵。从没这么想过但你对"}
+      - {speaker: A, text: "我们都一起晃。来自全世界的人"}
+      - {speaker: B, text: "其实有点美", emote: 0}
+      - {speaker: A, text: "凌晨三点想法哈哈"}
+      - {speaker: B, text: "最好的那种想法", emote: 2}
+
+  pet_dying:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我宠物快过期了没点券续", emote: 4}
+      - {speaker: B, text: "RIP。啥宠"}
+      - {speaker: A, text: "熊猫。养了三个月"}
+      - {speaker: B, text: "唉。熊猫也好可爱"}
+      - {speaker: A, text: "其实有点难过哈哈。怪吗"}
+      - {speaker: B, text: "不理解。像丢了小伙伴"}
+
+  maple_at_school:
+    participants: 2
+    lines:
+      - {speaker: A, text: "朋友和我以前在学校图书馆玩冒险岛"}
+      - {speaker: B, text: "笑死一样！！得装到学校电脑"}
+      - {speaker: A, text: "然后老师抓我们就狂切窗口", emote: 2}
+      - {speaker: B, text: "哥们老师走过时切窗口的肾上腺素", emote: 2}
+      - {speaker: A, text: "比任何boss战强"}
+      - {speaker: B, text: "真·终局内容"}
+
+  # ═══════════════════════════════════════
+  #  ADDITIONAL 三人对话
+  # ═══════════════════════════════════════
+
+  class_tier_list:
+    participants: 3
+    lines:
+      - {speaker: A, text: "好定了。职业梯队。开始。"}
+      - {speaker: B, text: "S：夜使者、主教。A：英雄、神射手"}
+      - {speaker: C, text: "主教放S？哈哈", emote: 5}
+      - {speaker: B, text: "哥们每队都需要主教。必要"}
+      - {speaker: A, text: "他说得对。没主教没boss"}
+      - {speaker: C, text: "好好吧。海盗往哪放"}
+      - {speaker: B, text: "B"}
+      - {speaker: C, text: "哇。无礼。", emote: 1}
+      - {speaker: A, text: "他说了我们都在想的", emote: 2}
+
+  fm_window_shopping:
+    participants: 3
+    lines:
+      - {speaker: A, text: "一起逛自由市场"}
+      - {speaker: B, text: "行但我不买。就看"}
+      - {speaker: C, text: "你上次也这么说然后砸了3亿", emote: 2}
+      - {speaker: B, text: "…这次是真的"}
+      - {speaker: A, text: "行吧简", emote: 3}
+      - {speaker: B, text: "我恨你们俩"}
+      - {speaker: C, text: "也爱你。先去1号房"}
+
+  jump_quest_suffering:
+    participants: 3
+    lines:
+      - {speaker: A, text: "有人做过舒米丢硬币跳跳吗？"}
+      - {speaker: B, text: "做过我想把键盘扔出窗外", emote: 6}
+      - {speaker: C, text: "我有次最后一平台掉了。三天没玩"}
+      - {speaker: A, text: "天哪。还要试吗？", emote: 7}
+      - {speaker: B, text: "奖励值但过程会把人弄垮"}
+      - {speaker: C, text: "他没夸张", emote: 0}
+      - {speaker: A, text: "我突然不感兴趣了"}
+
+  screenshot_moment:
+    participants: 3
+    lines:
+      - {speaker: A, text: "好大家集合截图！"}
+      - {speaker: B, text: "等等让我换好看商城装"}
+      - {speaker: C, text: "截图键又是啥？"}
+      - {speaker: A, text: "Scroll Lock键", emote: 2}
+      - {speaker: B, text: "好我准备好了。看着咋样"}
+      - {speaker: C, text: "像百万金币", emote: 2}
+      - {speaker: A, text: "好3…2…1…"}
+      - {speaker: B, text: "茄子！", emote: 2}
+
+  guild_name_brainstorm:
+    participants: 3
+    lines:
+      - {speaker: A, text: "好我们需要公会名。建议？"}
+      - {speaker: B, text: "DarkShadows"}
+      - {speaker: C, text: "肯定被占了"}
+      - {speaker: A, text: "Ascension呢？"}
+      - {speaker: C, text: "大概也被占。试独特点的"}
+      - {speaker: B, text: "xXGuildNameXx呢"}
+      - {speaker: A, text: "我要把你踢出这对话", emote: 1}
+      - {speaker: C, text: "笑死", emote: 2}
+      - {speaker: B, text: "啥？开玩笑！", emote: 2}
+
+  random_event_happening:
+    participants: 3
+    lines:
+      - {speaker: A, text: "哟市场附近有人在搞掉落游戏"}
+      - {speaker: B, text: "哪"}
+      - {speaker: C, text: "是1000万还是5000万那个？"}
+      - {speaker: A, text: "好像两档都开！"}
+      - {speaker: B, text: "我去。我宠捡够快吧？"}
+      - {speaker: C, text: "只有一个办法。冲", emote: 2}
+      - {speaker: A, text: "赛跑！"}
+
+  favorite_training_music:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们开冒险岛音乐还是自己音乐？"}
+      - {speaker: B, text: "自己音乐。我有整套刷怪歌单"}
+      - {speaker: C, text: "开冒险岛音乐。一半体验"}
+      - {speaker: A, text: "说实话两个切"}
+      - {speaker: B, text: "魔法密林BGM真的猛我承认"}
+      - {speaker: C, text: "对吧？还有玩具城音乐", emote: 2}
+      - {speaker: A, text: "废弃都市晚上也不一样"}
+      - {speaker: B, text: "好好吧也许我把游戏音乐开回来"}
+
+  helping_a_noob:
+    participants: 3
+    lines:
+      - {speaker: A, text: "请问谁知道怎么换频道？"}
+      - {speaker: B, text: "按Esc点频道"}
+      - {speaker: C, text: "或者右上角快速换频"}
+      - {speaker: A, text: "哦看见了！太谢谢"}
+      - {speaker: B, text: "没事！新人？"}
+      - {speaker: A, text: "对昨天才开始。要学好多"}
+      - {speaker: C, text: "大家都从哪开始。需要帮忙加我们！", emote: 2}
+      - {speaker: A, text: "会的！！你们太棒了"}
+
+  cursed_scroll_session:
+    participants: 3
+    lines:
+      - {speaker: A, text: "我要砸武器了。祝我好运"}
+      - {speaker: B, text: "好运！！发好运气"}
+      - {speaker: C, text: "砸啥卷？"}
+      - {speaker: A, text: "60%武器攻击"}
+      - {speaker: B, text: "好冲冲冲"}
+      - {speaker: A, text: "..."}
+      - {speaker: A, text: "炸了", emote: 6}
+      - {speaker: B, text: "F", emote: 4}
+      - {speaker: C, text: "哦。还有卷吗？"}
+      - {speaker: A, text: "有还有4张。再来…我不怕…好有点怕"}
+
+  # ═══════════════════════════════════════
+  #  ADDITIONAL 四人对话
+  # ═══════════════════════════════════════
+
+  what_did_you_name_your_char:
+    participants: 4
+    lines:
+      - {speaker: A, text: "你们角色名怎么想的？"}
+      - {speaker: B, text: "我的是名字倒过来加数字哈哈"}
+      - {speaker: C, text: "我狂砸键盘两边加Xx"}
+      - {speaker: D, text: "我的来自动漫角色", emote: 3}
+      - {speaker: A, text: "我的字面是猫名"}
+      - {speaker: B, text: "哥们你角色叫Whiskers？？", emote: 2}
+      - {speaker: A, text: "她叫弗拉芬顿先生"}
+      - {speaker: C, text: "全服最硬核名字", emote: 2}
+      - {speaker: D, text: "同意。黑暗骑士弗拉芬顿先生", emote: 2}
+
+  spending_habits:
+    participants: 4
+    lines:
+      - {speaker: A, text: "这游戏总共花了多少"}
+      - {speaker: B, text: "金币还是真钱"}
+      - {speaker: A, text: "真钱"}
+      - {speaker: C, text: "比我想承认的多", emote: 7}
+      - {speaker: D, text: "大概200刀？也许更多不知道"}
+      - {speaker: B, text: "那不算啥。有人花几千"}
+      - {speaker: A, text: "几千？？", emote: 5}
+      - {speaker: C, text: "对有人点券比房租还多"}
+      - {speaker: D, text: "那节点是游戏在玩你", emote: 2}
+
+  worst_maple_moments:
+    participants: 4
+    lines:
+      - {speaker: A, text: "冒险岛最惨经历是啥？"}
+      - {speaker: B, text: "第一个扎昆头盔被骗。交易换了"}
+      - {speaker: C, text: "我不小心NPC卖掉15攻工作手套", emote: 4}
+      - {speaker: D, text: "完美武器被70%炸了"}
+      - {speaker: A, text: "天哪。我的是40分钟跳跳最后掉"}
+      - {speaker: B, text: "我们都受苦过", emote: 4}
+      - {speaker: C, text: "这游戏塑造角色。我说的角色是创伤"}
+      - {speaker: D, text: "笑死真的", emote: 2}
+
+  what_class_to_make_next:
+    participants: 4
+    lines:
+      - {speaker: A, text: "我建新号。选啥职业"}
+      - {speaker: B, text: "主教。每队都需要总有人要你"}
+      - {speaker: C, text: "不建夜使者。大伤害大乐趣"}
+      - {speaker: D, text: "黑暗骑士是正道。狂暴破了"}
+      - {speaker: A, text: "好所以大家都在推自己主号"}
+      - {speaker: B, text: "…也许", emote: 2}
+      - {speaker: C, text: "哈哈对有点", emote: 3}
+      - {speaker: D, text: "说实话选你觉得酷的。那最重要"}
+      - {speaker: A, text: "目前最好建议"}
+
+  party_quest_chaos:
+    participants: 4
+    lines:
+      - {speaker: A, text: "好那趟天空组队疯了"}
+      - {speaker: B, text: "谁老在爸爸仙灵阶段死"}
+      - {speaker: C, text: "是我我不羞耻", emote: 7}
+      - {speaker: D, text: "我全程给你狂奶", emote: 4}
+      - {speaker: A, text: "笑死我看见了。你蓝大概5%"}
+      - {speaker: B, text: "至少通了！"}
+      - {speaker: C, text: "勉强。剩大概30秒"}
+      - {speaker: D, text: "赢就是赢。团队打得好", emote: 2}
+
+  town_hanging_out:
+    participants: 4
+    lines:
+      - {speaker: A, text: "所以我们现在干啥"}
+      - {speaker: B, text: "站这"}
+      - {speaker: C, text: "摸鱼"}
+      - {speaker: D, text: "存在着"}
+      - {speaker: A, text: "不该练级或干点有用的吗"}
+      - {speaker: B, text: "不这就是内容"}
+      - {speaker: C, text: "射手村站立模拟器2009", emote: 2}
+      - {speaker: D, text: "真终局是站这交的朋友", emote: 0}
+
+  # ═══════════════════════════════════════
+  #  MORE 双人对话
+  # ═══════════════════════════════════════
+
+  mount_talk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你有坐骑了吗？"}
+      - {speaker: B, text: "有猪那个"}
+      - {speaker: A, text: "不错。我想要任务那个但做不完"}
+      - {speaker: B, text: "啥任务？"}
+      - {speaker: A, text: "收集一堆东西那个。好无聊"}
+      - {speaker: B, text: "对收集任务是磨。但值得 坐骑酷"}
+
+  accidental_npc:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我刚不小心把武器卖给NPC了"}
+      - {speaker: B, text: "哦不。能买回吗？"}
+      - {speaker: A, text: "不能永远没了", emote: 4}
+      - {speaker: B, text: "惨。啥武器？"}
+      - {speaker: A, text: "砸了几周卷的那个"}
+      - {speaker: B, text: "…我很抱歉", emote: 4}
+      - {speaker: A, text: "我需要冷静"}
+
+  buddy_list_full:
+    participants: 2
+    lines:
+      - {speaker: A, text: "好友列表满了还想加更多人"}
+      - {speaker: B, text: "同样问题。又不想删谁"}
+      - {speaker: A, text: "一半几个月没上但我还希望他们回来"}
+      - {speaker: B, text: "我听过最惨的事", emote: 4}
+      - {speaker: A, text: "没事我没事"}
+
+  boat_to_orbis:
+    participants: 2
+    lines:
+      - {speaker: A, text: "去天空之城船多久？"}
+      - {speaker: B, text: "大概五分钟"}
+      - {speaker: A, text: "五分钟？？五分钟我干啥"}
+      - {speaker: B, text: "站那想人生选择", emote: 2}
+      - {speaker: A, text: "准"}
+      - {speaker: B, text: "还有小心船上怪。疼。"}
+
+  potion_math:
+    participants: 2
+    lines:
+      - {speaker: A, text: "练级带多少药？"}
+      - {speaker: B, text: "大概300"}
+      - {speaker: A, text: "三百？？"}
+      - {speaker: B, text: "消耗快好吗", emote: 2}
+      - {speaker: A, text: "我带大概50十分钟没了"}
+      - {speaker: B, text: "所以才带300"}
+      - {speaker: A, text: "…有道理"}
+
+  storage_mule:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你有仓库号吗？"}
+      - {speaker: B, text: "有大概3个"}
+      - {speaker: A, text: "三个？？"}
+      - {speaker: B, text: "一个卷一个装备一个其他"}
+      - {speaker: A, text: "好有条理"}
+      - {speaker: B, text: "我有问题我知道", emote: 2}
+
+  trading_etiquette:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刚有人交易我挂错物品然后取消"}
+      - {speaker: B, text: "经典诱饵调包。自由市场老发生"}
+      - {speaker: A, text: "太明显了。挂白卷然后换掉"}
+      - {speaker: B, text: "永远看第二次。别急着点交易。"}
+      - {speaker: A, text: "对这次总算轻松学会了"}
+      - {speaker: B, text: "比我们多数人惨痛学强", emote: 0}
+
+  grinding_music:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刷怪听啥？"}
+      - {speaker: B, text: "通常游戏内音乐。我喜欢"}
+      - {speaker: A, text: "等等真的？多数人放自己的"}
+      - {speaker: B, text: "不知道BGM贴氛围"}
+      - {speaker: A, text: "行。魔法密林音乐是神曲"}
+      - {speaker: B, text: "对吧？玩具城也是"}
+      - {speaker: A, text: "好也许我再试试"}
+
+  daily_routine:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你每天冒险岛流程？"}
+      - {speaker: B, text: "上线 看自由市场 也许练一小时 射手村晃"}
+      - {speaker: A, text: "我基本一样哈哈"}
+      - {speaker: B, text: "我们是习惯生物", emote: 2}
+      - {speaker: A, text: "看自由市场那段最长"}
+      - {speaker: B, text: "当然。自由市场是时间黑洞"}
+
+  failed_scroll_story:
+    participants: 2
+    lines:
+      - {speaker: A, text: "今天砸70%炸了"}
+      - {speaker: B, text: "70%？惨"}
+      - {speaker: A, text: "两次。连续。"}
+      - {speaker: B, text: "…哦不", emote: 7}
+      - {speaker: A, text: "不想说卷花多少"}
+      - {speaker: B, text: "有时游戏就决定轮到你受苦"}
+      - {speaker: A, text: "今天绝对轮到我了"}
+
+  # ═══════════════════════════════════════
+  #  MORE 三人对话
+  # ═══════════════════════════════════════
+
+  best_bgm:
+    participants: 3
+    lines:
+      - {speaker: A, text: "游戏最好BGM？"}
+      - {speaker: B, text: "射手村轻松"}
+      - {speaker: C, text: "不魔法密林。精灵森林氛围无敌"}
+      - {speaker: A, text: "我本想说登录界面但那俩也不错"}
+      - {speaker: B, text: "哦对登录音乐。忘了"}
+      - {speaker: C, text: "怎么能忘登录音乐？？第一声就听见！", emote: 5}
+      - {speaker: B, text: "我总狂点跳过快点进游戏哈哈"}
+
+  fm_browsing:
+    participants: 3
+    lines:
+      - {speaker: A, text: "自由市场好压迫。店太多"}
+      - {speaker: B, text: "一间间房走"}
+      - {speaker: C, text: "或者看喇叭广告直接找卖家"}
+      - {speaker: A, text: "一半喇叭卖家我找到人没了"}
+      - {speaker: B, text: "那就是自由市场生活。得快"}
+      - {speaker: C, text: "或者自己开店让他们来找你", emote: 3}
+      - {speaker: A, text: "大胆策略"}
+
+  who_has_the_best_pet:
+    participants: 3
+    lines:
+      - {speaker: A, text: "最好宠物？"}
+      - {speaker: B, text: "哈士奇显然。游戏最可爱"}
+      - {speaker: C, text: "不龙。跟着看着酷"}
+      - {speaker: A, text: "我个人喜欢熊猫"}
+      - {speaker: B, text: "熊猫也可爱"}
+      - {speaker: C, text: "说实话功能一样。自动捡就是自动捡"}
+      - {speaker: A, text: "但对风格分重要"}
+      - {speaker: B, text: "冒险岛风格分是唯一重要的分", emote: 2}
+
+  planning_boss:
+    participants: 3
+    lines:
+      - {speaker: A, text: "这周末该试打boss"}
+      - {speaker: B, text: "我愿意。几点行？"}
+      - {speaker: C, text: "周六晚？"}
+      - {speaker: A, text: "我行。大概8点？"}
+      - {speaker: B, text: "成。我带超多药"}
+      - {speaker: C, text: "也叫公会人"}
+      - {speaker: A, text: "人多热闹。别死在我这哈哈", emote: 2}
+
+  event_discussion:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们做当前活动吗？"}
+      - {speaker: B, text: "做 这次奖励其实还行"}
+      - {speaker: C, text: "我还没开始。值得吗？"}
+      - {speaker: A, text: "有椅子和披风所以值"}
+      - {speaker: B, text: "椅子 单独就值"}
+      - {speaker: C, text: "好今晚开始。从哪？"}
+      - {speaker: A, text: "射手村找活动NPC"}
+
+  random_henesys_encounter:
+    participants: 3
+    lines:
+      - {speaker: A, text: "穿搭不错"}
+      - {speaker: B, text: "谢！刚商城买的"}
+      - {speaker: C, text: "多少钱？"}
+      - {speaker: B, text: "呃…够了"}
+      - {speaker: A, text: "那么糟啊", emote: 2}
+      - {speaker: B, text: "时尚有价好吗", emote: 3}
+      - {speaker: C, text: "致敬穿搭"}
+
+  # ═══════════════════════════════════════
+  #  MORE 四人对话
+  # ═══════════════════════════════════════
+
+  fm_prices_debate:
+    participants: 4
+    lines:
+      - {speaker: A, text: "就我还是自由市场价格疯了"}
+      - {speaker: B, text: "不绝对涨了"}
+      - {speaker: C, text: "卷比一个月前贵多了"}
+      - {speaker: D, text: "因为有人囤"}
+      - {speaker: A, text: "所以富人更富基本"}
+      - {speaker: B, text: "这就是自由市场经济"}
+      - {speaker: C, text: "也许该倒卖别刷了"}
+      - {speaker: D, text: "倒卖也是一种刷", emote: 0}
+
+  henesys_vibes:
+    participants: 4
+    lines:
+      - {speaker: A, text: "射手村晚上最好"}
+      - {speaker: B, text: "同意。大家都站着聊天时"}
+      - {speaker: C, text: "像虚拟聚会点"}
+      - {speaker: D, text: "基本带可爱角色的聊天室"}
+      - {speaker: A, text: "我不要别的样子"}
+      - {speaker: B, text: "一些最好的对话就在这发生"}
+      - {speaker: C, text: "说实话一样。冒险岛朋友不一样"}
+      - {speaker: D, text: "不一样。在组队和自由市场购物火里锻的", emote: 2}
+
+  who_is_the_richest:
+    participants: 4
+    lines:
+      - {speaker: A, text: "你认识冒险岛最有钱的是谁？"}
+      - {speaker: B, text: "公会有人大概50亿"}
+      - {speaker: C, text: "五十亿？？", emote: 5}
+      - {speaker: D, text: "怎么可能"}
+      - {speaker: B, text: "他连续倒卖大概两年"}
+      - {speaker: A, text: "我那样会疯"}
+      - {speaker: C, text: "有人享受 hustle"}
+      - {speaker: D, text: "致敬。我存不住1000万马上花掉", emote: 4}
+
+  what_do_you_do_when_bored:
+    participants: 4
+    lines:
+      - {speaker: A, text: "在冒险岛无聊干啥？"}
+      - {speaker: B, text: "射手村站着"}
+      - {speaker: C, text: "逛自由市场"}
+      - {speaker: D, text: "试跟路人聊"}
+      - {speaker: A, text: "所以基本我们现在干的"}
+      - {speaker: B, text: "正是", emote: 2}
+      - {speaker: C, text: "游戏中的游戏就是社交"}
+      - {speaker: D, text: "真·终局内容"}
+
+  # ═══════════════════════════════════════
+  #  ANIME & GAMING CONVERSATIONS
+  # ═══════════════════════════════════════
+
+  anime_recommendation:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你看咒术回战了吗"}
+      - {speaker: B, text: "看了第二季疯了"}
+      - {speaker: A, text: "对吧？？动画质量", emote: 5}
+      - {speaker: B, text: "mappa疯了。但代价（他们动画师）"}
+      - {speaker: A, text: "哈哈真。但涉谷篇"}
+      - {speaker: B, text: "别剧透我知道有人没看"}
+
+  gaming_setup_brag:
+    participants: 3
+    lines:
+      - {speaker: A, text: "刚买新显示器。144hz"}
+      - {speaker: B, text: "为冒险岛？？哥们2003的2D游戏", emote: 2}
+      - {speaker: C, text: "让他爽"}
+      - {speaker: A, text: "顺滑是真的好吗。连逛自由市场都更好"}
+      - {speaker: B, text: "你妄想但我尊重投入", emote: 3}
+      - {speaker: C, text: "我用2015笔记本也挺好"}
+      - {speaker: A, text: "那不是你想的那种秀"}
+
+  fm_price_check:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟干净指虎飞镖多少钱"}
+      - {speaker: B, text: "自由市场？看问谁哈哈"}
+      - {speaker: A, text: "刚看见有人刷800万我笑了"}
+      - {speaker: B, text: "800万是抢劫除非完美属性或收藏怪货"}
+      - {speaker: A, text: "兄弟我就知道 这服让我感觉穷"}
+      - {speaker: B, text: "欢迎来倒卖村"}
+
+  zakum_prereq_help:
+    participants: 3
+    lines:
+      - {speaker: A, text: "等等打扎昆要前置还是能直接进"}
+      - {speaker: B, text: "得先做整套钥匙"}
+      - {speaker: C, text: "还有别忘那个傻NPC无缘无故让你跑整图", emote: 6}
+      - {speaker: A, text: "当然有傻NPC"}
+      - {speaker: B, text: "老冒险岛传统"}
+      - {speaker: C, text: "卡住就公会喊 总有人知道"}
+
+  school_and_grind:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我发誓作业和冒险岛在抢我灵魂"}
+      - {speaker: B, text: "一样我开游戏放松结果数学卷盯着我"}
+      - {speaker: A, text: "为啥老师觉得我们精力无限"}
+      - {speaker: B, text: "因为他们不知道刷双倍经验啥感觉"}
+      - {speaker: A, text: "事实。至少冒险岛不突击测验"}
+      - {speaker: B, text: "还没有"}
+
+  pq_party_waiting:
+    participants: 3
+    lines:
+      - {speaker: A, text: "这队死了还是真在等最后一个人"}
+      - {speaker: B, text: "等太久我把整图布局背下来了"}
+      - {speaker: C, text: "抱歉挂机了妈让我倒垃圾"}
+      - {speaker: A, text: "哥们回来像传奇"}
+      - {speaker: B, text: "我们差点用椅子换你"}
+      - {speaker: C, text: "礼貌说那椅子DPS大概比我高"}
+
+  old_maple_nostalgia:
+    participants: 2
+    lines:
+      - {speaker: A, text: "说实话小时候枫叶岛感觉大多了"}
+      - {speaker: B, text: "真的 走去射手村都像任务"}
+      - {speaker: A, text: "以前觉得30级基本终局"}
+      - {speaker: B, text: "一样还为我的小橙药骄傲"}
+      - {speaker: A, text: "现在人到120当没事", emote: 2}
+      - {speaker: B, text: "现在小孩对蜗牛刷没敬意"}
+
+  anime_break_talk:
+    participants: 4
+    lines:
+      - {speaker: A, text: "还有人看新番季还是我完了"}
+      - {speaker: B, text: "一半番我已弃"}
+      - {speaker: C, text: "一样 真跟上的就那个恶魔那个"}
+      - {speaker: D, text: "OP猛啊 不能跳", emote: 3}
+      - {speaker: A, text: "对但上集结束太快"}
+      - {speaker: B, text: "冒险岛开着侧边每集都结束快"}
+
+  sleep_deprived_gamer:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们为啥我还醒着"}
+      - {speaker: B, text: "因为你四小时前说‘再一趟’"}
+      - {speaker: A, text: "我恨这有多准"}
+      - {speaker: B, text: "你眼睛大概像两只裂蘑菇"}
+      - {speaker: A, text: "视觉离谱但对"}
+      - {speaker: B, text: "下线喝水别开始幻听怪刷新声"}
+
+  scrolling_meltdown:
+    participants: 3
+    lines:
+      - {speaker: A, text: "刚最后一张卷炸了手套", emote: 4}
+      - {speaker: B, text: "不要啊干净属性多少"}
+      - {speaker: C, text: "剩2洞我都不会碰"}
+      - {speaker: A, text: "3洞干净我贪了"}
+      - {speaker: B, text: "贪是冒险岛真boss"}
+      - {speaker: C, text: "我们都用贵学费学这课"}
+
+  fashion_show_off:
+    participants: 2
+    lines:
+      - {speaker: A, text: "好说实话这套商城装猛还是我妄想"}
+      - {speaker: B, text: "不其实真猛"}
+      - {speaker: A, text: "终于有品味的人"}
+      - {speaker: B, text: "帽子在撑但整套行"}
+      - {speaker: A, text: "今天收到最温柔的侮辱", emote: 2}
+      - {speaker: B, text: "拿W慢慢走"}
+
+  lag_spike_hell:
+    participants: 3
+    lines:
+      - {speaker: A, text: "所有人都掉线还是我wifi死了"}
+      - {speaker: B, text: "不服务器我也卡死了"}
+      - {speaker: C, text: "我跳跳半路被弹下平台", emote: 5}
+      - {speaker: A, text: "哥们延迟跟你有私仇"}
+      - {speaker: B, text: "所以我从不信重置日活动"}
+      - {speaker: C, text: "能扛橡皮筋就有白嫖经验"}
+
+  coding_and_maple:
+    participants: 4
+    lines:
+      - {speaker: A, text: "写代码一整天现在只想自由市场放空"}
+      - {speaker: B, text: "致敬。我试做小bot结果整台电脑炸了"}
+      - {speaker: C, text: "经典程序员时刻", emote: 2}
+      - {speaker: D, text: "有时冒险岛比调试还容易"}
+      - {speaker: A, text: "事实。至少怪不会全大写留评"}
+      - {speaker: B, text: "NPC对话有时像代码"}
+
+  winter_weather_chat:
+    participants: 2
+    lines:
+      - {speaker: A, text: "今天太冷了"}
+      - {speaker: B, text: "完美天气屋里刷 礼貌说"}
+      - {speaker: A, text: "你这么说因为不用出门"}
+      - {speaker: B, text: "对我不羞耻"}
+      - {speaker: A, text: "手指在键盘上真冻了"}
+      - {speaker: B, text: "技术问题 穿袜子"}
+
+  guild_drama_whispers:
+    participants: 3
+    lines:
+      - {speaker: A, text: "哟公会聊天又怪了吗"}
+      - {speaker: B, text: "对好像两个人为boss跑生气"}
+      - {speaker: C, text: "哥们人表现得像2个掉落改了经济", emote: 6}
+      - {speaker: A, text: "我只想组队摸鱼不读论文"}
+      - {speaker: B, text: "一样。我入会玩冒险岛不是看肥皂剧"}
+      - {speaker: C, text: "还是比世界聊天强"}
+
+  console_vs_pc:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你觉得主机还是PC强"}
+      - {speaker: B, text: "看情况。休闲游戏也许主机"}
+      - {speaker: A, text: "不PC能力太强。而且冒险岛热键是命"}
+      - {speaker: B, text: "好公平。手柄玩冒险岛会乱"}
+      - {speaker: A, text: "想象摇杆捡东西", emote: 2}
+      - {speaker: B, text: "立刻kms"}
+
+  boss_practice_group:
+    participants: 4
+    lines:
+      - {speaker: A, text: "好快速说 谁有驱散"}
+      - {speaker: B, text: "我。假设我不空尴尬自己"}
+      - {speaker: C, text: "我有buff和3个脑细胞"}
+      - {speaker: D, text: "打这boss其实够", emote: 3}
+      - {speaker: A, text: "好好这次别站坏东西"}
+      - {speaker: C, text: "哥们我只站过一次"}
+      - {speaker: B, text: "每分钟一次也算太多次"}
+
+  after_work_vibes:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刚下班脑子糊了"}
+      - {speaker: B, text: "一样今天客服差点撑不住"}
+      - {speaker: A, text: "我需要椅子 饮料 零责任"}
+      - {speaker: B, text: "所以…冒险岛椅子 冒险岛饮料 无视公会叮"}
+      - {speaker: A, text: "正是。活在梦里", emote: 2}
+      - {speaker: B, text: "我们好健康好高效"}
+
+  wow_vs_maple:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们也玩魔兽世界吗"}
+      - {speaker: B, text: "试过但月费伤灵魂"}
+      - {speaker: C, text: "魔兽raiders对自己构建太认真可怕"}
+      - {speaker: A, text: "哥们我只想跳来跳去赚金币"}
+      - {speaker: B, text: "有效。而且凌晨两点冒险岛音乐更戳"}
+      - {speaker: C, text: "那困困射手村主题无敌"}
+
+  pet_hunger_panic:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我宠老饿又忘买粮"}
+      - {speaker: B, text: "你怎么老亏待小家伙"}
+      - {speaker: A, text: "因为我也饿也穷"}
+      - {speaker: B, text: "公平。你们俩靠残血活"}
+      - {speaker: A, text: "这节点我们是捆绑套餐"}
+      - {speaker: B, text: "去喂你儿子别被他抛弃"}
+
+  japanese_imports_talk:
+    participants: 3
+    lines:
+      - {speaker: A, text: "又花太多时间看日本代购"}
+      - {speaker: B, text: "哥们进危险区了"}
+      - {speaker: C, text: "每个爱好都有财务boss战", emote: 2}
+      - {speaker: A, text: "一直跟自己说‘就看看’然后又多一样东西"}
+      - {speaker: B, text: "那不是看看 那是生活方式"}
+      - {speaker: C, text: "至少冒险岛囤货是虚拟的"}
+      - {speaker: A, text: "我钱包感觉也虚拟"}
+
+  random_stranger_chitchat:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿你穿搭其实挺好看"}
+      - {speaker: B, text: "哦谢哈哈没想到"}
+      - {speaker: A, text: "颜色配得真好"}
+      - {speaker: B, text: "你刚让我整天开心"}
+      - {speaker: A, text: "真的。还有你在练啥"}
+      - {speaker: B, text: "就无聊升级点 努力别睡着"}
+
+  sunday_evening_blues:
+    participants: 4
+    lines:
+      - {speaker: A, text: "为啥周日晚总像警告"}
+      - {speaker: B, text: "因为周一在窗外潜伏"}
+      - {speaker: C, text: "周一物理出现前我拒绝承认", emote: 3}
+      - {speaker: D, text: "一样。我们还能再玩一小时假装"}
+      - {speaker: A, text: "一小时总变三小时"}
+      - {speaker: B, text: "所以我们全累垮"}
+      - {speaker: C, text: "但值"}
+
+  fm_price_shock:
+    participants: 2
+    lines:
+      - {speaker: A, text: "兄弟价格隔夜暴涨还是我幻了"}
+      - {speaker: B, text: "不混沌卷最低涨大概1500万", emote: 6}
+      - {speaker: A, text: "啥我字面今天要买一张"}
+      - {speaker: B, text: "有高等级公会扫货垄断"}
+      - {speaker: A, text: "贪啊我发誓恨自由市场囤货", emote: 5}
+      - {speaker: B, text: "等着哈哈他们撑不了价格永远"}
+
+  runescape_vs_maple:
+    participants: 3
+    lines:
+      - {speaker: A, text: "有人玩符文之地吗"}
+      - {speaker: B, text: "以前在免费服掉落交易哈哈"}
+      - {speaker: C, text: "另一号还在砍树"}
+      - {speaker: A, text: "不错几级"}
+      - {speaker: C, text: "大概72。比冒险岛慢但莫名更放松"}
+      - {speaker: B, text: "说实话符文之地刷让冒险岛像短跑"}
+      - {speaker: A, text: "真的那任何99级要真几个月"}
+
+  pc_flex:
+    participants: 2
+    lines:
+      - {speaker: A, text: "终于装好游戏PC了"}
+      - {speaker: B, text: "配置咋样？", emote: 6}
+      - {speaker: A, text: "英伟达但超贵。得上最好的"}
+      - {speaker: B, text: "哥们冒险岛打6090？？啥", emote: 2}
+      - {speaker: A, text: "你不懂显卡价格疯了。", emote: 3}
+      - {speaker: B, text: "看着酷我无所谓 晚点discord发图"}
+
+  gamer_fuel:
+    participants: 2
+    lines:
+      - {speaker: A, text: "门铃响了外卖到马上回"}
+      - {speaker: B, text: "今天又是炸鸡套餐吗"}
+      - {speaker: A, text: "对 外卖生活方式省做饭时间", emote: 3}
+      - {speaker: B, text: "我真会饿 刷怪每两小时要零食"}
+      - {speaker: A, text: "习惯就好。多时间刷 冒险岛>做饭"}
+
+  monochrome_fashion:
+    participants: 3
+    lines:
+      - {speaker: A, text: "出 透明帽 5000万或出价"}
+      - {speaker: B, text: "你商城套好干净。氛围对了"}
+      - {speaker: A, text: "谢 试着配现实衣柜"}
+      - {speaker: C, text: "哈哈语境？你只穿单色？"}
+      - {speaker: A, text: "对最近在搞潮牌进口挺好"}
+      - {speaker: B, text: "贵爱好但致敬穿搭", emote: 3}
+      - {speaker: C, text: "同时我游戏里穿着热狗套装"}
+
+  skate_injury:
+    participants: 2
+    lines:
+      - {speaker: A, text: "打字怪因为昨天滑板伤了手腕"}
+      - {speaker: B, text: "哦RIP你还好吗？咋了"}
+      - {speaker: A, text: "试三级楼梯Ollie滑倒了。经典决心问题"}
+      - {speaker: B, text: "哎哟…至少还能用鼠标玩吧？", emote: 2}
+      - {speaker: A, text: "勉强哈哈闪跳键按不利索", emote: 4}
+
+  game_maker_hobbyist:
+    participants: 4
+    lines:
+      - {speaker: A, text: "聊天有程序员吗"}
+      - {speaker: B, text: "学校在学java"}
+      - {speaker: C, text: "软件开发在这。主要网页"}
+      - {speaker: D, text: "我用Game Maker做小游戏玩"}
+      - {speaker: A, text: "哦酷啥游戏"}
+      - {speaker: D, text: "就平台之类。不认真但好玩"}
+      - {speaker: C, text: "唉希望下班后还有精力写代码哈哈"}
+      - {speaker: B, text: "一样我只想关脑锤蜗牛"}
+
+  sleep_deprived:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你那边几点"}
+      - {speaker: B, text: "4:30am…为啥", emote: 6}
+      - {speaker: A, text: "哥们去睡 这图待了8小时"}
+      - {speaker: B, text: "再一级。89好近能尝到了"}
+      - {speaker: A, text: "你会趴键盘上被小雪人杀"}
+      - {speaker: B, text: "死就死", emote: 3}
+
+  pineapple_pizza_war:
+    participants: 4
+    lines:
+      - {speaker: A, text: "点披萨。加菠萝吗"}
+      - {speaker: B, text: "要加"}
+      - {speaker: C, text: "绝对恶心别毁披萨"}
+      - {speaker: D, text: "加墨西哥椒也好 甜辣组合"}
+      - {speaker: A, text: "B被踢出组但D有理"}
+      - {speaker: C, text: "甜水果不属于热芝士 句号", emote: 5}
+      - {speaker: B, text: "你味觉发育不全 看得出来"}
+      - {speaker: D, text: "打打打"}
+
+  nostalgia_trip:
+    participants: 2
+    lines:
+      - {speaker: A, text: "记得到30级大概要一个月吗"}
+      - {speaker: B, text: "对坐船去玩具城还怕深红巴洛古", emote: 2}
+      - {speaker: A, text: "天哪大家一起躲船舱里"}
+      - {speaker: B, text: "总有那个高等级出去秀然后死"}
+      - {speaker: A, text: "好时光哈哈。现在冒险岛好不一样"}
+
+  scrolled_weapon_flex:
+    participants: 3
+    lines:
+      - {speaker: A, text: "看我全身聊天"}
+      - {speaker: B, text: "啥你那砸了三个10%？？", emote: 6}
+      - {speaker: C, text: "天哪欧皇级运气"}
+      - {speaker: A, text: "最后一洞手在抖", emote: 3}
+      - {speaker: B, text: "卖多少。开价"}
+      - {speaker: A, text: "不卖纯秀抱歉兄弟们"}
+      - {speaker: C, text: "封号 运气太高像开挂"}
+
+  lurk_and_return:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你回来了？"}
+      - {speaker: B, text: "对抱歉快速洗了车"}
+      - {speaker: A, text: "这天气？我这边字面暴雨"}
+      - {speaker: B, text: "加州晴天福利吧哈哈"}
+      - {speaker: A, text: "真好我在纽约冻屁股"}
+
+  anime_hot_take:
+    participants: 3
+    lines:
+      - {speaker: A, text: "鬼灭之刃全靠ufotable动画硬撑"}
+      - {speaker: B, text: "醒了就选暴力啊"}
+      - {speaker: C, text: "但他对比模板热血套路真的"}
+      - {speaker: B, text: "但打戏燃谁在乎深剧情"}
+      - {speaker: A, text: "好看但人打10/10像杰作"}
+      - {speaker: C, text: "扎实7/10预算撑的"}
+
+  jump_quest_rage:
+    participants: 2
+    lines:
+      - {speaker: A, text: "谁设计的B2跳跳我只想聊聊", emote: 5}
+      - {speaker: B, text: "笑死激光时机残忍"}
+      - {speaker: A, text: "我最后一步掉了。最后一步"}
+      - {speaker: B, text: "F。昨天我花两小时通"}
+      - {speaker: A, text: "下线别把空格键砸坏"}
+
+  guild_drama_tea:
+    participants: 3
+    lines:
+      - {speaker: A, text: "听说为啥顶级公会散了吗"}
+      - {speaker: B, text: "没有咋了"}
+      - {speaker: C, text: "八卦时间我听着"}
+      - {speaker: A, text: "好像会长偷公会银行金币砸完美矛"}
+      - {speaker: B, text: "兄弟不可能真的？", emote: 6}
+      - {speaker: C, text: "想象为像素武器毁整个公会哈哈"}
+      - {speaker: A, text: "最糟最后一张卷炸了"}
+      - {speaker: B, text: "因果是真的哈哈哈哈", emote: 2}
+
+  winamp_grind_vibes:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刷怪听啥音乐"}
+      - {speaker: B, text: "下的轻松的 基本动漫OST"}
+      - {speaker: A, text: "不错我通常trance或金属没中间"}
+      - {speaker: B, text: "死金属配可爱蘑菇游戏对比疯了", emote: 2}
+
+  awkward_strangers:
+    participants: 2
+    lines:
+      - {speaker: A, text: "椅子不错"}
+      - {speaker: B, text: "谢"}
+      - {speaker: A, text: "哪来的"}
+      - {speaker: B, text: "扭蛋"}
+      - {speaker: A, text: "啊酷"}
+      - {speaker: B, text: "嗯"}
+
+  manga_snob:
+    participants: 3
+    lines:
+      - {speaker: A, text: "电锯人动画好好看"}
+      - {speaker: B, text: "漫画好太多动画风格太电影"}
+      - {speaker: C, text: "漫画党试着不说‘漫画更好’挑战（不可能）", emote: 2}
+      - {speaker: B, text: "认真后几章画风疯了"}
+      - {speaker: A, text: "我继续好看颜色和动画谢谢"}
+
+  fame_trade:
+    participants: 2
+    lines:
+      - {speaker: A, text: "人气换人气？"}
+      - {speaker: B, text: "行你先"}
+      - {speaker: A, text: "完了"}
+      - {speaker: B, text: "谢回了", emote: 3}
+      - {speaker: A, text: "玩得开心刷怪好运"}
+
+  training_spot_recommendation:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟有人在废弃塔刷吗？"}
+      - {speaker: B, text: "我在沙漠 僵尸掉金币还行"}
+      - {speaker: A, text: "沙漠好卡啊兄弟"}
+      - {speaker: B, text: "对但扛得住掉线经验不错"}
+      - {speaker: A, text: "也许回射手村猎场"}
+      - {speaker: B, text: "哈哈经典选择"}
+
+  fm_price_complaint:
+    participants: 3
+    lines:
+      - {speaker: A, text: "为啥扎昆头盔卷现在8000万啥"}
+      - {speaker: B, text: "上周有鲸鱼买了大概20张"}
+      - {speaker: C, text: "倒卖死了"}
+      - {speaker: A, text: "记得以前2000万"}
+      - {speaker: B, text: "一样哥们 经济糊了"}
+      - {speaker: C, text: "自己刷boss吧"}
+      - {speaker: A, text: "说着容易"}
+
+  pq_fail_story:
+    participants: 2
+    lines:
+      - {speaker: A, text: "玩具组队第五次团灭了"}
+      - {speaker: B, text: "这次咋了"}
+      - {speaker: A, text: "法师一直死在计时器上"}
+      - {speaker: B, text: "哈哈经典。要更好配合"}
+      - {speaker: A, text: "对今天组队够了"}
+      - {speaker: B, text: "公平 废弃林想双人吗？"}
+
+  guild_drama_spill:
+    participants: 4
+    lines:
+      - {speaker: A, text: "听说GM昨晚踢了shadowblade"}
+      - {speaker: B, text: "不可能他干啥"}
+      - {speaker: C, text: "好像骗成员点券"}
+      - {speaker: D, text: "兄弟公会聊天疯了"}
+      - {speaker: A, text: "我一开始就觉得他可疑"}
+      - {speaker: B, text: "一样 老秀假货"}
+      - {speaker: C, text: "公会从不安静"}
+
+  old_maple_nostalgia:
+    participants: 2
+    lines:
+      - {speaker: A, text: "记得枫叶岛曾经感觉好大"}
+      - {speaker: B, text: "对还有老蜗牛刷"}
+      - {speaker: A, text: "现在一切好赶"}
+      - {speaker: B, text: "也想念老活动"}
+      - {speaker: A, text: "还有大爆炸不存在时"}
+      - {speaker: B, text: "我们是小孩啊好时光"}
+
+  boss_strategy_talk:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们怎么躲扎昆手臂"}
+      - {speaker: B, text: "看动画哥们"}
+      - {speaker: C, text: "我用角落策略"}
+      - {speaker: A, text: "那有用？？"}
+      - {speaker: B, text: "有时。多数靠求"}
+      - {speaker: C, text: "哈哈事实"}
+      - {speaker: A, text: "下次跑试试"}
+
+  jump_quest_rant:
+    participants: 2
+    lines:
+      - {speaker: A, text: "勇士部落跳跳要弄死我"}
+      - {speaker: B, text: "哪个 绳子那个？"}
+      - {speaker: A, text: "对最后一段老掉"}
+      - {speaker: B, text: "要练 第一次死大概50次"}
+      - {speaker: A, text: "兄弟为啥这么难"}
+      - {speaker: B, text: "又一个冒险岛时刻"}
+
+  server_lag_frustration:
+    participants: 3
+    lines:
+      - {speaker: A, text: "这卡真没法玩"}
+      - {speaker: B, text: "一样 老掉线"}
+      - {speaker: C, text: "每周末都这样"}
+      - {speaker: A, text: "得更好主机"}
+      - {speaker: B, text: "至少警告我们"}
+      - {speaker: C, text: "挂着等平静"}
+
+  other_mmo_comparison:
+    participants: 2
+    lines:
+      - {speaker: A, text: "以前玩符文之地吗"}
+      - {speaker: B, text: "玩 刷是真的"}
+      - {speaker: A, text: "冒险岛比那轻松"}
+      - {speaker: B, text: "对但符文有自由感"}
+      - {speaker: A, text: "这局清完也许回去"}
+      - {speaker: B, text: "一样"}
+
+  gaming_setup_talk:
+    participants: 3
+    lines:
+      - {speaker: A, text: "终于升级鼠标了 雷蛇"}
+      - {speaker: B, text: "为冒险岛？有点过了"}
+      - {speaker: C, text: "让他搞"}
+      - {speaker: A, text: "DPI对微调有帮助"}
+      - {speaker: B, text: "你听着像主播"}
+      - {speaker: C, text: "下一件 2D游戏机械键盘"}
+
+  retro_games_chat:
+    participants: 2
+    lines:
+      - {speaker: A, text: "最近在玩水晶版宝可梦"}
+      - {speaker: B, text: "真的。我还有GameBoy"}
+      - {speaker: A, text: "怀旧感觉不一样"}
+      - {speaker: B, text: "冒险岛是童年宝可梦也是"}
+      - {speaker: A, text: "改天交换哈哈"}
+      - {speaker: B, text: "我愿意"}
+
+  esports_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哈哈Valorant职业太疯"}
+      - {speaker: B, text: "冒险岛PVP才是巅峰"}
+      - {speaker: A, text: "哥们冒险岛PVP就是卡和抢怪"}
+      - {speaker: B, text: "还是比看直播好玩"}
+      - {speaker: A, text: "有道理"}
+      - {speaker: B, text: "想念老冒险岛锦标赛"}
+
+  anime_current_season:
+    participants: 3
+    lines:
+      - {speaker: A, text: "最近好看番？"}
+      - {speaker: B, text: "刚开始钢炼 好好看"}
+      - {speaker: C, text: "终于。剧情会疯"}
+      - {speaker: A, text: "刷怪边看说实话"}
+      - {speaker: B, text: "一样 解闷"}
+      - {speaker: C, text: "别忘升级啊"}
+
+  music_grind_style:
+    participants: 2
+    lines:
+      - {speaker: A, text: "练级听啥"}
+      - {speaker: B, text: "基本动漫OST 帮我专注"}
+      - {speaker: A, text: "我全J-rock假装在打boss"}
+      - {speaker: B, text: "那也行说实话"}
+      - {speaker: A, text: "打扎昆放林肯公园最棒"}
+      - {speaker: B, text: "经典"}
+
+  school_exam_stress:
+    participants: 2
+    lines:
+      - {speaker: A, text: "这周期中要弄死我"}
+      - {speaker: B, text: "一样几乎没复习"}
+      - {speaker: A, text: "刷冒险岛代替哈哈"}
+      - {speaker: B, text: "优先级"}
+      - {speaker: A, text: "以后会后悔"}
+      - {speaker: B, text: "我们都会"}
+
+  gamer_food_talk:
+    participants: 3
+    lines:
+      - {speaker: A, text: "晚饭又方便面"}
+      - {speaker: B, text: "哥们吃点真的"}
+      - {speaker: C, text: "披萨卷帮"}
+      - {speaker: A, text: "组队中没法做饭"}
+      - {speaker: B, text: "借口"}
+      - {speaker: C, text: "凌晨两点吃麦片"}
+      - {speaker: A, text: "传奇"}
+
+  sleep_schedule_rant:
+    participants: 2
+    lines:
+      - {speaker: A, text: "又通宵了"}
+      - {speaker: B, text: "为冒险岛还是作业"}
+      - {speaker: A, text: "都…主要冒险岛"}
+      - {speaker: B, text: "你得修作息"}
+      - {speaker: A, text: "说的是凌晨四点总在线的人"}
+      - {speaker: B, text: "碰"}
+
+  weekend_plans:
+    participants: 4
+    lines:
+      - {speaker: A, text: "这周末大家都干啥"}
+      - {speaker: B, text: "刷四转"}
+      - {speaker: C, text: "睡再睡"}
+      - {speaker: D, text: "家庭事可惜"}
+      - {speaker: A, text: "该公会boss跑"}
+      - {speaker: B, text: "我愿意"}
+      - {speaker: C, text: "醒了算我"}
+
+  pet_talk:
+    participants: 3
+    lines:
+      - {speaker: A, text: "猫老踩键盘"}
+      - {speaker: B, text: "哈哈我的boss时也这样"}
+      - {speaker: C, text: "宠物是真boss"}
+      - {speaker: A, text: "至少可爱"}
+      - {speaker: B, text: "对 比卡强"}
+      - {speaker: C, text: "事实"}
+
+  pineapple_pizza_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "披萨加菠萝是精英"}
+      - {speaker: B, text: "你真疯了"}
+      - {speaker: A, text: "甜咸组合"}
+      - {speaker: B, text: "反人类罪"}
+      - {speaker: A, text: "那多给我"}
+      - {speaker: B, text: "享受你怪披萨"}
+
+  scroll_anxiety:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我要砸武器了。60%"}
+      - {speaker: B, text: "就砸。别想"}
+      - {speaker: A, text: "但炸了呢我已经5/7"}
+      - {speaker: B, text: "哥们你盯了十分钟", emote: 6}
+      - {speaker: A, text: "好好我点…现在点…"}
+      - {speaker: B, text: "然后？"}
+      - {speaker: A, text: "过了冲啊啊啊", emote: 2}
+      - {speaker: B, text: "6/7传奇。再一下完美"}
+
+  runescape_comparison:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你玩过符文之地吗？"}
+      - {speaker: B, text: "玩很久以前。砍树几小时哈哈"}
+      - {speaker: A, text: "那刷让冒险岛看着简单"}
+      - {speaker: B, text: "至少冒险岛技能炫。符文字面看条涨"}
+      - {speaker: A, text: "对但有种禅意"}
+      - {speaker: B, text: "你描述的就是挂机哈哈", emote: 2}
+
+  exam_procrastination:
+    participants: 3
+    lines:
+      - {speaker: A, text: "六小时后期末"}
+      - {speaker: B, text: "你还在玩冒险岛？？？", emote: 6}
+      - {speaker: C, text: "这是我读过最有共鸣的"}
+      - {speaker: A, text: "压力下学习更好好吗"}
+      - {speaker: B, text: "大家都考前这么说"}
+      - {speaker: C, text: "让他搞。最差重考"}
+      - {speaker: A, text: "正是。谢谢C", emote: 2}
+      - {speaker: B, text: "明天别来哭找我们"}
+
+  sleep_schedule_destroyed:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你那边几点"}
+      - {speaker: B, text: "4:30am"}
+      - {speaker: A, text: "哥们去睡"}
+      - {speaker: B, text: "睡不了。现在睡大概下午两点醒"}
+      - {speaker: A, text: "那是你的问题哈哈"}
+      - {speaker: B, text: "作息这节点彻底毁了", emote: 4}
+      - {speaker: A, text: "夏日氛围"}
+
+  fm_price_outrage:
+    participants: 3
+    lines:
+      - {speaker: A, text: "哥们有人白卷卖2亿了"}
+      - {speaker: B, text: "上周8000万咋了"}
+      - {speaker: C, text: "倒爷来了。全买抬价"}
+      - {speaker: A, text: "真恶心", emote: 5}
+      - {speaker: B, text: "供需宝贝。欢迎自由市场"}
+      - {speaker: C, text: "所以我一直穷。拒绝参与"}
+      - {speaker: A, text: "那是精神吧"}
+
+  anime_music_grind:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刷怪听啥"}
+      - {speaker: B, text: "基本动漫OP。火影死神犬夜叉"}
+      - {speaker: A, text: "经典。安静图我加古典钢琴"}
+      - {speaker: B, text: "古典配射手村图真好"}
+      - {speaker: A, text: "打扎昆放火影OST最棒"}
+      - {speaker: B, text: "宅与游戏人交汇", emote: 2}
+
+  food_while_gaming:
+    participants: 3
+    lines:
+      - {speaker: A, text: "大家游戏零食？"}
+      - {speaker: B, text: "辣条。键盘永久橙"}
+      - {speaker: C, text: "恶心。我吃葡萄像文明人"}
+      - {speaker: A, text: "葡萄？？好随机哈哈"}
+      - {speaker: B, text: "不葡萄游戏其实好。不脏"}
+      - {speaker: C, text: "谢谢。有人懂", emote: 3}
+      - {speaker: A, text: "我个人薯片蘸酱"}
+      - {speaker: B, text: "你可怜键盘…"}
+
+  guild_drama:
+    participants: 2
+    lines:
+      - {speaker: A, text: "听说Legends公会戏了吗？"}
+      - {speaker: B, text: "哪部分那儿总有戏哈哈"}
+      - {speaker: A, text: "会长踢了大概5人因为不去boss"}
+      - {speaker: B, text: "狠。有人冒险岛外有生活"}
+      - {speaker: A, text: "他们走前也这么说"}
+      - {speaker: B, text: "公会政治疯了伙计"}
+
+  dying_at_boss:
+    participants: 4
+    lines:
+      - {speaker: A, text: "好大家都准备好扎昆吗？"}
+      - {speaker: B, text: "天生准备好"}
+      - {speaker: C, text: "等等让我吃药"}
+      - {speaker: D, text: "我忘带药了"}
+      - {speaker: A, text: "D…认真？", emote: 5}
+      - {speaker: B, text: "笑死每次"}
+      - {speaker: D, text: "马上回给我两分钟", emote: 7}
+      - {speaker: C, text: "所以我们从没准时通"}
+      - {speaker: A, text: "慢慢来吧…"}
+
+  typing_speed:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你打字为啥这么快"}
+      - {speaker: B, text: "多年冒险岛聊天吵架哈哈"}
+      - {speaker: A, text: "说真大概100wpm？"}
+      - {speaker: B, text: "不知道也许。从没测。肌肉记忆了"}
+      - {speaker: A, text: "我大概40好慢", emote: 4}
+      - {speaker: B, text: "再玩五年冒险岛你到"}
+
+  fashion_compliment:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟你穿搭着火"}
+      - {speaker: B, text: "谢！商城待太久哈哈", emote: 7}
+      - {speaker: A, text: "颜色搭配真到位"}
+      - {speaker: B, text: "我对像素时尚很认真"}
+      - {speaker: A, text: "致敬。我角色像小丑"}
+
+  old_maple_nostalgia:
+    participants: 3
+    lines:
+      - {speaker: A, text: "记得枫叶岛真有人吗"}
+      - {speaker: B, text: "还得跟每个NPC聊才知道去哪"}
+      - {speaker: C, text: "想念在废弃下水道迷路"}
+      - {speaker: A, text: "里面音乐有点吓人"}
+      - {speaker: B, text: "那时一切都是冒险。现在就冲200"}
+      - {speaker: C, text: "大概长大了吧", emote: 4}
+      - {speaker: A, text: "我不哭你哭"}
+
+  death_note_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "热看法：L死后死亡笔记垮了"}
+      - {speaker: B, text: "那都不算热看法那是事实"}
+      - {speaker: A, text: "Near和Mello比L中太多"}
+      - {speaker: B, text: "Near字面是没性格的L"}
+      - {speaker: A, text: "该第25集结束"}
+      - {speaker: B, text: "薯片那幕传奇。留下。", emote: 3}
+
+  build_pc_advice:
+    participants: 3
+    lines:
+      - {speaker: A, text: "想装机。有建议吗？"}
+      - {speaker: B, text: "预算？"}
+      - {speaker: A, text: "大概800-1000"}
+      - {speaker: C, text: "那预算能扎实配置。锐龙5+还行显卡"}
+      - {speaker: B, text: "电源别省。信我"}
+      - {speaker: A, text: "记下。显卡推荐？"}
+      - {speaker: C, text: "看你玩不玩冒险岛以外哈哈"}
+      - {speaker: B, text: "冒险岛烤箱能跑。想买啥买啥", emote: 2}
+      - {speaker: A, text: "我也玩别的好吗"}
+
+  jump_quest_rage:
+    participants: 2
+    lines:
+      - {speaker: A, text: "这跳跳卡45分钟了"}
+      - {speaker: B, text: "哪个"}
+      - {speaker: A, text: "冰峰雪域小平台那个"}
+      - {speaker: B, text: "哦不。上周我花两小时", emote: 4}
+      - {speaker: A, text: "我要疯了。老在同地方掉"}
+      - {speaker: B, text: "提示：别看计时器更糟"}
+      - {speaker: A, text: "太晚心态已不可修复", emote: 5}
+
+  stranger_interaction:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿"}
+      - {speaker: B, text: "啥事"}
+      - {speaker: A, text: "披风不错"}
+      - {speaker: B, text: "哦谢哈哈。随机掉的其实"}
+      - {speaker: A, text: "欧。想弄一个一阵了"}
+      - {speaker: B, text: "总会有的。运气那样"}
+      - {speaker: A, text: "嗯。刷啥好运"}
+      - {speaker: B, text: "你也伙计。慢慢来", emote: 2}
+
+  weekend_plans_convo:
+    participants: 4
+    lines:
+      - {speaker: A, text: "这周末有计划吗？"}
+      - {speaker: B, text: "睡觉和冒险岛。就这。"}
+      - {speaker: C, text: "周六上班周日空"}
+      - {speaker: D, text: "周六晚有局但之后上"}
+      - {speaker: A, text: "那周日该群体boss跑"}
+      - {speaker: B, text: "我整周末空。说时间"}
+      - {speaker: C, text: "周日下午我行"}
+      - {speaker: D, text: "大概宿醉但行", emote: 6}
+      - {speaker: A, text: "完美。周日美东3点。到或方"}
+
+  afk_return:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟你在吗？"}
+      - {speaker: A, text: "喂？？"}
+      - {speaker: B, text: "抱歉哈哈挂机了。妈叫吃饭"}
+      - {speaker: A, text: "哥们大概20分钟以为你掉线", emote: 6}
+      - {speaker: B, text: "没有就吃饭。回来了咋了"}
+      - {speaker: A, text: "没事了我忘了要说啥哈哈"}
+
+  conspiracy_theory_silly:
+    participants: 3
+    lines:
+      - {speaker: A, text: "我觉得爆率跟时段有关"}
+      - {speaker: B, text: "不是这么工作的哈哈"}
+      - {speaker: C, text: "不等等我发誓凌晨三点掉更好"}
+      - {speaker: A, text: "看我不唯一"}
+      - {speaker: B, text: "那只是确认偏误兄弟们"}
+      - {speaker: C, text: "好那解释为啥昨晚四点掉三个稀有"}
+      - {speaker: A, text: "服务器知道你多急", emote: 3}
+      - {speaker: B, text: "你们妄想但今晚我试试以防万一"}
+
+  scroll_gamble_regret:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刚砸工作手套想10连炸了", emote: 4}
+      - {speaker: B, text: "哦不。用了几洞"}
+      - {speaker: A, text: "5洞 过2然后炸。想哭"}
+      - {speaker: B, text: "哥们过2就该停已经干净"}
+      - {speaker: A, text: "我感觉欧。大错"}
+      - {speaker: B, text: "总感觉欧直到炸哈哈"}
+      - {speaker: A, text: "再不碰10%卷。永不。", emote: 5}
+      - {speaker: B, text: "大家都这么说然后下周又干"}
+
+  henesys_nostalgia:
+    participants: 3
+    lines:
+      - {speaker: A, text: "记得射手村到处站人吗"}
+      - {speaker: B, text: "天哪对射手村市场好氛围"}
+      - {speaker: C, text: "人自由聊天文字卖。好乱"}
+      - {speaker: A, text: "我以前在那晃几小时都不正经玩"}
+      - {speaker: B, text: "像城镇广场。大家都摸鱼"}
+      - {speaker: C, text: "每五秒全大写刷出的人", emote: 3}
+      - {speaker: A, text: "说实话虽烦有点想"}
+      - {speaker: B, text: "一样。怪方式感觉活着"}
+
+  training_map_crowded:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们我练级图大概4个人"}
+      - {speaker: B, text: "啥图"}
+      - {speaker: A, text: "我在龙和今天大家都决定来"}
+      - {speaker: B, text: "恨。图挤经验就死"}
+      - {speaker: A, text: "字面只有正常40%", emote: 5}
+      - {speaker: B, text: "换频吧"}
+      - {speaker: A, text: "我查哪儿都满 就是那种天"}
+      - {speaker: B, text: "周末人潮。每周六像发条"}
+      - {speaker: A, text: "也许自由市场等着"}
+
+  guild_drama_aftermath:
+    participants: 3
+    lines:
+      - {speaker: A, text: "所以听说redleaf昨晚咋了"}
+      - {speaker: B, text: "没有咋了"}
+      - {speaker: A, text: "velkan基本公会聊天点名GM被踢"}
+      - {speaker: C, text: "等等velkan是14x那个？？"}
+      - {speaker: A, text: "对。整件事爆了。之后大概6人走"}
+      - {speaker: B, text: "他气啥"}
+      - {speaker: A, text: "好像boss掉落不公"}
+      - {speaker: C, text: "那戏酝酿几周了", emote: 6}
+      - {speaker: B, text: "公会总因掉落分配散。每次"}
+
+  rare_drop_moment:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们我刚掉了星耳环", emote: 12}
+      - {speaker: B, text: "不可能。从啥？？"}
+      - {speaker: A, text: "小巴洛古。完全没想到"}
+      - {speaker: B, text: "最低大概30万掉。恭喜！！！"}
+      - {speaker: A, text: "我有点抖哈哈从不掉稀有"}
+      - {speaker: B, text: "这是你冒险岛时刻。别卖太便宜"}
+      - {speaker: A, text: "已去自由市场查价", emote: 11}
+      - {speaker: B, text: "好运。肯定有人要"}
+
+  bishop_appreciation:
+    participants: 2
+    lines:
+      - {speaker: A, text: "就想说主教是游戏最被低估职业"}
+      - {speaker: B, text: "大声说。没人尊重治疗加buff刷"}
+      - {speaker: A, text: "带队打扎昆伤害贡献一半"}
+      - {speaker: B, text: "大家还指望你驱散复活连好好说都没有"}
+      - {speaker: A, text: "有人给我连复活三次一句话没有。连谢都没有"}
+      - {speaker: B, text: "至少说请天哪", emote: 5}
+      - {speaker: A, text: "好主教值自己体重的金币 人没意识到"}
+      - {speaker: B, text: "讲。我开一个就为懂这苦"}
+
+  meso_saving_debate:
+    participants: 3
+    lines:
+      - {speaker: A, text: "我想存5000万。两周啥都不买"}
+      - {speaker: B, text: "5000万干啥"}
+      - {speaker: A, text: "想要扎昆头盔。现在价格疯了"}
+      - {speaker: C, text: "自己进扎昆跑能进队就行"}
+      - {speaker: A, text: "我还没140进不去"}
+      - {speaker: B, text: "买更快。就需要耐心"}
+      - {speaker: C, text: "我存三周准备买结果价格跌了哈哈", emote: 6}
+      - {speaker: A, text: "那是我噩梦场景"}
+      - {speaker: B, text: "有金币就买别等。价格只往一边走"}
+
+  class_switch_temptation:
+    participants: 2
+    lines:
+      - {speaker: A, text: "老想转影武者"}
+      - {speaker: B, text: "你战士吧。为啥换"}
+      - {speaker: A, text: "影武看着酷boss好像好玩多了"}
+      - {speaker: B, text: "资金要求狠。匕首不便宜"}
+      - {speaker: A, text: "知道但矛骑士这节点有点腻"}
+      - {speaker: B, text: "经典隔壁草更绿。影武也抱怨哈哈"}
+      - {speaker: A, text: "他们抱怨啥"}
+      - {speaker: B, text: "主要资金。还有暗杀有时空", emote: 3}
+      - {speaker: A, text: "好好吧先继续矛。但我还想着"}
+
+  free_market_haggling:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你冒险岛灵魂盾90万但我别处见过60万"}
+      - {speaker: B, text: "那些大概属性不一样比前先看"}
+      - {speaker: A, text: "属性看着一样。11防标准吧"}
+      - {speaker: B, text: "我能做到85万。最低了"}
+      - {speaker: A, text: "我出75万。这图公平价"}
+      - {speaker: B, text: "80万给你。最终价"}
+      - {speaker: A, text: "…好。80万。成交", emote: 2}
+      - {speaker: B, text: "合作愉快。享受盾"}
+
+  skill_build_argument:
+    participants: 3
+    lines:
+      - {speaker: A, text: "刺客该先满加速再幸运七"}
+      - {speaker: B, text: "不可能永远先幸运七。前期伤害更重要"}
+      - {speaker: A, text: "但加速一切更顺攻击速度重要"}
+      - {speaker: C, text: "两种都试过。练级速度幸运七先对"}
+      - {speaker: B, text: "谢谢终于有人同意"}
+      - {speaker: A, text: "你们都错我坚持", emote: 5}
+      - {speaker: C, text: "有法师加速可以更久跳过加速"}
+      - {speaker: B, text: "那是另一场辩论"}
+      - {speaker: A, text: "说实话选一个坚持。都行"}
+
+  orbis_pq_memories:
+    participants: 2
+    lines:
+      - {speaker: A, text: "还有人打天空组队还是死了"}
+      - {speaker: B, text: "挺安静。以前天空塔挤爆"}
+      - {speaker: A, text: "排队残忍但怪方式好玩"}
+      - {speaker: B, text: "入口大厅站着交了好多随机朋友"}
+      - {speaker: A, text: "去天空的船基本社交时间"}
+      - {speaker: B, text: "路上一起打怪就摸鱼", emote: 2}
+      - {speaker: A, text: "冒险岛闲时最好。存在着就好玩"}
+      - {speaker: B, text: "天空组队本身有好队也挺好玩"}
+
+  dark_knight_vs_hero:
+    participants: 2
+    lines:
+      - {speaker: A, text: "boss黑骑还是英雄。说"}
+      - {speaker: B, text: "英雄。灵魂使酷但实践英雄更多"}
+      - {speaker: A, text: "黑骑有灵魂使buff和牺牲超大工具"}
+      - {speaker: B, text: "英雄有狂怒连击爆发。长战纯伤害赢"}
+      - {speaker: A, text: "黑骑更肉混沌跑重要"}
+      - {speaker: B, text: "有道理。专打扎昆黑骑大概更安全"}
+      - {speaker: A, text: "我就是觉得灵魂使看着酷那也算分", emote: 3}
+      - {speaker: B, text: "选职业有效理由说实话。审美重要"}
+
+  party_buffing_etiquette:
+    participants: 3
+    lines:
+      - {speaker: A, text: "能不能说好施法前说祝福不是之后"}
+      - {speaker: B, text: "哈哈咋了"}
+      - {speaker: A, text: "主教一开跑就盖我加速"}
+      - {speaker: C, text: "哦。祝福加速叠会乱"}
+      - {speaker: B, text: "理想开跑前组队聊天说顺序"}
+      - {speaker: A, text: "但从没人做。大家直接开"}
+      - {speaker: C, text: "我总先法师buff再战士再牧师。行"}
+      - {speaker: B, text: "那该成通用标准说实话", emote: 2}
+      - {speaker: A, text: "传开。buff顺序救命"}
+
+  late_night_grind:
+    participants: 2
+    lines:
+      - {speaker: A, text: "凌晨两点还在骷髅刷。救命"}
+      - {speaker: B, text: "一样。苦力还停不了。再一级"}
+      - {speaker: A, text: "再一级已骗自己三小时", emote: 14}
+      - {speaker: B, text: "晚上服务器安静经验条动得好爽"}
+      - {speaker: A, text: "对。怪方式平静"}
+      - {speaker: B, text: "大概四小时后要起哈哈"}
+      - {speaker: A, text: "一样但冒险岛时间不在乎现实时间"}
+      - {speaker: B, text: "好好这次真下了"}
+      - {speaker: A, text: "行吧。大概三十分钟见"}
+
+  quitting_and_returning:
+    participants: 2
+    lines:
+      - {speaker: A, text: "实际退了大概八个月上周才回"}
+      - {speaker: B, text: "欢迎回来哈哈。为啥回来"}
+      - {speaker: A, text: "说实话怀旧来了。想念氛围"}
+      - {speaker: B, text: "人人都这样。这游戏有引力"}
+      - {speaker: A, text: "惊讶构建和点还记得这么多"}
+      - {speaker: B, text: "肌肉记忆不忘。手指知道连招", emote: 2}
+      - {speaker: A, text: "有的要重学但捡得快"}
+      - {speaker: B, text: "冒险岛就是这样。总像回家"}
+
+  fame_farming_discussion:
+    participants: 3
+    lines:
+      - {speaker: A, text: "还有人在乎人气吗"}
+      - {speaker: B, text: "不太但看着涨还是开心"}
+      - {speaker: C, text: "有的店进价还看人气"}
+      - {speaker: A, text: "老自由市场交易前查人气好怪"}
+      - {speaker: B, text: "我大概200人气才发现没人查", emote: 6}
+      - {speaker: C, text: "跟人气跑跟路人配对其实挺社交"}
+      - {speaker: A, text: "对。人气跑认识酷的人"}
+      - {speaker: B, text: "基本每天有理由跟陌生人聊"}
+
+  fm_room_navigation:
+    participants: 2
+    lines:
+      - {speaker: A, text: "为啥自由市场房号这么乱"}
+      - {speaker: B, text: "对。找人在自由市场迷路十分钟"}
+      - {speaker: A, text: "总忘哪个传送去哪区"}
+      - {speaker: B, text: "狂进希望最好是我策略", emote: 3}
+      - {speaker: A, text: "地图技术上有但完全没帮助"}
+      - {speaker: B, text: "谁设计自由市场布局有独特愿景"}
+      - {speaker: A, text: "我背需要的店直接去"}
+      - {speaker: B, text: "学会布局就是肌肉记忆。要几周"}
+
+  boss_prep_checklist:
+    participants: 2
+    lines:
+      - {speaker: A, text: "扎昆三十分钟后。准备好了吗"}
+      - {speaker: B, text: "先得再买大概300红药"}
+      - {speaker: A, text: "至少还要一包万能药。手臂打得疼"}
+      - {speaker: B, text: "要命中装还是基础命中够"}
+      - {speaker: A, text: "你这级基础该够。以防万一戴个命中戒"}
+      - {speaker: B, text: "好现在买药。你有复活准备吗"}
+      - {speaker: A, text: "主教朋友说有所以该覆盖"}
+      - {speaker: B, text: "好。手臂阶段我总死至少一次哈哈", emote: 7}
+      - {speaker: A, text: "说实话一样。硬扛过去"}
+
+  alt_character_confession:
+    participants: 3
+    lines:
+      - {speaker: A, text: "我有4个小号有罪恶感"}
+      - {speaker: B, text: "为啥有罪。小号正常"}
+      - {speaker: A, text: "因为没有过60级还一直开新的"}
+      - {speaker: C, text: "哦不你是跳号党。我一看就知", emote: 3}
+      - {speaker: A, text: "对新职业兴奋然后失兴趣"}
+      - {speaker: B, text: "新号前30级感觉好新鲜"}
+      - {speaker: C, text: "然后撞刷墙又开新号"}
+      - {speaker: A, text: "正是。循环破不了"}
+      - {speaker: B, text: "某节点会粘住一个。得找到你职业"}
+
+  nx_cosmetic_priorities:
+    participants: 2
+    lines:
+      - {speaker: A, text: "要有3万点券先花啥"}
+      - {speaker: B, text: "发型券没悬念。啥之前先好看"}
+      - {speaker: A, text: "想商城那套整体挺好看"}
+      - {speaker: B, text: "黄昏流浪者套？对干净"}
+      - {speaker: A, text: "帽子位难。跟多数装备帽撞"}
+      - {speaker: B, text: "所以现金帽总优先。解放时尚"}
+      - {speaker: A, text: "有道理。现金帽然后套装还是发型？"}
+      - {speaker: B, text: "发型先。其他都次于发型", emote: 3}
+
+  el_nath_cold_complaints:
+    participants: 2
+    lines:
+      - {speaker: A, text: "为啥冰峰雪域寒冷debuff每次还烦我"}
+      - {speaker: B, text: "是屏上雪花吧。好分心"}
+      - {speaker: A, text: "一切感觉迟钝又丑"}
+      - {speaker: B, text: "上山前底下NPC拿解毒"}
+      - {speaker: A, text: "每次来都忘。每次"}
+      - {speaker: B, text: "至少不被三秒冻一次时图挺好看"}
+      - {speaker: A, text: "上面音乐不错。很有氛围"}
+      - {speaker: B, text: "冰峰氛围加分。寒冷机制减分", emote: 4}
+
+  pq_partner_search:
+    participants: 3
+    lines:
+      - {speaker: A, text: "找玩具组队。再缺3个拜托"}
+      - {speaker: B, text: "你做啥等级段"}
+      - {speaker: A, text: "35到50都行。有牧师buff覆盖"}
+      - {speaker: C, text: "哦我41能加吗"}
+      - {speaker: A, text: "能！！啥职业"}
+      - {speaker: C, text: "冰雷法师。闪电准备好"}
+      - {speaker: B, text: "巨人阶段挺强。我也来我是飞侠"}
+      - {speaker: A, text: "完美走。入口传送见", emote: 11}
+
+  scroll_success_witness:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟我刚看有人工作手套连续砸70%七次"}
+      - {speaker: B, text: "疯了。概率多少"}
+      - {speaker: A, text: "他们疯了。字面在自由市场跳"}
+      - {speaker: B, text: "该。70%连砸七次是奇迹"}
+      - {speaker: A, text: "干净工作手套砸到接近完美。看着疯"}
+      - {speaker: B, text: "复制大概要五千万黑卷", emote: 12}
+      - {speaker: A, text: "正是。传奇自由市场时刻。人在欢呼"}
+      - {speaker: B, text: "希望我当时在"}
+
+  leveling_speed_comparison:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你到120花多久"}
+      - {speaker: B, text: "说实话休闲大概三个月。也许四"}
+      - {speaker: A, text: "不差。我118卡大概三周"}
+      - {speaker: B, text: "115到120墙是真的。经验需求猛涨"}
+      - {speaker: A, text: "我在骷髅但图竞争残忍"}
+      - {speaker: B, text: "试非高峰。真深夜或清晨"}
+      - {speaker: A, text: "也许定六点闹钟 听着疯但"}
+      - {speaker: B, text: "做过。不羞耻。黎明空图是金", emote: 2}
+
+  guild_boss_run_planning:
+    participants: 4
+    lines:
+      - {speaker: A, text: "好公会扎昆周六7点。谁能来"}
+      - {speaker: B, text: "我到。之前要补药"}
+      - {speaker: C, text: "工作到6但最晚7:30上"}
+      - {speaker: D, text: "我空。这次确认有主教吗"}
+      - {speaker: A, text: "太阳说能来所以有复活"}
+      - {speaker: B, text: "还要招人还是我们有6"}
+      - {speaker: C, text: "理想至少8人顺跑"}
+      - {speaker: A, text: "我发招人聊天。再需2"}
+      - {speaker: D, text: "确保至少100防装备。上次惨", emote: 5}
+
+  losing_track_of_time:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们坐下玩一小时现在五小时了"}
+      - {speaker: B, text: "冒险岛时间另一套钟。已知现象"}
+      - {speaker: A, text: "真以为大概九点其实午夜"}
+      - {speaker: B, text: "公平说你大概进心流了", emote: 3}
+      - {speaker: A, text: "组队链一直秒找到队"}
+      - {speaker: B, text: "队流着时就是不想停"}
+      - {speaker: A, text: "明天早上还有课。决策真棒"}
+      - {speaker: B, text: "经历过。但值得对吧"}
+      - {speaker: A, text: "…说实话值得", emote: 2}
+
+  training_spot_etiquette:
+    participants: 3
+    lines:
+      - {speaker: A, text: "有人已在图练你换频还是留"}
+      - {speaker: B, text: "看图大小。大图可分享 小图换"}
+      - {speaker: C, text: "我总先问。嘿这图有人吗那种"}
+      - {speaker: A, text: "多数人问了就冷静。烦人是不问直接挤"}
+      - {speaker: B, text: "对烦人。至少跟另一人打个招呼"}
+      - {speaker: C, text: "有人一句话不开直接旁边练", emote: 6}
+      - {speaker: A, text: "然后得你提起 尴尬"}
+      - {speaker: B, text: "练级图社交契约是真的得尊重"}
+
+  mage_skill_rotation:
+    participants: 2
+    lines:
+      - {speaker: A, text: "火毒法师boss循环咋打"}
+      - {speaker: B, text: "基本毒雾然后流星 元素增幅触发就接"}
+      - {speaker: A, text: "空档穿普攻还是等毒跳"}
+      - {speaker: B, text: "空档丢火箭。毒跳时伤害不断"}
+      - {speaker: A, text: "减速对boss和练级点多重要"}
+      - {speaker: B, text: "boss多数免疫不太有用。普通练级大"}
+      - {speaker: A, text: "有道理。火毒感觉复杂但点上爽"}
+      - {speaker: B, text: "肯定更主动玩法之一。从不无聊", emote: 2}
+
+  henesys_market_gossip:
+    participants: 3
+    lines:
+      - {speaker: A, text: "射手村有人半价卖飞镖"}
+      - {speaker: B, text: "大概假货或者急要金币"}
+      - {speaker: C, text: "我看见了。属性看着真"}
+      - {speaker: A, text: "也许清仓。有时发生"}
+      - {speaker: B, text: "或者倒爷装便宜别处翻"}
+      - {speaker: C, text: "哇从没想到这角度。阴", emote: 6}
+      - {speaker: A, text: "有人把自由市场当整套商业策略"}
+      - {speaker: B, text: "而且赚的比谁刷都多哈哈"}
+
+  slow_leveling_acceptance:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我73级两周了不羞耻"}
+      - {speaker: B, text: "说实话好心态。这游戏是马拉松"}
+      - {speaker: A, text: "想玩才玩。不急特定目标"}
+      - {speaker: B, text: "希望我能那样。我太盯等级数字"}
+      - {speaker: A, text: "享受旅程别追终点就有帮助"}
+      - {speaker: B, text: "好智慧。你暗地哲学家还是懒哈哈"}
+      - {speaker: A, text: "也许都有一点", emote: 3}
+      - {speaker: B, text: "致敬。这对话后我试着对等级放松"}
+
+  warrior_weapon_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "黑骑终局长柄还是矛。哪个更好"}
+      - {speaker: B, text: "长柄打更多目标练级好但矛单体更高"}
+      - {speaker: A, text: "专打扎昆我想矛打手臂"}
+      - {speaker: B, text: "对矛对boss构建更合理"}
+      - {speaker: A, text: "攻速差多少。很重要吗"}
+      - {speaker: B, text: "加速开挺接近。长柄AOE略胜"}
+      - {speaker: A, text: "唉。为啥不能简单"}
+      - {speaker: B, text: "战士总这辩论。选手感好的", emote: 2}
+
+  drop_rate_conspiracy:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我发誓连杀时爆率更差"}
+      - {speaker: B, text: "像游戏惩罚你太顺"}
+      - {speaker: A, text: "正是。连杀500啥没有。杀3稀有掉"}
+      - {speaker: B, text: "字面随机在跟你期望作对哈哈"}
+      - {speaker: A, text: "我知道但不感觉随机"}
+      - {speaker: B, text: "那是你脑子在无模式处找模式", emote: 3}
+      - {speaker: A, text: "我脑子错但好确信"}
+      - {speaker: B, text: "经典冒险岛体验。投入时运气感觉不一样"}
+
+  maple_anniversary_memories:
+    participants: 3
+    lines:
+      - {speaker: A, text: "以前周年活动好好"}
+      - {speaker: B, text: "蛋糕怪图！！好乱好好玩"}
+      - {speaker: C, text: "大家刷周年币换活动戒"}
+      - {speaker: A, text: "还有发的免费道具。像派对"}
+      - {speaker: B, text: "周年帽稀有之后永远秀"}
+      - {speaker: C, text: "我仓库号某处还有第一顶周年帽"}
+      - {speaker: A, text: "那些活动让你感觉全服一起庆祝", emote: 2}
+      - {speaker: B, text: "那时冒险岛知道怎么做社区活动"}
+
+  party_finding_struggle:
+    participants: 2
+    lines:
+      - {speaker: A, text: "找组队找了25分钟。没人招"}
+      - {speaker: B, text: "啥组队"}
+      - {speaker: A, text: "废弃组队。有人等但没人想带"}
+      - {speaker: B, text: "经典。都想加没人想组织"}
+      - {speaker: A, text: "我想带但还不全会解谜"}
+      - {speaker: B, text: "论坛有攻略。五分钟学基础"}
+      - {speaker: A, text: "也许我直接带。能有多难"}
+      - {speaker: B, text: "你会很好。说第一次带人通常耐心", emote: 2}
+
+  potion_expense_complaining:
+    participants: 3
+    lines:
+      - {speaker: A, text: "上周药花了两百万金币。两百万"}
+      - {speaker: B, text: "你几级。好像很多"}
+      - {speaker: A, text: "我130骷髅狂吃药"}
+      - {speaker: C, text: "试过万能药代替红药吗。有时金币效率更高"}
+      - {speaker: A, text: "前期更贵但更耐用吧"}
+      - {speaker: B, text: "真修是交主教朋友哈哈。神圣守护加奶改一切"}
+      - {speaker: C, text: "跟主教搭子刷药费大概掉一半"}
+      - {speaker: A, text: "按需主教朋友哪获取", emote: 6}
+      - {speaker: B, text: "公会招人。总在找主教"}
+
+  guild_recruitment_pitch:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿想入会吗。我们挺活跃"}
+      - {speaker: B, text: "啥样公会"}
+      - {speaker: A, text: "休闲但一周两次boss。20人"}
+      - {speaker: B, text: "有等级要求吗"}
+      - {speaker: A, text: "过二转就行。不太在乎等级"}
+      - {speaker: B, text: "氛围咋样。肝还是玩"}
+      - {speaker: A, text: "主要玩。公会聊天老开玩笑"}
+      - {speaker: B, text: "好其实听着不错。怎么加", emote: 2}
+      - {speaker: A, text: "现在发邀请。欢迎上船"}
+
+  job_advance_celebration:
+    participants: 3
+    lines:
+      - {speaker: A, text: "兄弟们我刚三转了", emote: 12}
+      - {speaker: B, text: "冲啊。转啥了"}
+      - {speaker: A, text: "黑暗骑士宝贝。灵魂使归我了"}
+      - {speaker: C, text: "哦黑暗骑士好酷。真恭喜"}
+      - {speaker: A, text: "任务有点烦但值"}
+      - {speaker: B, text: "灵魂使用着感觉咋样"}
+      - {speaker: A, text: "绝了。像有小伙伴跟着加buff"}
+      - {speaker: C, text: "灵魂使牺牲boss会救命信我", emote: 2}
+      - {speaker: A, text: "这是几个月来冒险岛最好一天"}
+
+  losing_a_good_scroll:
+    participants: 2
+    lines:
+      - {speaker: A, text: "浴袍60%砸炸了我想停玩"}
+      - {speaker: B, text: "唉。已经有啥了"}
+      - {speaker: A, text: "已经过两次60%。本该帽子戏法"}
+      - {speaker: B, text: "第三次炸了。残酷讽刺"}
+      - {speaker: A, text: "早该停在两次。已知好物对未知贪"}
+      - {speaker: B, text: "两过浴袍还是扎实货。别扔", emote: 4}
+      - {speaker: A, text: "知道。就哀悼本可以"}
+      - {speaker: B, text: "给十分钟。会好点。砸卷哀是暂时的"}
+
+  unexpected_pk_encounter:
+    participants: 2
+    lines:
+      - {speaker: A, text: "有人僵尸蘑菇抢我怪还叫我萌新"}
+      - {speaker: B, text: "哈哈经典。你咋办"}
+      - {speaker: A, text: "我DPS压过他们占整图他们怒退"}
+      - {speaker: B, text: "正义。被抢正确回应"}
+      - {speaker: A, text: "他们带朋友回来两边夹击"}
+      - {speaker: B, text: "他们为僵尸蘑菇组织整套报复？", emote: 6}
+      - {speaker: A, text: "认真的。那节点我换图了"}
+      - {speaker: B, text: "有时图不值这戏哈哈"}
+
+  old_friend_reunion:
+    participants: 3
+    lines:
+      - {speaker: A, text: "等等。那是mikiryu？哥们你去哪了"}
+      - {speaker: B, text: "哦哇。大概去年没见你"}
+      - {speaker: A, text: "字面以为你真退了"}
+      - {speaker: B, text: "有点退了但太想了"}
+      - {speaker: C, text: "等等你们认识？"}
+      - {speaker: A, text: "以前一起打扎昆"}
+      - {speaker: B, text: "那最好。记得整队死只剩我们"}
+      - {speaker: A, text: "不知怎么单刷最后30%血。传奇跑", emote: 11}
+      - {speaker: C, text: "好那其实好故事我想听完整版"}
+      - {speaker: B, text: "晚点好好讲。就高兴回来了"}
+
+  # ═══════════════════════════════════════
+  #  ADDITIONAL CONVERSATIONS (BATCH 2)
+  # ═══════════════════════════════════════
+
+  hp_washing_debate:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你洗血吗"}
+      - {speaker: B, text: "洗一点。烦但boss有帮助"}
+      - {speaker: A, text: "AP重置值吗。那些贵"}
+      - {speaker: B, text: "看你多认真boss。扎昆有点必要"}
+      - {speaker: A, text: "不知道感觉花金币好无聊", emote: 6}
+      - {speaker: B, text: "无聊但扎昆不会一下死那就那"}
+      - {speaker: A, text: "我想死也无聊"}
+
+  trade_gone_wrong:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哟你卖那耳环吗"}
+      - {speaker: B, text: "对1200万"}
+      - {speaker: A, text: "好交易我"}
+      - {speaker: B, text: "等等你挂120万不是1200万"}
+      - {speaker: A, text: "哦笑死我看错。以为你说120万", emote: 7}
+      - {speaker: B, text: "哥们差一个小数点", emote: 5}
+      - {speaker: A, text: "抱歉抱歉。反正没1200万卖的好运"}
+
+  falling_asleep_at_keyboard:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿看见刚才怪掉了吗？"}
+      - {speaker: A, text: "喂？"}
+      - {speaker: A, text: "哥们你字面站地图中间"}
+      - {speaker: B, text: "啊啥。抱歉趴键盘睡着了", emote: 6}
+      - {speaker: A, text: "笑死我就知道。角色十分钟没动"}
+      - {speaker: B, text: "梦见还在刷。算经验吗"}
+      - {speaker: A, text: "去睡觉哥们"}
+
+  pet_naming_stories:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们宠叫啥名"}
+      - {speaker: B, text: "我的叫金币。因为他只捡那个"}
+      - {speaker: C, text: "我用现实猫名。面条", emote: 2}
+      - {speaker: A, text: "面条好可爱。我的就叫狗"}
+      - {speaker: B, text: "你给龙…取名狗？", emote: 6}
+      - {speaker: A, text: "命名屏慌了好吗"}
+      - {speaker: C, text: "龙叫狗。说实话标志"}
+
+  best_map_for_level_range:
+    participants: 3
+    lines:
+      - {speaker: A, text: "好我们大概55-60。最好图啥"}
+      - {speaker: B, text: "肯定猴子公园3。模特我们级经验疯"}
+      - {speaker: C, text: "不幽灵船更好。竞争少掉落还行"}
+      - {speaker: A, text: "虾兵呢。听说也不错"}
+      - {speaker: B, text: "有宠捡东西虾兵好。否则猴子公园3"}
+      - {speaker: C, text: "幽灵船被低估我发誓。大家都忽略"}
+      - {speaker: A, text: "好幽灵船试一小时差就回猴子公园3"}
+
+  dark_scroll_gamble:
+    participants: 2
+    lines:
+      - {speaker: A, text: "披风该黑卷还是砸60%"}
+      - {speaker: B, text: "你多爱那披风"}
+      - {speaker: A, text: "很多。花了4000万"}
+      - {speaker: B, text: "那就别黑卷。炸一次永远没了", emote: 5}
+      - {speaker: A, text: "但过了属性…"}
+      - {speaker: B, text: "大家都炸装备前这么说"}
+      - {speaker: A, text: "好好60%。我选和平", emote: 7}
+
+  mount_quest_struggle:
+    participants: 2
+    lines:
+      - {speaker: A, text: "做坐骑任务了吗"}
+      - {speaker: B, text: "哪部分。收集怪物卡那个"}
+      - {speaker: A, text: "对收集卡。好久"}
+      - {speaker: B, text: "我刷大概三天完成"}
+      - {speaker: A, text: "三天？？", emote: 5}
+      - {speaker: B, text: "有些卡爆率残忍"}
+      - {speaker: A, text: "这之后最好是游戏最酷坐骑"}
+
+  random_defame_rage:
+    participants: 2
+    lines:
+      - {speaker: A, text: "路人无缘无故踩我人气", emote: 5}
+      - {speaker: B, text: "哈哈啥。你对他们做啥了"}
+      - {speaker: A, text: "没有我字面射手村站着他们走来踩"}
+      - {speaker: B, text: "有人见谁踩谁。他们爱好"}
+      - {speaker: A, text: "谁醒了选毁陌生人气"}
+      - {speaker: B, text: "跟10级图抢怪同批人", emote: 3}
+      - {speaker: A, text: "永远拉黑"}
+
+  comparing_ping:
+    participants: 3
+    lines:
+      - {speaker: A, text: "今天延迟大概200这没法玩"}
+      - {speaker: B, text: "200？？我大概30"}
+      - {speaker: C, text: "住服务器附近真好"}
+      - {speaker: A, text: "我跨洋玩总是差"}
+      - {speaker: B, text: "那延迟怎么跳跳", emote: 6}
+      - {speaker: A, text: "我不。跳跳早放弃了"}
+      - {speaker: C, text: "致敬带延迟玩。基本困难模式"}
+
+  ap_reset_advice:
+    participants: 2
+    lines:
+      - {speaker: A, text: "AP加错属性了。能修吗"}
+      - {speaker: B, text: "商城AP重置卷。要点券"}
+      - {speaker: A, text: "自由市场通常多少"}
+      - {speaker: B, text: "看服大概每张800-1500万"}
+      - {speaker: A, text: "法师加了5点力。要5张卷", emote: 4}
+      - {speaker: B, text: "哦不。贵失误"}
+      - {speaker: A, text: "教训学到。点应用前永远再看"}
+
+  if_i_were_a_gm:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你是GM会先干啥"}
+      - {speaker: B, text: "封自由市场所有明显假价卖货的"}
+      - {speaker: C, text: "我让双倍经验永久", emote: 3}
+      - {speaker: A, text: "我真想多加椅子"}
+      - {speaker: B, text: "椅子？？所有东西里？？", emote: 6}
+      - {speaker: A, text: "椅子是真终局内容我厌假装不是"}
+      - {speaker: C, text: "好其实有效。我收椅子"}
+
+  kerning_pq_puzzle_memories:
+    participants: 2
+    lines:
+      - {speaker: A, text: "以前打废弃组队吗"}
+      - {speaker: B, text: "天哪对。绳子关没人知道组合时好久"}
+      - {speaker: A, text: "总有人站错平台"}
+      - {speaker: B, text: "然后队长打三遍组合还有人搞砸"}
+      - {speaker: A, text: "但丝滑跑感觉好好", emote: 2}
+      - {speaker: B, text: "对那级奖励其实值"}
+      - {speaker: A, text: "最后史莱姆王总燃"}
+
+  archer_underpowered_debate:
+    participants: 3
+    lines:
+      - {speaker: A, text: "弓手其实好别看不起"}
+      - {speaker: B, text: "好在啥。别的职业伤害都压过", emote: 3}
+      - {speaker: C, text: "侧移单体扎实。还有射程优势"}
+      - {speaker: A, text: "正是。完全不用近战"}
+      - {speaker: B, text: "好所以更远打更少伤害。绝了"}
+      - {speaker: A, text: "哥们为啥要恨", emote: 5}
+      - {speaker: C, text: "他说得有点对。神射手该加强哈哈"}
+      - {speaker: A, text: "我拒绝接受。我游侠挺好"}
+
+  stop_being_afk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "哥们拜托这趟需要你"}
+      - {speaker: B, text: "再五分钟我在看东西"}
+      - {speaker: A, text: "你二十分钟前也这么说"}
+      - {speaker: B, text: "好好我来。暂停视频"}
+      - {speaker: A, text: "直播不能暂停"}
+      - {speaker: B, text: "…好。在路上", emote: 4}
+
+  boat_ride_boredom:
+    participants: 2
+    lines:
+      - {speaker: A, text: "去天空之城船上干啥"}
+      - {speaker: B, text: "盯海面质疑人生选择"}
+      - {speaker: A, text: "哈哈我通常整理背包"}
+      - {speaker: B, text: "那其实高效。我像雕像站着"}
+      - {speaker: A, text: "有时巴洛古出现至少刺激", emote: 2}
+      - {speaker: B, text: "刺激是一词。可怕是另一词"}
+
+  wrong_scroll_wrong_item:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我刚把帽子卷用在手套上", emote: 4}
+      - {speaker: B, text: "等等啥。怎么"}
+      - {speaker: A, text: "没注意双击错物品"}
+      - {speaker: B, text: "有用吗？？"}
+      - {speaker: A, text: "炸了浪费卷。1500万没了"}
+      - {speaker: B, text: "好至少手套没炸。一线光明？", emote: 7}
+      - {speaker: A, text: "砸东西得开始注意了"}
+
+  npc_vs_fm_sell:
+    participants: 2
+    lines:
+      - {speaker: A, text: "这该NPC还是自由市场卖"}
+      - {speaker: B, text: "啥"}
+      - {speaker: A, text: "干净冒险岛盾。属性还行不疯"}
+      - {speaker: B, text: "自由市场也许有人出50万。NPC大概1万"}
+      - {speaker: A, text: "但得开店等几小时"}
+      - {speaker: B, text: "对。看你更珍惜时间还是金币", emote: 3}
+      - {speaker: A, text: "时间就是金币。NPC吧"}
+
+  party_wipe_blame:
+    participants: 3
+    lines:
+      - {speaker: A, text: "好谁上阶段没吃药"}
+      - {speaker: B, text: "不是我全程狂奶"}
+      - {speaker: C, text: "药冷却好吗发生太快", emote: 7}
+      - {speaker: A, text: "C你字面战士怎么先死"}
+      - {speaker: C, text: "boss放了那个AOE我慌了"}
+      - {speaker: B, text: "我也有奶但大家散不同方向"}
+      - {speaker: A, text: "下次没人动。叠一起奶扛"}
+
+  how_i_found_maple:
+    participants: 3
+    lines:
+      - {speaker: A, text: "你们怎么知道冒险岛的"}
+      - {speaker: B, text: "表哥在他家给我看。立刻上钩"}
+      - {speaker: C, text: "大概2006迷你剪辑上看广告", emote: 2}
+      - {speaker: A, text: "网吧看人玩问是啥"}
+      - {speaker: B, text: "网吧冒险岛是巅峰。同屋一起玩"}
+      - {speaker: C, text: "总有人升级现实里喊"}
+      - {speaker: A, text: "说实话没那随机网吧访问我不会在这"}
+
+  # ═══════════════════════════════════════
+  #  ADDITIONAL CONVERSATIONS (BATCH 3)
+  # ═══════════════════════════════════════
+
+  channel_change_courtesy:
+    participants: 2
+    lines:
+      - {speaker: A, text: "嘿这图有人吗？"}
+      - {speaker: B, text: "有待一会儿了。抱歉"}
+      - {speaker: A, text: "没事我换频。刷怪好运"}
+      - {speaker: B, text: "等等你想留下可以。图大"}
+      - {speaker: A, text: "哦真的？好一起"}
+      - {speaker: B, text: "各刷各边就行", emote: 0}
+
+  buff_begging_struggle:
+    participants: 3
+    lines:
+      - {speaker: A, text: "有人有加速吗拜托"}
+      - {speaker: B, text: "我牧师。只有祝福哈哈"}
+      - {speaker: C, text: "也许两图外有法师在练"}
+      - {speaker: A, text: "两图外天哪。值得走吗"}
+      - {speaker: B, text: "好友聊天求。也许有人来找你"}
+      - {speaker: A, text: "为加速这么费劲 T_T", emote: 4}
+
+  wrong_channel_mishap:
+    participants: 2
+    lines:
+      - {speaker: A, text: "妈能给我买薯片吗"}
+      - {speaker: B, text: "…你还好吗哥们？"}
+      - {speaker: A, text: "哦不我打到世界聊天不是好友", emote: 7}
+      - {speaker: B, text: "笑死你妈玩冒险岛？？"}
+      - {speaker: A, text: "我不接受提问"}
+
+  mule_account_life:
+    participants: 2
+    lines:
+      - {speaker: A, text: "最近管仓库号比主号时间还多"}
+      - {speaker: B, text: "那节点你知道游戏彻底弄垮你了"}
+      - {speaker: A, text: "仓库号金币比主号多。完全不是一个量级"}
+      - {speaker: B, text: "经典冒险岛进化。主号变副", emote: 2}
+      - {speaker: A, text: "真忘了主号在哪练"}
+
+  secret_best_channel:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你通常刷几频"}
+      - {speaker: B, text: "7频。大家都忘它存在"}
+      - {speaker: A, text: "7频？？认真？"}
+      - {speaker: B, text: "认真。几乎每次空图"}
+      - {speaker: A, text: "感觉在学作弊码"}
+      - {speaker: B, text: "别告诉任何人。我需要它保持空", emote: 3}
+
+  slime_tree_memories:
+    participants: 3
+    lines:
+      - {speaker: A, text: "还有人记得10级大概4人刷史莱姆树吗"}
+      - {speaker: B, text: "对我们真以为很高效"}
+      - {speaker: C, text: "总有人把史莱姆拖进大家击杀"}
+      - {speaker: A, text: "然后别人杀回他史莱姆他就气"}
+      - {speaker: B, text: "那些图戏对完全没理由好真", emote: 2}
+      - {speaker: C, text: "说实话更简单时代"}
+
+  third_job_nerves:
+    participants: 2
+    lines:
+      - {speaker: A, text: "今天终于三转但有点紧张"}
+      - {speaker: B, text: "紧张啥。没那么难"}
+      - {speaker: A, text: "万一选错路永远后悔"}
+      - {speaker: B, text: "那就开小号再来。选看着最酷的"}
+      - {speaker: A, text: "好这是今天最好建议"}
+      - {speaker: B, text: "真三转智慧在这", emote: 2}
+      - {speaker: A, text: "走黑暗骑士。祝我好运", emote: 2}
+
+  gachapon_spiral:
+    participants: 2
+    lines:
+      - {speaker: A, text: "点券扭蛋花太多啥需要的都没出"}
+      - {speaker: B, text: "你进漩涡了。我懂漩涡"}
+      - {speaker: A, text: "但下一发万一有稀有帽"}
+      - {speaker: B, text: "他们就想让你这么想", emote: 5}
+      - {speaker: A, text: "…再一发"}
+      - {speaker: B, text: "我帮不了你", emote: 6}
+
+  who_taught_you_maple:
+    participants: 3
+    lines:
+      - {speaker: A, text: "谁教你玩冒险岛"}
+      - {speaker: B, text: "没人。按键直到有用"}
+      - {speaker: C, text: "学校一个大孩子冒险岛知识像皇族"}
+      - {speaker: A, text: "天哪每校总有那一个"}
+      - {speaker: B, text: "但他对比对。知道隐藏图那时真像权力"}
+      - {speaker: C, text: "大概2006冒险岛知识是真社交货币", emote: 2}
+      - {speaker: A, text: "课间字面用零食换升级提示"}
+
+  henesys_standing_contest:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你站这多久了"}
+      - {speaker: B, text: "大概两小时。脑子全关"}
+      - {speaker: A, text: "一样。甚至啥都不干。就站"}
+      - {speaker: B, text: "有时这就是游戏"}
+      - {speaker: A, text: "射手村站立模拟器", emote: 0}
+
+  early_morning_grind:
+    participants: 2
+    lines:
+      - {speaker: A, text: "定六点闹钟就为上学前刷"}
+      - {speaker: B, text: "六点冒险岛。投入真离谱"}
+      - {speaker: A, text: "早上空图感觉好不一样"}
+      - {speaker: B, text: "六点没人抢。外面平静"}
+      - {speaker: A, text: "好像只有你醒着经验更爽", emote: 2}
+      - {speaker: B, text: "早晨冒险岛是全游戏最好保密"}
+
+  skill_book_nightmare:
+    participants: 3
+    lines:
+      - {speaker: A, text: "刚技能书炸了。那种50%", emote: 4}
+      - {speaker: B, text: "那些东西真残忍。为啥50%"}
+      - {speaker: C, text: "我连续炸三次。连续。一个接一个"}
+      - {speaker: A, text: "那之后你怎么还玩"}
+      - {speaker: C, text: "再买一本再试。还能咋办"}
+      - {speaker: B, text: "谁决定技能进度该赌博", emote: 5}
+
+  cat_keyboard_trade:
+    participants: 2
+    lines:
+      - {speaker: A, text: "抱歉取消交易猫踩键盘了"}
+      - {speaker: B, text: "笑死没事。每次都这样？"}
+      - {speaker: A, text: "专开交易窗时。她知道啥"}
+      - {speaker: B, text: "你猫在保护金币防坏交易"}
+      - {speaker: A, text: "或者破坏好交易。难说哪个", emote: 6}
+      - {speaker: B, text: "猫是混乱中立。已知", emote: 2}
+
+  ludi_tower_walk:
+    participants: 2
+    lines:
+      - {speaker: A, text: "有人真步行下完整玩具塔吗"}
+      - {speaker: B, text: "一次。13层掉线再也没试"}
+      - {speaker: A, text: "13层一共多少"}
+      - {speaker: B, text: "远超13"}
+      - {speaker: A, text: "好我永远不干那"}
+      - {speaker: B, text: "电梯存在有理由。用就行", emote: 0}
+
+  smega_spam_fatigue:
+    participants: 3
+    lines:
+      - {speaker: A, text: "有人一小时每30秒喇叭同消息"}
+      - {speaker: B, text: "致敬 hustle但我眼睛受苦"}
+      - {speaker: C, text: "静音世界聊天和平生活"}
+      - {speaker: A, text: "但会错过真重要的"}
+      - {speaker: B, text: "世界聊天有啥重要的"}
+      - {speaker: A, text: "好公平。永远就出刷", emote: 6}
+      - {speaker: C, text: "世界聊天自己生态我不想沾"}
+
+  # ═══════════════════════════════════════
+  #  BATCH 4: NEW CONVERSATIONAL CONTENT
+  # ═══════════════════════════════════════
+
+  # TRAINING / GRIND DEBATES
+
+  map_level_scaling:
+    participants: 2
+    lines:
+      - {speaker: A, text: "练同级怪还是略高更好"}
+      - {speaker: B, text: "能秒杀高一点经验更快"}
+      - {speaker: A, text: "但死更多"}
+      - {speaker: B, text: "对。平衡。推到吃药太多"}
+      - {speaker: A, text: "好所以基本试错像其他一切"}
+
+  pet_loot_difference:
+    participants: 2
+    lines:
+      - {speaker: A, text: "有宠刷怪差很多吗"}
+      - {speaker: B, text: "昼夜差别说实话。手捡对自动捡"}
+      - {speaker: A, text: "没宠我落后不太多吧"}
+      - {speaker: B, text: "不但有会更快。值得攒"}
+
+  exp_curve_rant:
+    participants: 3
+    lines:
+      - {speaker: A, text: "75到80经验需求真疯"}
+      - {speaker: B, text: "等90+。墙更糟"}
+      - {speaker: C, text: "我真停试过120。刷把人弄垮", emote: 4}
+      - {speaker: A, text: "人怎么到200"}
+      - {speaker: B, text: "没生活哈哈。完全投入"}
+
+  grinding_vs_questing:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刷时穿插任务还是纯刷"}
+      - {speaker: B, text: "纯刷。任务感觉耗时"}
+      - {speaker: A, text: "但有的任务奖励扎实"}
+      - {speaker: B, text: "装备也许但经验还是杀怪快。更简单"}
+      - {speaker: A, text: "有道理。刷怪隧道脑是真的"}
+
+  training_music_matters:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你注意音乐影响能刷多久吗"}
+      - {speaker: B, text: "对。神曲图对无聊音乐像长两倍", emote: 2}
+      - {speaker: A, text: "所以魔法密林练戳。BGM刚好"}
+      - {speaker: B, text: "废弃三十分钟就想挂机"}
+      - {speaker: A, text: "音乐是隐藏属性确认"}
+
+  solo_vs_party_grind:
+    participants: 3
+    lines:
+      - {speaker: A, text: "单刷好舒服"}
+      - {speaker: B, text: "但找对队组队快多了"}
+      - {speaker: C, text: "组队快但单刷不用跟人说话"}
+      - {speaker: A, text: "真。有天没社交心情"}
+      - {speaker: B, text: "但分经验惩罚狠"}
+
+  # FM / TRADING INTERACTIONS
+
+  price_checking_nightmare:
+    participants: 2
+    lines:
+      - {speaker: A, text: "自由市场查价大概三十分钟"}
+      - {speaker: B, text: "因为大家价格差疯了", emote: 2}
+      - {speaker: A, text: "怎么知道被骗"}
+      - {speaker: B, text: "瞄准中间叫公平"}
+      - {speaker: A, text: "有的东西中间大概1亿区间哈哈"}
+
+  shop_setup_stress:
+    participants: 2
+    lines:
+      - {speaker: A, text: "开店好烦"}
+      - {speaker: B, text: "但睡觉白赚钱值"}
+      - {speaker: A, text: "如果真卖掉。一半货待几天了"}
+      - {speaker: B, text: "欢迎倒卖。耐心是关键"}
+      - {speaker: A, text: "我恨耐心"}
+
+  selling_hot_items:
+    participants: 2
+    lines:
+      - {speaker: A, text: "一小时内刚卖3张混沌卷"}
+      - {speaker: B, text: "哇疯了。秘诀啥"}
+      - {speaker: A, text: "说实话合理定价自由市场好位置"}
+      - {speaker: B, text: "我试试。我的在积灰", emote: 4}
+      - {speaker: A, text: "买前查需求。有的东西就是不动"}
+
+  negotiation_standoff:
+    participants: 2
+    lines:
+      - {speaker: A, text: "工作手套他们要1亿"}
+      - {speaker: B, text: "属性咋样"}
+      - {speaker: A, text: "干净。我见过更好只要8000万"}
+      - {speaker: B, text: "出7000万。让他们降"}
+      - {speaker: A, text: "已到7500万。好像最终答复"}
+      - {speaker: B, text: "听着硬过"}
+
+  item_identity_crisis:
+    participants: 2
+    lines:
+      - {speaker: A, text: "这披风好还是我不会看属性"}
+      - {speaker: B, text: "给我看"}
+      - {speaker: A, text: "8防3全属性"}
+      - {speaker: B, text: "披风？其实扎实。卖多少"}
+      - {speaker: A, text: "1000万？", emote: 6}
+      - {speaker: B, text: "成交搞起来"}
+
+  # MINIGAME GOSSIP
+
+  gacha_horror_story:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刚扭蛋花50刀出一堆同垃圾重复"}
+      - {speaker: B, text: "哦不你进噩梦漩涡了"}
+      - {speaker: A, text: "我就想要武器皮肤"}
+      - {speaker: B, text: "好东西总超稀。设计来抽干你", emote: 3}
+      - {speaker: A, text: "我发誓永不再扭"}
+      - {speaker: B, text: "下周见"}
+
+  pq_new_player_energy:
+    participants: 3
+    lines:
+      - {speaker: A, text: "第一次打废弃组队"}
+      - {speaker: B, text: "天哪你不知道要面对啥"}
+      - {speaker: C, text: "高延迟跳残忍"}
+      - {speaker: A, text: "预期死几次"}
+      - {speaker: B, text: "全部。你会全死"}
+      - {speaker: C, text: "但通了奖励值", emote: 2}
+
+  hidden_minigame_finds:
+    participants: 2
+    lines:
+      - {speaker: A, text: "你知道玩具城有秘密卡牌游戏吗"}
+      - {speaker: B, text: "等等啥。哪"}
+      - {speaker: A, text: "某个NPC有。赢了奖励还行"}
+      - {speaker: B, text: "你怎么发现的"}
+      - {speaker: A, text: "说实话就迷路晃哈哈"}
+
+  blackjack_curse:
+    participants: 2
+    lines:
+      - {speaker: A, text: "二十一点庄家我20他16还要"}
+      - {speaker: B, text: "有时游戏就这样"}
+      - {speaker: A, text: "但统计上可疑"}
+      - {speaker: B, text: "是运气。你就倒霉天"}
+      - {speaker: A, text: "或者庄家有猫腻哈哈"}
+
+  # SOCIAL / ROMANTIC BANTER
+
+  maplewedd_awkwardness:
+    participants: 2
+    lines:
+      - {speaker: A, text: "所以呃…要不要哪天一起刷金币"}
+      - {speaker: B, text: "…像约会约会还是冒险岛晃约会", emote: 6}
+      - {speaker: A, text: "不知道你想怎样哈哈"}
+      - {speaker: B, text: "这是我读过最紧张的字"}
+      - {speaker: A, text: "我这方面差好吗"}
+
+  guildmate_crush_energy:
+    participants: 3
+    lines:
+      - {speaker: A, text: "还有人觉得公会新敏捷神射手可爱吗"}
+      - {speaker: B, text: "哦哦你在舔", emote: 3}
+      - {speaker: A, text: "没有！就观察"}
+      - {speaker: C, text: "这周他们脸书帖你全赞了"}
+      - {speaker: B, text: "西洋镜穿了哈哈"}
+
+  virtual_couple_goals:
+    participants: 2
+    lines:
+      - {speaker: A, text: "记得前任一起刷boss吗"}
+      - {speaker: B, text: "现在单刷惨"}
+      - {speaker: A, text: "最糟分手。练级搭子也没了"}
+      - {speaker: B, text: "也许他们会回来哈哈"}
+      - {speaker: A, text: "或者我永远单刷了", emote: 4}
+
+  awkward_compliment:
+    participants: 2
+    lines:
+      - {speaker: A, text: "以前见你这点刷。挺强"}
+      - {speaker: B, text: "哦谢谢？？", emote: 6}
+      - {speaker: A, text: "我是说游戏。你循环干净"}
+      - {speaker: B, text: "哦笑死我懵了一秒", emote: 2}
+      - {speaker: A, text: "对措辞怪"}
+
+  # CLASS / JOB BANTER
+
+  thief_speed_flex:
+    participants: 3
+    lines:
+      - {speaker: A, text: "飞侠说实话最好玩"}
+      - {speaker: B, text: "好玩是好玩但输出中"}
+      - {speaker: C, text: "不装备齐夜使者伤害疯"}
+      - {speaker: B, text: "但到那大概要5亿资金"}
+      - {speaker: A, text: "看这就是飞侠生活。高风险高回报"}
+
+  mage_aoe_superiority:
+    participants: 2
+    lines:
+      - {speaker: A, text: "法师AOE就是破了"}
+      - {speaker: B, text: "所以需要这么多资金才能转"}
+      - {speaker: A, text: "但资金到位图就是他们的"}
+      - {speaker: B, text: "对。纯AOE没职业比"}
+      - {speaker: A, text: "法师该更多尊重"}
+
+  gunslinger_underrated:
+    participants: 2
+    lines:
+      - {speaker: A, text: "为啥没人玩船长"}
+      - {speaker: B, text: "哥们不知道他们猛但像隐形"}
+      - {speaker: A, text: "真有好工具和伤害"}
+      - {speaker: B, text: "海盗职业污名吧"}
+      - {speaker: A, text: "海盗职业国有天"}
+
+  cleric_blessing_wars:
+    participants: 2
+    lines:
+      - {speaker: A, text: "为啥主教boss上神圣守护后才祝福"}
+      - {speaker: B, text: "因为神圣守护更重要？"}
+      - {speaker: A, text: "但神圣守护会淡。祝福永久"}
+      - {speaker: B, text: "好有道理。下次先放"}
+      - {speaker: A, text: "字面帮大家省金币。传开"}
+
+  # SERVER / META OBSERVATIONS
+
+  server_economy_collapse:
+    participants: 3
+    lines:
+      - {speaker: A, text: "价格最近绝对离谱"}
+      - {speaker: B, text: "挂机刷太多。供应破了"}
+      - {speaker: C, text: "经济糊了。该清档"}
+      - {speaker: A, text: "清档会乱"}
+      - {speaker: B, text: "但也能重置疯狂"}
+
+  population_shifted:
+    participants: 2
+    lines:
+      - {speaker: A, text: "服务器最近感觉不一样。人更少"}
+      - {speaker: B, text: "夏末也许。小孩开学"}
+      - {speaker: A, text: "不这感觉更永久像人在走"}
+      - {speaker: B, text: "给时间。冒险岛总有周期"}
+      - {speaker: A, text: "希望你对"}
+
+  patch_notes_confusion:
+    participants: 2
+    lines:
+      - {speaker: A, text: "看补丁说明了吗"}
+      - {speaker: B, text: "没有好吗"}
+      - {speaker: A, text: "我字面不懂他们改啥哈哈"}
+      - {speaker: B, text: "经典Nexon沟通。说很多啥也没说"}
+      - {speaker: A, text: "所以本质没变"}
+
+  new_player_waves:
+    participants: 2
+    lines:
+      - {speaker: A, text: "最近见好多新人"}
+      - {speaker: B, text: "对好像冒险岛最近人气涨"}
+      - {speaker: A, text: "他们会留下还是试试就走"}
+      - {speaker: B, text: "也许1%留下。其余三周燃尽"}
+      - {speaker: A, text: "冒险岛生命循环"}
+
+  # NOSTALGIA / VETERAN VIBES
+
+  original_server_player:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我从内测玩。老冒险岛不一样"}
+      - {speaker: B, text: "多不一样"}
+      - {speaker: A, text: "一切更慢。更社区"}
+      - {speaker: B, text: "对古游戏听着怪好"}
+      - {speaker: A, text: "是。有天想念"}
+
+  class_balance_complainers:
+    participants: 2
+    lines:
+      - {speaker: A, text: "记得职业真平衡吗"}
+      - {speaker: B, text: "那字面从没发生哈哈"}
+      - {speaker: A, text: "好对。但感觉没那么破"}
+      - {speaker: B, text: "战力膨胀是真的。怀旧只是粉红眼镜"}
+      - {speaker: A, text: "也许但旧日感觉不一样"}
+
+  prebbq_grind_memories:
+    participants: 3
+    lines:
+      - {speaker: A, text: "大爆炸前升级绝对残忍"}
+      - {speaker: B, text: "字面几个月到120"}
+      - {speaker: C, text: "现在努力几周"}
+      - {speaker: A, text: "但那时升级像成就"}
+      - {speaker: B, text: "现在大家都满级感觉无意义"}
+      - {speaker: C, text: "那时旅程重要"}
+
+  fm_culture_shift:
+    participants: 2
+    lines:
+      - {speaker: A, text: "自由市场以前好社交。人真聊天"}
+      - {speaker: B, text: "现在就店和喇叭刷"}
+      - {speaker: A, text: "还有bot卖货"}
+      - {speaker: B, text: "自由市场进化了但丢了魂"}
+      - {speaker: A, text: "对"}
+
+  # HUMOR / CHAOS
+
+  typo_in_broadcast:
+    participants: 2
+    lines:
+      - {speaker: A, text: "看见那个喇叭整条商品打错字吗"}
+      - {speaker: B, text: "没有他写啥哈哈"}
+      - {speaker: A, text: "大概卖‘69攻工作手套’错字超多"}
+      - {speaker: B, text: "经典。卖货绝望压过校对", emote: 2}
+      - {speaker: A, text: "那消息反正没人买"}
+
+  pet_dragging_chaos:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我宠自动捡掉落也捡了大概47瓶药"}
+      - {speaker: B, text: "宠没设捡偏好吗"}
+      - {speaker: A, text: "这节点我都不知道自己在干啥"}
+      - {speaker: B, text: "看宠命令菜单。能过滤捡啥", emote: 2}
+      - {speaker: A, text: "哦…有设置"}
+
+  accidental_pk_provoke:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我刷压过某人气到他开始PK"}
+      - {speaker: B, text: "在啥…射手村？"}
+      - {speaker: A, text: "我正常练他们气了就试"}
+      - {speaker: B, text: "成功了吗"}
+      - {speaker: A, text: "没有我DPS高到他们打不着", emote: 3}
+      - {speaker: B, text: "那其实好笑"}
+
+  buff_spaghetti:
+    participants: 3
+    lines:
+      - {speaker: A, text: "buff图标太多忘了哪个哪个"}
+      - {speaker: B, text: "哈哈悬停看"}
+      - {speaker: C, text: "有次buff叠到看不见角色"}
+      - {speaker: A, text: "等等啥。怎么可能"}
+      - {speaker: C, text: "太多法师同时放太多buff哈哈"}
+      - {speaker: B, text: "buff叠也许冒险岛最乱的事", emote: 2}
+
+  passive_income_hustle:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我开店下线真能挂机赚金币吗"}
+      - {speaker: B, text: "对那就是倒卖要点"}
+      - {speaker: A, text: "算我一个那是梦"}
+      - {speaker: B, text: "但先得有启动资金"}
+      - {speaker: A, text: "哦对…陷阱"}
+
+  surprise_high_damage:
+    participants: 2
+    lines:
+      - {speaker: A, text: "刚发现攻击比我想的高好多"}
+      - {speaker: B, text: "你怎么没注意"}
+      - {speaker: A, text: "从没看属性哈哈就砸键"}
+      - {speaker: B, text: "那其实有效策略", emote: 2}
+      - {speaker: A, text: "大数字嗡嗡"}
+
+  wrong_job_advance:
+    participants: 2
+    lines:
+      - {speaker: A, text: "昨晚转职选错了"}
+      - {speaker: B, text: "哦不。能改吗"}
+      - {speaker: A, text: "不重开不行"}
+      - {speaker: B, text: "惨。但也许比你想的好"}
+      - {speaker: A, text: "也许但感觉不一样"}
+
+  free_to_play_struggle:
+    participants: 2
+    lines:
+      - {speaker: A, text: "免费玩好难"}
+      - {speaker: B, text: "得更高效用金币"}
+      - {speaker: A, text: "但基础药现在都贵"}
+      - {speaker: B, text: "多刷。唯一办法"}
+      - {speaker: A, text: "刷从不结束哈哈"}
+
+  boss_loot_bad_luck:
+    participants: 3
+    lines:
+      - {speaker: A, text: "刚扎昆五趟零掉落"}
+      - {speaker: B, text: "等等五趟？疯了"}
+      - {speaker: C, text: "运气那节点在咒你"}
+      - {speaker: A, text: "统计上该出货了吧", emote: 4}
+      - {speaker: B, text: "统计上你能0/20"}
+      - {speaker: A, text: "我恨统计"}
+
+  equip_downgrade_fear:
+    participants: 2
+    lines:
+      - {speaker: A, text: "怕砸我唯一好武器"}
+      - {speaker: B, text: "最终得升级它"}
+      - {speaker: A, text: "但炸了就啥没有"}
+      - {speaker: B, text: "练级留备用武器"}
+      - {speaker: A, text: "哦…那其实天才"}
+
+  level_bracket_anxiety:
+    participants: 2
+    lines:
+      - {speaker: A, text: "快到一切更难的等级"}
+      - {speaker: B, text: "那也许练级点错了"}
+      - {speaker: A, text: "不我就知道快撞墙"}
+      - {speaker: B, text: "墙就是调整策略的地方"}
+      - {speaker: A, text: "好师傅哈哈"}
+
+  duoing_challenge:
+    participants: 2
+    lines:
+      - {speaker: A, text: "双人练比单刷难多了"}
+      - {speaker: B, text: "为啥"}
+      - {speaker: A, text: "俩人抢怪。感觉一直在抢"}
+      - {speaker: B, text: "选够大的图"}
+      - {speaker: A, text: "但感觉不一样"}
+
+  equipment_aesthetic_priority:
+    participants: 2
+    lines:
+      - {speaker: A, text: "这装备属性差我还留着"}
+      - {speaker: B, text: "因为看着酷"}
+      - {speaker: A, text: "我喜欢好看多过优化"}
+      - {speaker: B, text: "有效。风格是游戏一部分"}
+      - {speaker: A, text: "终于有人懂"}
+
+  secret_shortcut_found:
+    participants: 2
+    lines:
+      - {speaker: A, text: "等等魔法密林有去玩具城传送？"}
+      - {speaker: B, text: "对没人用"}
+      - {speaker: A, text: "所以我坐船几个月白费"}
+      - {speaker: B, text: "欢迎来冒险岛探索"}
+      - {speaker: A, text: "这改变一切"}
+
+  pet_expiration_panic:
+    participants: 2
+    lines:
+      - {speaker: A, text: "我宠大概三小时过期"}
+      - {speaker: B, text: "有点券续吗"}
+      - {speaker: A, text: "没有钱也没了"}
+      - {speaker: B, text: "只能无捡刷吧"}
+      - {speaker: A, text: "黑暗时代要回来了"}
+
+  real_life_maple_balance:
+    participants: 2
+    lines:
+      - {speaker: A, text: "平衡冒险岛和现实责任不可能"}
+      - {speaker: B, text: "欢迎成人冒险岛"}
+      - {speaker: A, text: "记得能一天玩六小时"}
+      - {speaker: B, text: "那日子没了。现在睡前大概三十分钟"}
+      - {speaker: A, text: "至少刷适应了我作息"}
+
+  new_skill_wow_moment:
+    participants: 3
+    lines:
+      - {speaker: A, text: "刚解锁新技能破了"}
+      - {speaker: B, text: "啥技能"}
+      - {speaker: A, text: "不说万一秘密策略但哇"}
+      - {speaker: C, text: "你现在听着邪恶", emote: 3}
+      - {speaker: A, text: "我要用这毁一切"}
+
+  community_event_hype:
+    participants: 2
+    lines:
+      - {speaker: A, text: "听说全服活动要来"}
+      - {speaker: B, text: "对看着中"}
+      - {speaker: A, text: "这次奖励其实还行"}
+      - {speaker: B, text: "好好吧我参加"}
+      - {speaker: A, text: "这才对"}
+
+  scrolling_addiction:
+    participants: 2
+    lines:
+      - {speaker: A, text: "老砸不需要砸的东西"}
+      - {speaker: B, text: "为啥"}
+      - {speaker: A, text: "不知道看着涨好玩。即使无意义"}
+      - {speaker: B, text: "其实有共鸣。多巴胺"}
+      - {speaker: A, text: "我成瘾数字往上"}
+
+  endgame_goal_setting:
+    participants: 2
+    lines:
+      - {speaker: A, text: "终局你在冲啥"}
+      - {speaker: B, text: "说实话就跟朋友摸鱼打boss"}
+      - {speaker: A, text: "没有大目标"}
+      - {speaker: B, text: "过了有目标的点。我现在就存在着"}
+      - {speaker: A, text: "听着其实平静"}
+
+  map_ownership_territory:
+    participants: 3
+    lines:
+      - {speaker: A, text: "最爱图有人练你换别的吗"}
+      - {speaker: B, text: "我通常问能不能一起"}
+      - {speaker: C, text: "有时冷静有时毒"}
+      - {speaker: A, text: "图是怪社交契约"}
+      - {speaker: B, text: "像隐形领地"}
+      - {speaker: C, text: "冒险岛文化好怪哈哈"}

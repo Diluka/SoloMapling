@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
+import soloMapling.Environment.SoloMaplingLanguageConfig;
 
 import java.util.Map;
 
@@ -49,6 +50,19 @@ class SocialLlmConfigTest {
 
         SocialLlmConfig.configure(environment(Map.of("solomapling.llm.api-key", "test-token")));
         assertFalse(SocialLlmConfig.enabled());
+    }
+
+    @Test
+    void explicitLanguageOverridesHostForBothLlmAndStaticDialogue() {
+        SocialLlmConfig.configure(environment(Map.of(
+                "gms.service.language", "zh-CN", "solomapling.language", "en-US")));
+        assertEquals("en-US", SocialLlmConfig.languageTag());
+        assertEquals("BotDialoguePack", SoloMaplingLanguageConfig.dialoguePackDirectoryName());
+
+        SocialLlmConfig.configure(environment(Map.of(
+                "gms.service.language", "en-US", "solomapling.language", "zh-CN")));
+        assertEquals("zh-CN", SocialLlmConfig.languageTag());
+        assertEquals("BotDialoguePack-zh-CN", SoloMaplingLanguageConfig.dialoguePackDirectoryName());
     }
 
     @Test
