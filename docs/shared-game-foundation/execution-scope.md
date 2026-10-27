@@ -79,4 +79,4 @@ MCP 停服先关闭受理并处理所有 session，再使用同一停止票据�
 
 测试入口见[执行测试目录](../../beidou-integration/src/test/java/soloMapling/game/execution/)、[MCP 薄适配测试](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/AcceptanceActorExecutionTest.java)和[服务回归](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/ActorControlServiceTest.java)。其中 Bot、EventBus 和定时器合同使用真实原生资源及受控宿主路由替身；它们与实际普通角色的游戏后端证据分开记录，不代表完整 V2/PQ 已运行。
 
-关闭 #118 需要完整构建、CI、隔离普通角色/同 JVM 世界停启及实际部署证据，结果在对应 Issue 留存。[#119](https://github.com/Diluka/SoloMapling/issues/119) 原生动作证据、[#120](https://github.com/Diluka/SoloMapling/issues/120) 按需事实/事件、[#121](https://github.com/Diluka/SoloMapling/issues/121) NPC 会话和 #122～#129 各动作仍分别实现、验收；公共作用域加入不扩大当前 MCP 工具能力。
+关闭 #118 需要完整构建、CI、隔离普通角色/同 JVM 世界停启及实际部署证据，结果在对应 Issue 留存。[#119 普通聊天原生动作与证据](native-actions.md)、[#120](https://github.com/Diluka/SoloMapling/issues/120) 按需事实/事件、[#121](https://github.com/Diluka/SoloMapling/issues/121) NPC 会话和 #122～#129 各动作仍分别实现、验收；公共作用域加入不扩大当前 MCP 工具能力。

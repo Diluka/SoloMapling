@@ -5,6 +5,8 @@ import org.gms.net.server.world.World;
 import org.gms.soloacceptance.ObservationException;
 import org.springframework.http.HttpStatus;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.action.NativeActionService;
+import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
@@ -121,6 +123,22 @@ final class AcceptanceActorExecution {
         CharacterCommandLane.ControlPermit permit = control;
         if (permit == null) throw unverified();
         return lane.submit(work, permit, body, settled);
+    }
+
+    NativeActionService.ActionHandle prepareChat(ExecutionScope.WorkHandle work, NativeActorHandle exactHandle,
+                                                String text, Runnable mcpPreflight) {
+        CharacterCommandLane currentLane = lane;
+        CharacterCommandLane.Grant currentGrant = grant;
+        if (adopted != exactHandle || currentLane == null || currentGrant == null || control == null) {
+            throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
+        }
+        CharacterCommandLane.ControlPermit permit = currentLane.bindGrantedPermit(scope,
+                exactHandle.characterRef(), currentGrant, mcpPreflight);
+        return backend.prepareChat(exactHandle, currentLane, permit, work, new NativeChatAction(text));
+    }
+
+    NativeActionService.SubmissionReceipt submitChat(NativeActionService.ActionHandle action) {
+        return backend.submitChat(action);
     }
 
     boolean publishOpen(ExecutionScope.WorkHandle work, Runnable apply) { return scope.publishOnce(work, apply); }

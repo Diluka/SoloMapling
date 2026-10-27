@@ -39,7 +39,11 @@ solomapling:
 
 本轮角色场景观察改为定点登记，world/scene目录浏览保留原发现路径。原生读取故障仍是503而非LOST，场景/context不符409与已知旧session410分开；[#114](https://github.com/Diluka/SoloMapling/issues/114) 的Python映射最小修单独验收，不从共享测试推导已修复。
 
-[#118作用域/排空](https://github.com/Diluka/SoloMapling/issues/118) 的实现和各层验收分别记录，后续 [#119原生动作/证据](https://github.com/Diluka/SoloMapling/issues/119)、[#120按需事实/事件](https://github.com/Diluka/SoloMapling/issues/120)、[#121原生NPC会话](https://github.com/Diluka/SoloMapling/issues/121) 及 #122～#129 各动作保持待实现，逐叶范围见共享说明。MCP #110 已验收不等于公共#119/#121交付；现有NPC来源/路径/offer策略的提炼债务仍留#121。#112礼包、#113出行暂后排，任务树和里程碑保留，公共切片、MCP玩法、V2组合与PQ通关分别留证。
+[#118作用域/排空](https://github.com/Diluka/SoloMapling/issues/118) 和 [#119原生动作/证据](https://github.com/Diluka/SoloMapling/issues/119) 的实现与各层验收分别记录。
+
+#119 将普通聊天接入一份公共 Java 执行链；MCP 外层保留 request_id/操作历史、原有错误与 JSON 语义，真正 handler 派发检查点与操作开始执行分别记录。聊天只向原 session lane 提交一次，结果事实与 work 真实结算分开，七工具四动作不增加。证据 source/completeness 和 Bot 无收包的未知语义见[共享动作参考](../shared-game-foundation/native-actions.md)。
+
+后续 [#120按需事实/事件](https://github.com/Diluka/SoloMapling/issues/120)、[#121原生NPC会话](https://github.com/Diluka/SoloMapling/issues/121) 及 #122～#129 各动作保持待实现，逐叶范围见共享说明。MCP #110 已验收不等于公共 #121 交付，#119 普通聊天也不包含 NPC 来源/版本/路由；现有NPC来源/路径/offer策略的提炼债务仍留#121。#112礼包、#113出行暂后排，任务树和里程碑保留，公共切片、MCP玩法、V2组合与PQ通关分别留证。
 
 ## 目标与定位
 
