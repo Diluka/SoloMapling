@@ -43,6 +43,15 @@ in the relevant feature commits and tracking issues. Reusing these features
 does not imply that the complete plugin architecture or every plugin feature
 has been adopted.
 
+Dialogue and free-market localization is adapted from plugin source revision
+2e093c822d70b360b36ee55a75ba49f438ac4374. This includes the 19
+BotDialoguePack-zh-CN YAML dialogue resources, FMNameDesc-zh-CN word lists,
+the SoloMaplingLanguageConfig / LocalizedResources / DialoguePackPaths language
+selection helpers, and the corresponding merchant advertising, shop description
+and offer-message changes. Configuration and resource access are adapted to
+Spring Environment and this project's SoloResources reader. The plugin loader
+and host SPI are not adopted as part of this feature.
+
 Additional integration work is maintained by the Diluka/SoloMapling
 contributors under AGPL-3.0. This project is not an official release of
 SoloMapling, Cosmic or BeiDou and does not imply endorsement by their authors.

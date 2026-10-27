@@ -13,6 +13,7 @@ import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
 import soloMapling.Environment.EnvironmentManager;
 import soloMapling.Environment.EnvironmentPopulationConfig;
+import soloMapling.Environment.SoloMaplingLanguageConfig;
 import soloMapling.itemPool.DesirableEquipList;
 import soloMapling.itemPool.EquipMetadataCache;
 import soloMapling.server.BotTickService;
@@ -34,6 +35,7 @@ public final class BeiDouRuntime {
         }
         try {
             Environment environment = ServerManager.getApplicationContext().getEnvironment();
+            SoloMaplingLanguageConfig.configure(environment);
             SocialLlmService.configure(environment);
             EnvironmentPopulationConfig.setConfigPath(environment.getProperty("solomapling.population-config", ""));
             BotClientHandler.initHeadlessBotClient();
@@ -44,7 +46,8 @@ public final class BeiDouRuntime {
             // is disabled. Only this live lifecycle may restart message workers.
             MessageQueue.start();
             boolean spawn = environment.getProperty("solomapling.spawn-bots-on-startup", Boolean.class, false);
-            LOG.info("SoloMapling BeiDou integration ready; spawn-bots-on-startup={}", spawn);
+            LOG.info("SoloMapling BeiDou integration ready; spawn-bots-on-startup={} language={} dialogue-pack={}",
+                    spawn, SoloMaplingLanguageConfig.languageTag(), SoloMaplingLanguageConfig.dialoguePackDirectoryName());
             if (spawn) {
                 EnvironmentManager.environmentLoadStartup();
             }

@@ -1,6 +1,6 @@
 package soloMapling.ArtificialPlayer;
 
-import soloMapling.Environment.SoloResources;
+import soloMapling.Environment.SoloMaplingLanguageConfig;
 
 import org.gms.client.Character;
 import com.esotericsoftware.yamlbeans.YamlReader;
@@ -63,13 +63,14 @@ public class ConversationManager {
     // nobody's watching.
     private volatile Set<Integer> ambientMapIds = buildAmbientMapIds();
 
-    private static final String DIALOGUE_YAML = "src/main/java/soloMapling/ArtificialPlayer/BotDialoguePack/ConversationDialogue.yaml";
+    private static final String DIALOGUE_YAML = "ConversationDialogue.yaml";
 
     private final Set<Integer> botsInConversation = Collections.synchronizedSet(new HashSet<>());
     private final LinkedList<String> recentScriptIds = new LinkedList<>();
     private static final int RECENT_HISTORY_SIZE = 20;
 
     private volatile List<ConversationScript> allScripts;
+    private String scriptsLanguage;
 
     private ConversationManager() {}
 
@@ -343,6 +344,9 @@ public class ConversationManager {
     }
 
     private ConversationScript pickScript(int maxParticipants) {
+        if (allScripts == null || !SoloMaplingLanguageConfig.languageTag().equals(scriptsLanguage)) {
+            loadScripts();
+        }
         List<ConversationScript> eligible = new ArrayList<>();
         for (ConversationScript script : allScripts) {
             if (script.getParticipantCount() <= maxParticipants
@@ -415,8 +419,10 @@ public class ConversationManager {
 
     @SuppressWarnings("unchecked")
     private void loadScripts() {
+        String language = SoloMaplingLanguageConfig.languageTag();
         allScripts = new ArrayList<>();
-        try (java.io.Reader source = SoloResources.openReader(DIALOGUE_YAML)) {
+        recentScriptIds.clear();
+        try (java.io.Reader source = DialoguePackPaths.openDialogueReader(DIALOGUE_YAML)) {
             YamlReader reader = new YamlReader(source);
             Map<String, Object> root = (Map<String, Object>) reader.read();
             Map<String, Object> conversations = (Map<String, Object>) root.get("conversations");
@@ -443,6 +449,7 @@ public class ConversationManager {
                 allScripts.add(new ConversationScript(id, participants, parsedLines));
             }
 
+            scriptsLanguage = language;
             log("[ConversationManager] Loaded " + allScripts.size() + " conversation scripts.");
         } catch (Exception e) {
             log("[ConversationManager] Failed to load conversation scripts: " + e.getMessage());

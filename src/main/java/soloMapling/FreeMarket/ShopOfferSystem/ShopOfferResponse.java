@@ -85,10 +85,7 @@ public class ShopOfferResponse {
             shop.broadcast(PacketCreator.getPlayerShopItemUpdate(shop));
 
             if (player.isLoggedIn()) {
-                player.sendPacket(PacketCreator.getWhisperReceive(
-                        ownerName, player.getClient().getChannel(), false,
-                        "Hey, I updated the price on " + itemName + " to " + formatPrice(acceptedPrice) + ". Come grab it! " + roomLabel
-                ));
+                whisperPriceUpdate(player, ownerName, itemName, acceptedPrice, roomLabel);
             }
         }, delay);
     }
@@ -117,12 +114,23 @@ public class ShopOfferResponse {
             if (broadcastUpdate != null) broadcastUpdate.run();
 
             if (player.isLoggedIn()) {
-                player.sendPacket(PacketCreator.getWhisperReceive(
-                        ownerName, player.getClient().getChannel(), false,
-                        "Hey, I updated the price on " + itemName + " to " + formatPrice(acceptedPrice) + ". Come grab it! " + roomLabel
-                ));
+                whisperPriceUpdate(player, ownerName, itemName, acceptedPrice, roomLabel);
             }
         }, delay);
+    }
+
+    private static void whisperPriceUpdate(Character player, String ownerName, String itemName,
+                                            long acceptedPrice, String roomLabel) {
+        Map<String, String> replacements = new HashMap<>();
+        replacements.put("{item}", itemName);
+        replacements.put("{price}", formatPrice(acceptedPrice));
+        replacements.put("{room}", roomLabel);
+
+        String message = getDialogueLineWithReplacements("AFKPriceUpdate", replacements);
+        if (!message.isEmpty()) {
+            player.sendPacket(PacketCreator.getWhisperReceive(
+                    ownerName, player.getClient().getChannel(), false, message));
+        }
     }
 
     private static void acceptOffer(PlayerShop shop, Character owner, Character player,

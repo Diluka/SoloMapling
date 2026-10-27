@@ -14,6 +14,7 @@ import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.MessageQueue;
 import soloMapling.ArtificialPlayer.LlmSystem.SocialLlmService;
 import soloMapling.Environment.EnvironmentManager;
+import soloMapling.Environment.SoloMaplingLanguageConfig;
 import soloMapling.itemPool.DesirableEquipList;
 import soloMapling.itemPool.EquipMetadataCache;
 import soloMapling.server.BotTickService;
@@ -89,7 +90,7 @@ class BeiDouRuntimeLifecycleTest {
         CharacterTestContext.install();
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("test",
-                Map.of("solomapling.spawn-bots-on-startup", false)));
+                Map.of("solomapling.spawn-bots-on-startup", false, "gms.service.language", "zh-CN")));
         when(ServerManager.getApplicationContext().getEnvironment()).thenReturn(environment);
         Character partial = mock(Character.class);
         when(partial.getId()).thenReturn(713);
@@ -116,6 +117,7 @@ class BeiDouRuntimeLifecycleTest {
             environmentTasks.verify(EnvironmentManager::stop, times(1));
             llm.verify(SocialLlmService::shutdown, times(1));
             BeiDouRuntime.onServerReady();
+            assertEquals("zh-CN", SoloMaplingLanguageConfig.languageTag());
             assertEquals(2, starts.get());
             clients.verify(BotClientHandler::initHeadlessBotClient, times(2));
             messages.verify(MessageQueue::start, times(1));
@@ -126,6 +128,7 @@ class BeiDouRuntimeLifecycleTest {
             llm.verify(SocialLlmService::shutdown, times(2));
         } finally {
             BotRegistry.unregister(partial);
+            SoloMaplingLanguageConfig.configure(null);
         }
     }
 }

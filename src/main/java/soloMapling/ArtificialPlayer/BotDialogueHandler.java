@@ -130,21 +130,34 @@ public class BotDialogueHandler {
     }
 
     public static Map<String, Object> readDialogueYaml(String dialoguePack, String dialogueType, String dialogueNode) {
-        String dialoguePackBase = "src/main/java/soloMapling/ArtificialPlayer/BotDialoguePack/";
-        String filePath = String.format("%s%s", dialoguePackBase, dialoguePack);
-
-        Map<String, Object> dialogueConstructorNode = null;
-        try (java.io.Reader source = SoloResources.openReader(filePath)) {
-            YamlReader reader = new YamlReader(source);
-
-            // Read the root node
-            Map<String, Object> root = (Map<String, Object>) reader.read();
-            Map<String, Object> BotTypeNode = (Map<String, Object>) root.get(dialogueType);
-            dialogueConstructorNode = (Map<String, Object>) BotTypeNode.get(dialogueNode);
-        } catch (IOException e) {
-            e.printStackTrace();
+        String path = DialoguePackPaths.resolveRelative(dialoguePack);
+        if (path == null) {
+            return null;
         }
-        return dialogueConstructorNode;
+        Map<String, Object> node = readDialogueNode(path, dialogueType, dialogueNode);
+        if (node != null) {
+            return node;
+        }
+        // New upstream nodes may not have a translation yet. Preserve their English behavior.
+        String english = DialoguePackPaths.PACK_ROOT + DialoguePackPaths.DEFAULT_PACK + "/" + dialoguePack;
+        return !english.equals(path) && SoloResources.exists(english)
+                ? readDialogueNode(english, dialogueType, dialogueNode) : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> readDialogueNode(String path, String dialogueType, String dialogueNode) {
+        try (java.io.Reader source = SoloResources.openReader(path)) {
+            YamlReader reader = new YamlReader(source);
+            Object root = reader.read();
+            if (root instanceof Map<?, ?> packs
+                    && packs.get(dialogueType) instanceof Map<?, ?> nodes
+                    && nodes.get(dialogueNode) instanceof Map<?, ?> node) {
+                return (Map<String, Object>) node;
+            }
+        } catch (IOException failure) {
+            failure.printStackTrace();
+        }
+        return null;
     }
 
     public static DialogueConstructor getDialogueCon(String BotTypeDialoguePath, String BotType, String DialogueNodeName) {

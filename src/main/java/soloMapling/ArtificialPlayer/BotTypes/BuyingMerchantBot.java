@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import static soloMapling.ArtificialPlayer.BotDialogueHandler.getRandomResolvedLine;
 import static soloMapling.ArtificialPlayer.BotTypeManager.BotType.NX_MERCHANT_BOT;
 import static soloMapling.ArtificialPlayer.BotTypeManager.convertBotType;
 import static soloMapling.BotLogger.log;
@@ -113,19 +114,21 @@ public class BuyingMerchantBot extends BotSM {
         }
         String itemName = getItemName(itm.getItemId());
         if (itemName != null) {
-            String msg = buildBuyingMessage(itemName, getTradeWants().getMesoOffering());
-            SocialCommands.BotSpeak(getChr(), msg);
+            String msg = buildBuyingMessage(this, itemName, getTradeWants().getMesoOffering());
+            if (msg != null) {
+                SocialCommands.BotSpeak(getChr(), msg);
+            }
         }
     }
 
-    static String buildBuyingMessage(String itemName, int offerPrice) {
-        List<String> prefixes = List.of("Buying", "B>", "B>>", "BUY>", "Buying>");
-        List<String> suffixes = List.of("Trade Me", "PM me", "just trade me!", "hmu", "whisp me",
-                "no lowball", "no noobs", "no scammers", "Pros only", "hotties only", "no nx h0es",
-                "baddies only", "no weebs", "English Only", "No Spanish",
-                "serious offers only", "dont waste my time", "legit only", "fair price only");
-
-        String msg = getRandomElement(prefixes) + " " + itemName + " " + formatPriceToShorthand(offerPrice) + " " + getRandomElement(suffixes);
+    static String buildBuyingMessage(BotSM bot, String itemName, int offerPrice) {
+        String template = getRandomResolvedLine(bot, "BuyAdvertise");
+        if (template == null) {
+            return null;
+        }
+        String msg = template
+                .replace("%ITEM%", itemName)
+                .replace("%PRICE%", formatPriceToShorthand(offerPrice));
 
         int fillerCount = random.nextInt(3);
         for (int i = 0; i < fillerCount; i++) {

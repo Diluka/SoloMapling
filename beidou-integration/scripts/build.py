@@ -218,11 +218,17 @@ def run_tests(woven: Path, libraries: list[Path], bundle: Path) -> None:
         raise RuntimeError("未找到独立集成测试，拒绝将未验证构建报告为完成。")
     tests = TARGET / "test-classes"
     fresh_directory(tests)
+    test_resources = TARGET / "test-resources"
+    fresh_directory(test_resources)
+    for name, content in runtime_resources(REPOSITORY).items():
+        resource = test_resources / name
+        resource.parent.mkdir(parents=True, exist_ok=True)
+        resource.write_bytes(content)
     test_libraries = sorted((TARGET / "tools/test-libraries").glob("*.jar"))
     classpath = os.pathsep.join(map(str, [woven, bundle, console] + libraries + test_libraries))
     run([os.environ.get("JAVAC_COMMAND", "javac"), "--release", "21", "-proc:none",
          "-encoding", "UTF-8", "-classpath", classpath, "-d", str(tests)] + list(map(str, sources)))
-    runtime = os.pathsep.join(map(str, [tests, woven, bundle] + libraries + test_libraries))
+    runtime = os.pathsep.join(map(str, [tests, woven, test_resources, bundle] + libraries + test_libraries))
     run([os.environ.get("JAVA_COMMAND", "java"), "-jar", str(console), "execute",
          "--class-path", runtime, "--scan-class-path", str(tests), "--fail-if-no-tests",
          "--disable-banner", "--reports-dir", str(TARGET / "test-reports")])

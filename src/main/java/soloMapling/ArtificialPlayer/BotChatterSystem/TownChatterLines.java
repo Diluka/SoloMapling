@@ -1,6 +1,7 @@
 package soloMapling.ArtificialPlayer.BotChatterSystem;
 
-import soloMapling.Environment.SoloResources;
+import soloMapling.ArtificialPlayer.DialoguePackPaths;
+import soloMapling.Environment.SoloMaplingLanguageConfig;
 
 import com.esotericsoftware.yamlbeans.YamlReader;
 
@@ -19,25 +20,29 @@ public final class TownChatterLines {
     private TownChatterLines() {
     }
 
-    private static final String YAML_PATH =
-            "src/main/java/soloMapling/ArtificialPlayer/BotDialoguePack/TownChatterDialogue.yaml";
+    private static final String YAML_PATH = "TownChatterDialogue.yaml";
 
     private static volatile List<List<String>> cached;
+    private static String cachedLanguage;
     private static final Random RANDOM = new Random();
 
     // Parsed exchanges (cached after first load). Empty list on any parse/IO failure.
-    public static List<List<String>> exchanges() {
+    public static synchronized List<List<String>> exchanges() {
+        String language = SoloMaplingLanguageConfig.languageTag();
         List<List<String>> local = cached;
-        if (local == null) {
+        if (local == null || !language.equals(cachedLanguage)) {
             local = load();
             cached = local;
+            cachedLanguage = language;
         }
         return local;
     }
 
     // Force a re-read from disk (used by the live-tuning !env chatter command so edits apply without a restart).
-    public static List<List<String>> reload() {
+    public static synchronized List<List<String>> reload() {
+        String language = SoloMaplingLanguageConfig.languageTag();
         cached = load();
+        cachedLanguage = language;
         return cached;
     }
 
@@ -53,7 +58,7 @@ public final class TownChatterLines {
     @SuppressWarnings("unchecked")
     private static List<List<String>> load() {
         List<List<String>> out = new ArrayList<>();
-        try (java.io.Reader source = SoloResources.openReader(YAML_PATH)) {
+        try (java.io.Reader source = DialoguePackPaths.openDialogueReader(YAML_PATH)) {
             YamlReader reader = new YamlReader(source);
             Map<String, Object> root = (Map<String, Object>) reader.read();
             if (root == null) {

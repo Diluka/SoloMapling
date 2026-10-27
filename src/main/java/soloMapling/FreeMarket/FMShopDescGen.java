@@ -1,12 +1,12 @@
 package soloMapling.FreeMarket;
 
-import soloMapling.Environment.SoloResources;
-
 import org.gms.client.inventory.Equip;
 import org.gms.client.inventory.InventoryType;
 import org.gms.client.inventory.Item;
 import org.gms.server.ItemInformationProvider;
 import org.gms.server.maps.PlayerShopItem;
+import soloMapling.Environment.LocalizedResources;
+import soloMapling.Environment.SoloResources;
 import soloMapling.itemPool.ScrolledItemComparator;
 
 import java.io.BufferedReader;
@@ -20,26 +20,31 @@ import java.util.Random;
 
 public class FMShopDescGen {
 
-    static String filePath_FMNameDesc = "src/main/java/soloMapling/FreeMarket/FMNameDesc/";
+    static final String NAME_DESC_PARENT = "FreeMarket/";
+    static final String NAME_DESC_PACK = "FMNameDesc";
     static List<String> topFMClans = new ArrayList<>();
+    private static String topFMClansResource = "";
 
-    protected static final Map<String, String> typeToFilePath;
+    protected static final Map<String, String> typeToFileName;
 
     static {
-        typeToFilePath = new HashMap<>();
-        typeToFilePath.put("ign", filePath_FMNameDesc + "randomRealMaplestoryIGNs.txt");
-        typeToFilePath.put("thief", filePath_FMNameDesc + "thiefDesc.txt");
-        typeToFilePath.put("warrior", filePath_FMNameDesc + "warriorDesc.txt");
-        typeToFilePath.put("mage", filePath_FMNameDesc + "mageDesc.txt");
-        typeToFilePath.put("bowman", filePath_FMNameDesc + "bowmanDesc.txt");
-        typeToFilePath.put("chair", filePath_FMNameDesc + "chairDesc.txt");
-        typeToFilePath.put("scrolls", filePath_FMNameDesc + "scrollsDesc.txt");
-        typeToFilePath.put("useable", filePath_FMNameDesc + "useableDesc.txt");
-        typeToFilePath.put("etc", filePath_FMNameDesc + "etcDesc.txt");
-        typeToFilePath.put("common", filePath_FMNameDesc + "commonDesc.txt");
-        typeToFilePath.put("fmclan", filePath_FMNameDesc + "FMClans.txt");
-        typeToFilePath.put("shortword", filePath_FMNameDesc + "shortWordDesc.txt");
-        typeToFilePath.put("emojis", filePath_FMNameDesc + "emojiFaces.txt");
+        typeToFileName = new HashMap<>();
+        typeToFileName.put("ign", "randomRealMaplestoryIGNs.txt");
+        typeToFileName.put("thief", "thiefDesc.txt");
+        typeToFileName.put("warrior", "warriorDesc.txt");
+        typeToFileName.put("mage", "mageDesc.txt");
+        typeToFileName.put("bowman", "bowmanDesc.txt");
+        typeToFileName.put("chair", "chairDesc.txt");
+        typeToFileName.put("scrolls", "scrollsDesc.txt");
+        typeToFileName.put("useable", "useableDesc.txt");
+        typeToFileName.put("etc", "etcDesc.txt");
+        typeToFileName.put("common", "commonDesc.txt");
+        typeToFileName.put("fmclan", "FMClans.txt");
+        typeToFileName.put("shortword", "shortWordDesc.txt");
+        typeToFileName.put("emojis", "emojiFaces.txt");
+        typeToFileName.put("offerable", "offerableDesc.txt");
+        typeToFileName.put("welcome", "welcomeDesc.txt");
+        typeToFileName.put("rwtcurrency", "rwtCurrencyDesc.txt");
     }
 
     protected static final Map<String, String> ITEM_ACRONYM_MAP = Map.ofEntries(
@@ -97,14 +102,27 @@ public class FMShopDescGen {
             fmClan = asciiBorderString(fmClan, 19);
         }
 
-        if (fmClan.length() < 14) { // Pad out with white space
-            int spacesToAdd = 18 - fmClan.length() + 6;
+        int width = displayWidth(fmClan);
+        if (width < 14) { // Pad out with white space
+            int spacesToAdd = 18 - width + 6;
             fmClan += " ".repeat(spacesToAdd);
-        } else if (fmClan.length() < 18) { // Pad out with white space
-            int spacesToAdd = 18 - fmClan.length() + 2;
+        } else if (width < 18) { // Pad out with white space
+            int spacesToAdd = 18 - width + 2;
             fmClan += " ".repeat(spacesToAdd);
         }
         return fmClan;
+    }
+
+    /** Rendered width in half-width cells, so CJK shop names aren't padded as if they were ASCII. */
+    protected static int displayWidth(String str) {
+        if (str == null) {
+            return 0;
+        }
+        int width = 0;
+        for (int i = 0; i < str.length(); i++) {
+            width += Character.UnicodeBlock.of(str.charAt(i)) == Character.UnicodeBlock.BASIC_LATIN ? 1 : 2;
+        }
+        return width;
     }
 
     protected static String randomShortWordsPhrases() {
@@ -128,9 +146,10 @@ public class FMShopDescGen {
         return null;
     }
 
+    // Localized currency lists aren't guaranteed to be two-letter, so anything else passes through.
     protected static String transformTwoLetterString(String input) {
         if (input == null || input.length() != 2) {
-            throw new IllegalArgumentException("Input must be a two-letter string.");
+            return input;
         }
 
         if (Math.random() < 0.5) { // 50% chance
@@ -144,35 +163,29 @@ public class FMShopDescGen {
     }
 
     protected static String advertiseRWTCurrencies() {
-        // Define the list of currencies
-        List<String> rwtCurrencies = new ArrayList<>(List.of("NX", "PP", "WS", "WU", "MP"));
+        List<String> rwtCurrencies = getStoreDescriptionLines("rwtcurrency");
+        if (rwtCurrencies.isEmpty()) {
+            return null;
+        }
 
         Random random = new Random();
-        int numberOfCurrencies = random.nextInt(3) + 1; // Random number between 1 and 5
-
-        List<String> selectedCurrencies = rwtCurrencies.subList(0, numberOfCurrencies);
+        int numberOfCurrencies = Math.min(random.nextInt(3) + 1, rwtCurrencies.size());
 
         StringBuilder result = new StringBuilder("|");
-        for (String currency : selectedCurrencies) {
-            String curr = transformTwoLetterString(currency);
-            result.append(curr).append("|");
+        for (int i = 0; i < numberOfCurrencies; i++) {
+            result.append(transformTwoLetterString(rwtCurrencies.get(i))).append("|");
         }
 
         return result.toString();
     }
 
     protected static String getOfferableDescription() {
-        List<String> offerStrings = new ArrayList<>(List.of("L/O", "L/N/O"));
-        offerStrings.add("Offer");
-        offerStrings.add("Leave Offer");
-        offerStrings.add("Buy or Offer");
-        // "H/O", "C/O"
-        // Add more dynamically as needed
+        return convertToLowerCaseWithChance(getRandomStoreDescription("offerable"));
+    }
 
-        Random random = new Random();
-        int randomIndex = random.nextInt(offerStrings.size());
-        String selectedString = offerStrings.get(randomIndex);
-        return convertToLowerCaseWithChance(selectedString);
+    /** Shop greeting line; {@code %OWNER%} is filled with the shop owner's IGN. */
+    protected static String getWelcomeDescription(String owner) {
+        return getRandomStoreDescription("welcome").replace("%OWNER%", owner);
     }
 
     protected static String convertToLowerCaseWithChance(String input) {
@@ -294,7 +307,12 @@ public class FMShopDescGen {
     }
 
 
-    protected static String getRandomTopFMClan() {
+    protected static synchronized String getRandomTopFMClan() {
+        String resource = resolveFilePath("fmclan");
+        if (!resource.equals(topFMClansResource)) {
+            topFMClans.clear();
+            topFMClansResource = resource;
+        }
         if (topFMClans.isEmpty()) {
             for (int i = 0; i < 7; i++) {
                 topFMClans.add(getRandomStoreDescription("fmclan"));
@@ -361,12 +379,44 @@ public class FMShopDescGen {
         return names;
     }
 
+    /** Localized word list first ({@code FMNameDesc-zh-CN/}), English list as fallback. */
     protected static String resolveFilePath(String type) {
-        return typeToFilePath.getOrDefault(type, ""); // Default to empty string if type not found
+        String fileName = typeToFileName.get(type);
+        if (fileName == null) {
+            return "";
+        }
+        String resolved = LocalizedResources.resolve(NAME_DESC_PARENT, NAME_DESC_PACK, fileName);
+        return resolved != null ? resolved : "";
+    }
+
+    /** Whole word list in file order; empty when the list is missing or unreadable. */
+    protected static List<String> getStoreDescriptionLines(String type) {
+        String filePath = resolveFilePath(type);
+        if (filePath.isEmpty()) {
+            System.err.println("[FMShopDescGen] no word list for type: " + type);
+            return List.of();
+        }
+
+        List<String> lines = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(SoloResources.openReader(filePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.isBlank()) {
+                    lines.add(line);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return lines;
     }
 
     protected static String getRandomStoreDescription(String type) {
         String filePath = resolveFilePath(type);
+        if (filePath.isEmpty()) {
+            System.err.println("[FMShopDescGen] no word list for type: " + type);
+            return "null";
+        }
 
         try (BufferedReader reader = new BufferedReader(SoloResources.openReader(filePath))) {
             String line;
@@ -401,16 +451,12 @@ public class FMShopDescGen {
     }
 
     protected static String asciiBorderString(String str, int maxLineLength) {
-        int maxBorderStyleLength = (maxLineLength - str.length()) / 2;
-
-        String borderStyle = selectRandomAsciiBorderCharacters(maxBorderStyleLength);
-        if (str == null || str.length() > maxLineLength - 2) {
+        if (str == null || displayWidth(str) > maxLineLength - 2) {
             throw new IllegalArgumentException("String must be non-null and fit within the max line length with borders.");
         }
 
-        // Calculate the number of border characters needed on each side
-        int totalSpaces = maxLineLength - str.length();
-        int borderLength = totalSpaces / 2;
+        int maxBorderStyleLength = (maxLineLength - displayWidth(str)) / 2;
+        String borderStyle = selectRandomAsciiBorderCharacters(maxBorderStyleLength);
 
         return borderStyle + str + reverseString(borderStyle);
     }

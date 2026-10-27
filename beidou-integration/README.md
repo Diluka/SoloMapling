@@ -55,6 +55,21 @@ python3 beidou-integration/scripts/build.py \
 构建脚本需要 Git 元数据来核对 submodule 和导出其已提交源码，因此不在排除了
 `.git` 的 Docker 构建上下文中重复编译。镜像构建只消费已验证产物，不自动拉取上游。
 
+## 语言与资源
+
+机器人的静态对话和市场文案使用同一语言设置：优先读取本地 `application.yml`
+的 `solomapling.language`，未配置时沿用 `gms.service.language`，最后使用 `en-US`。
+使用简体中文可配置 `solomapling.language: zh-CN`；切换英文配置为 `en-US`。
+保留现有 YAML 节点和其他参数，修改后重启应用，不需要重新构建。
+
+构建将 `BotDialoguePack`、`BotDialoguePack-zh-CN` 及市场词表一同打入服务 JAR，
+使用 Solo 的资源读取器加载，不依赖源码目录或插件装载平台。中文资源优先，
+缺少文件或对话节点时回退英文；英文资源继续保留以兼容原版更新。
+LLM 沿用相同语言选择，静态本地化无须启用模型调用。
+
+本项不修改北斗资源、配置或迁移。具体来源与持续更新约定见
+[维护说明](MAINTENANCE.md#本地化来源与更新)。
+
 ## 验证边界
 
 构建会验证 submodule 始终干净；默认执行独立的 LLM 与集成 JUnit 测试，
@@ -68,6 +83,11 @@ Spring Boot 要求使用 STORED；额外的 Jackson
 ```bash
 python3 -m unittest discover -s beidou-integration/scripts -p 'test_*.py'
 ```
+
+本地化验收需覆盖中文与英文选择、语言优先级、缺资源回退、市场文案消费点及
+最终 JAR 内资源。实际服务还应核对启动采用的语言与机器人人数；当前本地部署
+沿用单独调整后的 74 个机器人，语言更新不应恢复上游大规模人口配置。
+真实客户端的中文渲染、聊天和市场玩法，以及真实 LLM 调用，另记实际验证结果。
 
 服务仍需按北斗原有运行目录提供 WZ、脚本和本地 `application.yml`，并从同一
 配置文件完成预建库与 Spring 启动。例如：
