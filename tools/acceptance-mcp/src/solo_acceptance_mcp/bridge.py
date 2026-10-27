@@ -121,9 +121,12 @@ class BridgeError(Exception):
         return data
 
 
-def validate_observation(scope: str, scene_ref: str | None, limit: int) -> None:
-    if not isinstance(scope, str) or scope not in {"world", "scene"}:
-        raise BridgeError("INVALID_ARGUMENTS", "scope 只支持 world 或 scene。")
+def validate_observation(
+    scope: str, scene_ref: str | None, limit: int, *, session_id: str | None = None,
+    expected_generation: int | None = None, since_cursor: int = 0,
+) -> None:
+    if not isinstance(scope, str) or scope not in {"world", "scene", "actor"}:
+        raise BridgeError("INVALID_ARGUMENTS", "scope 只支持 world、scene 或 actor。")
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
         raise BridgeError("INVALID_ARGUMENTS", "limit 必须是 1～500 之间的整数。")
     if scene_ref is not None and (
@@ -137,6 +140,14 @@ def validate_observation(scope: str, scene_ref: str | None, limit: int) -> None:
         raise BridgeError("INVALID_ARGUMENTS", "观察 scene 需要先从 world 观察取得 scene_ref。")
     if scope == "world" and scene_ref is not None:
         raise BridgeError("INVALID_ARGUMENTS", "world 观察不接受 scene_ref。")
+    validate_integer(since_cursor, "since_cursor", 0, MAX_LONG)
+    if scope == "actor":
+        if scene_ref is not None or session_id is None or expected_generation is None:
+            raise BridgeError("INVALID_ARGUMENTS", "actor 观察需要 session_id 和 expected_generation，不接受 scene_ref。")
+        validate_identifier(session_id, "session_id")
+        validate_integer(expected_generation, "expected_generation", 1, MAX_LONG)
+    elif session_id is not None or expected_generation is not None or since_cursor != 0:
+        raise BridgeError("INVALID_ARGUMENTS", "world 和 scene 观察不接受角色会话参数或非零包游标。")
 
 
 MAX_LONG = 2**63 - 1
@@ -183,9 +194,20 @@ class BridgeClient:
         return await self._authorized_request("GET", "/solo/acceptance/v1/capabilities")
 
     async def observe(
-        self, scope: str = "world", scene_ref: str | None = None, limit: int = 100
+        self, scope: str = "world", scene_ref: str | None = None, limit: int = 100,
+        *, session_id: str | None = None, expected_generation: int | None = None,
+        since_cursor: int = 0,
     ) -> dict[str, Any]:
-        validate_observation(scope, scene_ref, limit)
+        validate_observation(scope, scene_ref, limit, session_id=session_id,
+                             expected_generation=expected_generation, since_cursor=since_cursor)
+        if scope == "actor":
+            return await self._authorized_request(
+                "POST", "/solo/acceptance/v1/actor/observe",
+                {"requestId": str(uuid4()), "data": {
+                    "session_id": session_id, "expected_generation": expected_generation,
+                    "since_cursor": since_cursor, "limit": limit,
+                }},
+            )
         data: dict[str, Any] = {"scope": scope, "limit": limit}
         if scene_ref is not None:
             data["scene_ref"] = scene_ref

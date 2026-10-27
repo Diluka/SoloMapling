@@ -76,13 +76,17 @@ def build_server(config: BridgeConfig) -> MCPServer:
 
     @server.tool(annotations=read_annotations)
     async def game_observe(
-        scope: Literal["world", "scene"] = "world",
+        scope: Literal["world", "scene", "actor"] = "world",
         scene_ref: str | None = None,
         limit: Limit = 100,
+        *, session_id: Identifier | None = None,
+        expected_generation: Generation | None = None,
+        since_cursor: Cursor = 0,
     ) -> CallToolResult:
-        """只读观察 world 或已返回的 scene_ref；不会创建地图、角色或副本。"""
+        """只读观察 world、真实 scene_ref 或已打开 actor 会话的包事件；actor 的 since_cursor 是独立包序号，不是 operation 生命周期游标。"""
         try:
-            return result(await bridge.observe(scope, scene_ref, limit))
+            return result(await bridge.observe(scope, scene_ref, limit, session_id=session_id,
+                                              expected_generation=expected_generation, since_cursor=since_cursor))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 

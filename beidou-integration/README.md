@@ -80,7 +80,9 @@ R2a 新增专用原生角色的登录、正常退出、存档核验和异步操�
 配置、工具能力与当前验收边界见 [MCP 方案与迭代状态](../docs/mcp-acceptance/README.md)；
 安装和显式目标的协议/角色冒烟见 [工具运行说明](../tools/acceptance-mcp/README.md)。
 MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities` 为准。
-普通聊天、NPC 对话和命名 recipe 仍按后续切片交付，角色生命周期不代表这些玩法已通过。
+#70 候选沿用 `game_observe` 增加 actor 包事件只读窗口，六工具数量与 `implementation_round=R2a`
+保持不变；应检查 `scopes` 中的 actor 和 `actor_control.packet_observation`，实际隔离及部署验收仍待完成。
+普通聊天、NPC 控制和命名 recipe 继续独立交付，观察到包正文不代表已完成这些玩法。
 
 ## 验证边界
 

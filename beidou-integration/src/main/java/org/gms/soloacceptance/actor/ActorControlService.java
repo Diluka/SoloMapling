@@ -212,6 +212,82 @@ public final class ActorControlService {
         return refreshedResponse(operation, 0, 100);
     }
 
+    /** Diagnostic reads never consume operation history or enter the session's write queue. */
+    public Map<String, Object> observe(String owner, ActorObserveRequest request) {
+        validateOwner(owner);
+        if (request == null || request.sessionId() == null
+                || !request.sessionId().matches("[A-Za-z0-9_.-]{1,128}")
+                || request.expectedGeneration() == null || request.expectedGeneration() < 1) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
+        }
+        long cursor = request.sinceCursor() == null ? 0 : request.sinceCursor();
+        int limit = request.limit() == null ? 100 : request.limit();
+        if (cursor < 0 || limit < 1 || limit > 500) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_packet_window");
+        }
+        Session session;
+        NativeActorHandle handle;
+        String generation;
+        synchronized (monitor) {
+            requireAccepting();
+            session = ownedSession(owner, request.sessionId(), request.expectedGeneration());
+            if (!sameWorld(session)) throw error(HttpStatus.GONE, "stale_actor_session");
+            if (!"OPEN".equals(session.state)) {
+                throw error(List.of("OPENING", "CLOSING").contains(session.state)
+                        ? HttpStatus.CONFLICT : HttpStatus.GONE,
+                        List.of("OPENING", "CLOSING").contains(session.state)
+                                ? "actor_not_observable" : "stale_actor_session");
+            }
+            handle = session.handle;
+            if (handle == null) throw error(HttpStatus.GONE, "stale_actor_session");
+            generation = worldGeneration;
+        }
+
+        Map<String, Object> actor = null;
+        Map<String, Object> events = null;
+        boolean current;
+        try {
+            current = backend.isCurrent(handle);
+            if (current) {
+                actor = actorSnapshot(handle);
+                current = Boolean.TRUE.equals(actor.get("logged_in_world"));
+                if (current) {
+                    synchronized (monitor) {
+                        requireObservationUnchanged(session, handle, generation);
+                    }
+                    events = copy(handle.client().packetEvents(cursor, limit));
+                    current = backend.isCurrent(handle);
+                }
+            }
+        } catch (RuntimeException failure) {
+            synchronized (monitor) {
+                requireObservationUnchanged(session, handle, generation);
+            }
+            throw failure;
+        }
+        synchronized (monitor) {
+            requireObservationUnchanged(session, handle, generation);
+            if (!current) {
+                session.state = "LOST";
+                session.lastActor = null;
+                throw error(HttpStatus.GONE, "stale_actor_session");
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("schema_version", 1);
+            result.put("captured_at", Instant.now().toString());
+            result.put("scope", "actor");
+            result.put("runtime_generation", generation);
+            result.put("information_level", "server_diagnostic");
+            result.put("snapshot_consistency", "best_effort");
+            result.put("session_id", session.id);
+            result.put("session_generation", session.generation);
+            result.put("profile_id", session.profile);
+            result.put("actor", actor);
+            result.put("events", events);
+            return result;
+        }
+    }
+
     /** Read-only lookup for observation; game actions must remain on the session's serial executor. */
     public Optional<NativeActorHandle> currentActor(String owner, String sessionId, long expectedGeneration) {
         validateOwner(owner);
@@ -247,6 +323,7 @@ public final class ActorControlService {
             result.put("actor_accepting_requests", live());
             result.put("operation_event_kind", "lifecycle");
             result.put("close_cancellation", "native_cleanup_continues_after_acceptance");
+            result.put("packet_observation", AcceptanceClient.packetObservationCapabilities());
             result.put("quarantined_profiles", profiles.values().stream()
                     .filter(session -> "QUARANTINED".equals(session.state)).map(session -> session.profile).toList());
             return result;
@@ -390,6 +467,13 @@ public final class ActorControlService {
         refreshActor(operation.session);
         synchronized (monitor) {
             return response(operation, cursor, limit);
+        }
+    }
+
+    private void requireObservationUnchanged(Session session, NativeActorHandle handle, String generation) {
+        if (!live() || !generation.equals(worldGeneration) || !generation.equals(session.runtimeGeneration)
+                || session.handle != handle || !"OPEN".equals(session.state)) {
+            throw error(HttpStatus.CONFLICT, "runtime_changed");
         }
     }
 

@@ -6,22 +6,23 @@ import org.gms.net.packet.Packet;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 
-import java.util.ArrayDeque;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /** Socket-free player transport. Native login, ownership and persistence remain in Client. */
 public final class AcceptanceClient extends Client {
-    private static final int PACKET_CAPACITY = 256;
+    private static final Map<String, Object> PACKET_OBSERVATION_CAPABILITIES = Map.of(
+            "capacity", PacketEventBuffer.CAPACITY,
+            "maximum_text_chars", PacketEventDecoder.MAXIMUM_TEXT_CHARS,
+            "cursor_scope", "session_packet_sequence",
+            "decoded_packets", List.of(
+                    Map.of("event_type", "chat_text", "opcode", PacketEventDecoder.CHAT_TEXT),
+                    Map.of("event_type", "player_hint", "opcode", PacketEventDecoder.PLAYER_HINT),
+                    Map.of("event_type", "server_message", "opcode", PacketEventDecoder.SERVER_MESSAGE,
+                            "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7))));
     private final World boundWorld;
     private final Channel boundChannel;
-    private final ArrayDeque<Map<String, Object>> packets = new ArrayDeque<>();
-    private long packetSequence;
-    private long droppedPackets;
-    private long malformedPackets;
-    private volatile boolean closed;
+    private final PacketEventBuffer packets = new PacketEventBuffer();
 
     public AcceptanceClient(Type type, long sessionId, String remoteAddress, World world, Channel channel) {
         super(type, sessionId, remoteAddress, null, world.getId(), channel.getId());
@@ -46,74 +47,40 @@ public final class AcceptanceClient extends Client {
 
     @Override
     public void sendPacket(Packet packet) {
-        if (closed) return;
-        byte[] bytes = null;
-        String malformedReason = null;
-        if (packet == null) {
-            malformedReason = "packet_missing";
-        } else {
-            try {
-                bytes = packet.getBytes();
-                if (bytes == null) malformedReason = "packet_bytes_missing";
-                else if (bytes.length < 2) malformedReason = "packet_header_missing";
-            } catch (RuntimeException ignored) {
-                malformedReason = "packet_read_failed";
-            }
-        }
-        Integer opcode = bytes == null || bytes.length < 2 ? null
-                : (bytes[0] & 0xff) | ((bytes[1] & 0xff) << 8);
-        synchronized (packets) {
-            if (closed) return;
-            if (packets.size() == PACKET_CAPACITY) {
-                packets.removeFirst();
-                droppedPackets++;
-            }
-            Map<String, Object> summary = new LinkedHashMap<>();
-            summary.put("sequence", ++packetSequence);
-            summary.put("opcode", opcode);
-            summary.put("length", bytes == null ? null : bytes.length);
-            if (malformedReason != null) {
-                malformedPackets++;
-                summary.put("malformed", true);
-                summary.put("reason", malformedReason);
-            }
-            packets.addLast(Collections.unmodifiableMap(summary));
-        }
+        packets.accept(packet, getLanguage());
     }
 
     public List<Map<String, Object>> packetSummaries() {
-        synchronized (packets) {
-            return List.copyOf(packets);
-        }
+        return packets.summaries();
+    }
+
+    public Map<String, Object> packetEvents(long sinceCursor, int limit) {
+        return packets.window(sinceCursor, limit);
+    }
+
+    public static Map<String, Object> packetObservationCapabilities() {
+        return PACKET_OBSERVATION_CAPABILITIES;
     }
 
     public long droppedPacketCount() {
-        synchronized (packets) {
-            return droppedPackets;
-        }
+        return packets.dropped();
     }
 
     public long malformedPacketCount() {
-        synchronized (packets) {
-            return malformedPackets;
-        }
+        return packets.malformed();
     }
 
     public long latestPacketSequence() {
-        synchronized (packets) {
-            return packetSequence;
-        }
+        return packets.latest();
     }
 
     public boolean transportClosed() {
-        return closed;
+        return packets.closed();
     }
 
     @Override
     public void closeSession() {
-        synchronized (packets) {
-            closed = true;
-        }
+        packets.close();
     }
 
     @Override

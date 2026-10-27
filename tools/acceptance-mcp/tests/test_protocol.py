@@ -31,7 +31,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(tool.annotations.idempotent_hint)
             observe = next(tool for tool in tools if tool.name == "game_observe")
             props = observe.input_schema["properties"]
-            self.assertEqual(["world", "scene"], props["scope"]["enum"])
+            self.assertEqual(["world", "scene", "actor"], props["scope"]["enum"])
             self.assertEqual(1, props["limit"]["minimum"])
             self.assertEqual(500, props["limit"]["maximum"])
             response = await client.call_tool("game_capabilities", {})

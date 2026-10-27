@@ -63,6 +63,8 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.close(null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
+                assertThrows(ObservationException.class, () -> controller.observe(null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
@@ -70,6 +72,8 @@ class ActorControlControllerTest {
         authenticate("reader", "ROLE_USER");
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
+        assertEquals(HttpStatus.FORBIDDEN,
+                assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         verifyNoInteractions(service);
     }
 
@@ -104,6 +108,26 @@ class ActorControlControllerTest {
     }
 
     @Test
+    void observationDelegatesToTheOwnerScopedReadWithoutPassingRequestIdsToAnOperation() {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("operator-a", "ROLE_ADMIN");
+        ActorObserveRequest data = new ActorObserveRequest("session-id", 7L, 12L, 25);
+        Map<String, Object> snapshot = Map.of("scope", "actor", "session_id", "session-id");
+        when(service.observe("operator-a", data)).thenReturn(snapshot);
+
+        var first = controller.observe(new SubmitBody<>("read-first", data));
+        var repeated = controller.observe(new SubmitBody<>("read-next", data));
+        assertEquals(20000, first.getCode());
+        assertEquals("read-first", first.getResponseId());
+        assertSame(snapshot, first.getData());
+        assertEquals("read-next", repeated.getResponseId());
+        assertSame(snapshot, repeated.getData());
+        verify(service, times(2)).observe("operator-a", data);
+        verifyNoMoreInteractions(service);
+    }
+
+    @Test
     void missingBodyOrDataIsAControlledBadRequest() {
         ActorControlService service = mock(ActorControlService.class);
         ActorControlController controller = new ActorControlController(service);
@@ -114,6 +138,10 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.open(new SubmitBody<>("request", null))).status());
         assertEquals(HttpStatus.BAD_REQUEST,
                 assertThrows(ObservationException.class, () -> controller.close(new SubmitBody<>("request", null))).status());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ObservationException.class, () -> controller.observe(null)).status());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ObservationException.class, () -> controller.observe(new SubmitBody<>("request", null))).status());
         assertEquals(HttpStatus.BAD_REQUEST,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
         verifyNoInteractions(service);
@@ -162,6 +190,43 @@ class ActorControlControllerTest {
         for (String value : List.of("1.5", "\"7\"", "false", "9223372036854775808")) {
             assertThrows(Exception.class, () -> mapper.readValue(
                     "{\"session_id\":\"session-id\",\"expected_generation\":" + value + "}", ActorCloseRequest.class), value);
+        }
+    }
+
+    @Test
+    void packetObservationDefaultsAndIntegerWidthsDoNotApplyServiceRangeRules() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        ActorObserveRequest defaulted = mapper.readValue(
+                "{\"session_id\":\"session-id\",\"expected_generation\":7}", ActorObserveRequest.class);
+        assertEquals(new ActorObserveRequest("session-id", 7L, 0L, 100), defaulted);
+        ActorObserveRequest explicit = mapper.readValue(
+                "{\"session_id\":\"session-id\",\"expected_generation\":9223372036854775807,"
+                        + "\"since_cursor\":9223372036854775807,\"limit\":2147483647}", ActorObserveRequest.class);
+        assertEquals(new ActorObserveRequest("session-id", Long.MAX_VALUE, Long.MAX_VALUE, Integer.MAX_VALUE), explicit);
+        assertEquals(new ActorObserveRequest(null, null, 0L, 100), mapper.readValue("{}", ActorObserveRequest.class));
+        ActorObserveRequest outsideRange = mapper.readValue(
+                "{\"session_id\":\"\",\"expected_generation\":0,\"since_cursor\":-1,\"limit\":0}", ActorObserveRequest.class);
+        assertEquals(new ActorObserveRequest("", 0L, -1L, 0), outsideRange);
+    }
+
+    @Test
+    void packetObservationRejectsNonStringIdentifiersAndNumericCoercion() {
+        ObjectMapper mapper = new ObjectMapper();
+        for (String value : List.of("123", "1.5", "true", "{}", "[]")) {
+            assertThrows(Exception.class, () -> mapper.readValue(
+                    "{\"session_id\":" + value + ",\"expected_generation\":7}", ActorObserveRequest.class), value);
+        }
+        for (String field : List.of("expected_generation", "since_cursor")) {
+            for (String value : List.of("1.0", "\"7\"", "false", "9223372036854775808", "-9223372036854775809")) {
+                assertThrows(Exception.class, () -> mapper.readValue(
+                        "{\"session_id\":\"session-id\",\"" + field + "\":" + value + "}", ActorObserveRequest.class),
+                        field + "=" + value);
+            }
+        }
+        for (String value : List.of("1.0", "\"100\"", "true", "2147483648", "-2147483649")) {
+            assertThrows(Exception.class, () -> mapper.readValue(
+                    "{\"session_id\":\"session-id\",\"expected_generation\":7,\"limit\":" + value + "}",
+                    ActorObserveRequest.class), value);
         }
     }
 

@@ -62,7 +62,7 @@ public final class AcceptanceObservationService {
         }
         result.put("implementation_round", controls == null ? "R1" : "R2a");
         result.put("enabled_tools", enabledTools);
-        result.put("scopes", List.of("world", "scene"));
+        result.put("scopes", controls == null ? List.of("world", "scene") : List.of("world", "scene", "actor"));
         result.put("actions", List.of());
         result.put("recipes", List.of());
         result.put("server_online", runtime.active() && serverSource.get().isOnline());
