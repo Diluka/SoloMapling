@@ -17,6 +17,42 @@ from .bridge import load_config
 CONTEXT_FIELDS = (
     "scene_ref", "world_id", "channel_id", "map_id", "map_instance_key", "runtime_key"
 )
+OBSERVATION_TOOLS = frozenset({"game_capabilities", "game_observe"})
+ACTOR_TOOLS = frozenset({"actor_open", "actor_close", "operation_get", "operation_cancel"})
+IMPLEMENTED_TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS
+
+
+def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False) -> list[str]:
+    """The client implements six tools; the running bridge advertises its actual subset."""
+    if len(names) != len(set(names)) or set(names) != IMPLEMENTED_TOOLS:
+        raise RuntimeError("MCP 工具清单与当前已实现接口不一致。")
+    enabled = capabilities.get("enabled_tools")
+    if (
+        capabilities.get("service") != "solomapling-acceptance"
+        or capabilities.get("server_online") is not True
+        or not isinstance(enabled, list)
+        or any(not isinstance(name, str) for name in enabled)
+        or len(enabled) != len(set(enabled))
+        or not OBSERVATION_TOOLS <= set(enabled) <= IMPLEMENTED_TOOLS
+        or set(enabled) & ACTOR_TOOLS not in (set(), ACTOR_TOOLS)
+    ):
+        raise RuntimeError("实际验收桥没有返回合法的已开放能力。")
+    expected_round = "R2a" if ACTOR_TOOLS <= set(enabled) else "R1"
+    if capabilities.get("implementation_round") != expected_round:
+        raise RuntimeError("验收桥迭代版本与实际开放工具不一致。")
+    if actors and not ACTOR_TOOLS <= set(enabled):
+        raise RuntimeError("当前验收桥没有开放原生角色控制，未执行写操作。")
+    require_generation(capabilities)
+    source = capabilities.get("source")
+    if (
+        not isinstance(source, dict)
+        or source.get("available") is not True
+        or any(not isinstance(source.get(key), str)
+               or re.fullmatch(r"[0-9a-fA-F]{40}", source[key]) is None
+               for key in ["soloGitRevision", "beidouRevision"])
+    ):
+        raise RuntimeError("实际验收桥没有有效的源码身份。")
+    return sorted(enabled)
 
 
 def require_generation(snapshot: dict[str, Any]) -> str:
@@ -71,8 +107,6 @@ async def run_smoke(config_path: Path, *, limit: int = 25) -> dict[str, Any]:
 async def inspect_running_client(client: Client, limit: int) -> dict[str, Any]:
     tools = await client.list_tools()
     names = sorted(tool.name for tool in tools.tools)
-    if names != ["game_capabilities", "game_observe"]:
-        raise RuntimeError("MCP 工具清单与 R1 契约不一致。")
 
     async def call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         response = await client.call_tool(name, arguments)
@@ -81,26 +115,8 @@ async def inspect_running_client(client: Client, limit: int) -> dict[str, Any]:
         return response.structured_content
 
     capabilities = await call("game_capabilities", {})
-    if (
-        capabilities.get("service") != "solomapling-acceptance"
-        or capabilities.get("schema_version") != 1
-        or capabilities.get("server_online") is not True
-        or capabilities.get("implementation_round") != "R1"
-        or sorted(capabilities.get("enabled_tools", [])) != names
-    ):
-        raise RuntimeError("实际验收桥未满足 R1 能力契约。")
+    enabled = require_capabilities(capabilities, names)
     generation = require_generation(capabilities)
-    source = capabilities.get("source")
-    if (
-        not isinstance(source, dict)
-        or source.get("available") is not True
-        or any(
-            not isinstance(source.get(key), str)
-            or re.fullmatch(r"[0-9a-fA-F]{40}", source[key]) is None
-            for key in ["soloGitRevision", "beidouRevision"]
-        )
-    ):
-        raise RuntimeError("实际验收桥没有有效的源码身份。")
     world = await call("game_observe", {"scope": "world", "limit": limit})
     if require_generation(world) != generation:
         raise RuntimeError("capabilities 与 world 不属于同一运行代次，请重新观察。")
@@ -116,6 +132,7 @@ async def inspect_running_client(client: Client, limit: int) -> dict[str, Any]:
         "passed": True,
         "transport": "stdio",
         "tools": names,
+        "enabled_tools": enabled,
         "capabilities": capabilities,
         "world": world,
         "scene": scene,

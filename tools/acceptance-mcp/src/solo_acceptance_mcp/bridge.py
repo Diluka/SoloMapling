@@ -1,7 +1,7 @@
-"""Small authenticated client for the read-only Solo acceptance bridge.
+"""Authenticated client for observation and dedicated acceptance actor sessions.
 
-Only the two R1 observation endpoints are exposed. Credentials and response
-error bodies are deliberately absent from public errors and object reprs.
+Credentials and response error bodies stay absent from public errors. Mutation
+requests retain caller-supplied IDs and are never replayed after transport errors.
 """
 from __future__ import annotations
 
@@ -91,6 +91,8 @@ class BridgeError(Exception):
         http_status: int | None = None,
         retryable: bool = False,
         backend_code: int | None = None,
+        request_id: str | None = None,
+        outcome_unknown: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -98,6 +100,8 @@ class BridgeError(Exception):
         self.http_status = http_status
         self.retryable = retryable
         self.backend_code = backend_code
+        self.request_id = request_id
+        self.outcome_unknown = outcome_unknown
 
     def public_data(self) -> dict[str, Any]:
         error: dict[str, Any] = {
@@ -109,7 +113,12 @@ class BridgeError(Exception):
             error["http_status"] = self.http_status
         if self.backend_code is not None:
             error["backend_code"] = self.backend_code
-        return {"error": error}
+        if self.request_id is not None:
+            error["outcome_unknown"] = self.outcome_unknown
+        data: dict[str, Any] = {"error": error}
+        if self.request_id is not None:
+            data["request_id"] = self.request_id
+        return data
 
 
 def validate_observation(scope: str, scene_ref: str | None, limit: int) -> None:
@@ -128,6 +137,22 @@ def validate_observation(scope: str, scene_ref: str | None, limit: int) -> None:
         raise BridgeError("INVALID_ARGUMENTS", "观察 scene 需要先从 world 观察取得 scene_ref。")
     if scope == "world" and scene_ref is not None:
         raise BridgeError("INVALID_ARGUMENTS", "world 观察不接受 scene_ref。")
+
+
+MAX_LONG = 2**63 - 1
+IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,128}")
+PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+
+
+def validate_identifier(value: str, label: str, pattern: re.Pattern[str] = IDENTIFIER) -> None:
+    if not isinstance(value, str) or value in {".", ".."} or pattern.fullmatch(value) is None:
+        raise BridgeError("INVALID_ARGUMENTS", label + " 必须是有效的标识符。")
+
+
+def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise BridgeError("INVALID_ARGUMENTS", label + " 必须是允许范围内的整数。")
 
 
 class BridgeClient:
@@ -167,6 +192,70 @@ class BridgeClient:
         return await self._authorized_request(
             "POST", "/solo/acceptance/v1/observe", {"requestId": str(uuid4()), "data": data}
         )
+
+    async def actor_open(
+        self, profile_id: str, *, request_id: str,
+        world: int | None = None, channel: int | None = None,
+    ) -> dict[str, Any]:
+        validate_identifier(profile_id, "profile_id", PROFILE_IDENTIFIER)
+        validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+        if world is not None:
+            validate_integer(world, "world", 0, 255)
+        if channel is not None:
+            validate_integer(channel, "channel", 1, 255)
+        data: dict[str, Any] = {"profile_id": profile_id}
+        if world is not None:
+            data["world"] = world
+        if channel is not None:
+            data["channel"] = channel
+        return await self._mutation("/solo/acceptance/v1/actor/open", data, request_id)
+
+    async def actor_close(
+        self, session_id: str, expected_generation: int, *, request_id: str,
+    ) -> dict[str, Any]:
+        validate_identifier(session_id, "session_id")
+        validate_integer(expected_generation, "expected_generation", 1, MAX_LONG)
+        validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+        return await self._mutation(
+            "/solo/acceptance/v1/actor/close",
+            {"session_id": session_id, "expected_generation": expected_generation}, request_id,
+        )
+
+    async def operation_get(
+        self, operation_id: str, *, since_cursor: int = 0, limit: int = 100,
+    ) -> dict[str, Any]:
+        validate_identifier(operation_id, "operation_id")
+        validate_integer(since_cursor, "since_cursor", 0, MAX_LONG)
+        validate_integer(limit, "limit", 1, 500)
+        path = ("/solo/acceptance/v1/operation/" + operation_id
+                + "?since_cursor=" + str(since_cursor) + "&limit=" + str(limit))
+        return await self._authorized_request("GET", path)
+
+    async def operation_cancel(self, operation_id: str, *, request_id: str) -> dict[str, Any]:
+        validate_identifier(operation_id, "operation_id")
+        validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+        return await self._mutation("/solo/acceptance/v1/operation/" + operation_id + "/cancel", {}, request_id)
+
+    async def _mutation(self, path: str, data: dict[str, Any], request_id: str) -> dict[str, Any]:
+        try:
+            response = await self._authorized_request("POST", path, {"requestId": request_id, "data": data})
+            if response.get("request_id", request_id) != request_id:
+                raise BridgeError("INVALID_RESPONSE", "验收桥返回的请求标识不一致。")
+            # A generated server operation ID does not replace the caller's deduplication key.
+            return {**response, "request_id": request_id}
+        except BridgeError as failure:
+            code, message = failure.code, failure.message
+            if failure.http_status == 409:
+                code, message = "OPERATION_CONFLICT", "请求与当前角色会话或操作状态冲突。"
+            elif failure.http_status == 410:
+                code, message = "SESSION_EXPIRED", "角色会话或操作已失效。"
+            unknown = failure.code in {"HTTP_TIMEOUT", "HTTP_UNAVAILABLE", "INVALID_RESPONSE"}
+            unknown = unknown or failure.http_status is not None and failure.http_status >= 500
+            raise BridgeError(
+                code, message, http_status=failure.http_status,
+                retryable=False, backend_code=failure.backend_code,
+                request_id=request_id, outcome_unknown=unknown,
+            ) from None
 
     async def _token_for_request(self, stale_token: str | None = None) -> str:
         async with self._auth_lock:
@@ -243,6 +332,8 @@ class BridgeClient:
                 code, message = "STALE_SCENE", "场景引用已失效，请重新观察 world。"
             elif status == 409:
                 code, message = "STALE_OBSERVATION", "读取期间游戏运行代次变化，请重新观察 world。"
+            elif status == 429:
+                code, message = "CAPACITY_REACHED", "验收操作或角色会话已达到当前限额。"
             elif status == 400:
                 code, message = "INVALID_ARGUMENTS", "验收桥拒绝了请求参数。"
             elif status == 503:

@@ -1,4 +1,4 @@
-"""Official MCP SDK 2.x stdio adapter for the two R1 read-only tools."""
+"""Official MCP SDK 2.x tools for observations and dedicated actor operations."""
 from __future__ import annotations
 
 import argparse
@@ -12,7 +12,17 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 
 from . import __version__
-from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, load_config
+from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, load_config
+
+
+Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$", strict=True)]
+ProfileId = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$", strict=True)]
+RequestId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$", strict=True)]
+Generation = Annotated[int, Field(ge=1, le=MAX_LONG, strict=True)]
+Cursor = Annotated[int, Field(ge=0, le=MAX_LONG, strict=True)]
+WorldId = Annotated[int, Field(ge=0, le=255, strict=True)]
+ChannelId = Annotated[int, Field(ge=1, le=255, strict=True)]
+Limit = Annotated[int, Field(ge=1, le=500, strict=True)]
 
 
 def result(data: dict[str, Any], *, is_error: bool = False) -> CallToolResult:
@@ -36,18 +46,27 @@ def build_server(config: BridgeConfig) -> MCPServer:
     server = MCPServer(
         "solomapling-acceptance",
         version=__version__,
-        instructions="读取实际 SoloMapling 游戏状态；R1 不提供角色创建、动作控制或任务通关能力。",
+        instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
+                      "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
+                      "取消请求不等于原生清理完成。当前没有聊天、NPC、移动或通关工具。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
-    annotations = ToolAnnotations(
+    read_annotations = ToolAnnotations(
         read_only_hint=True,
         destructive_hint=False,
         idempotent_hint=True,
         open_world_hint=True,
     )
 
-    @server.tool(annotations=annotations)
+    open_annotations = ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True,
+    )
+    cleanup_annotations = ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True,
+    )
+
+    @server.tool(annotations=read_annotations)
     async def game_capabilities() -> CallToolResult:
         """读取验收桥实际版本、源码身份、在线状态及已开放能力。"""
         try:
@@ -55,11 +74,11 @@ def build_server(config: BridgeConfig) -> MCPServer:
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
-    @server.tool(annotations=annotations)
+    @server.tool(annotations=read_annotations)
     async def game_observe(
         scope: Literal["world", "scene"] = "world",
         scene_ref: str | None = None,
-        limit: Annotated[int, Field(ge=1, le=500, strict=True)] = 100,
+        limit: Limit = 100,
     ) -> CallToolResult:
         """只读观察 world 或已返回的 scene_ref；不会创建地图、角色或副本。"""
         try:
@@ -67,11 +86,52 @@ def build_server(config: BridgeConfig) -> MCPServer:
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
+    @server.tool(annotations=open_annotations)
+    async def actor_open(
+        profile_id: ProfileId,
+        request_id: RequestId,
+        world: WorldId | None = None,
+        channel: ChannelId | None = None,
+    ) -> CallToolResult:
+        """为已配置专用 profile 排队登录；用同一 request_id 显式恢复重试，通过 operation_get 确认实际登录。"""
+        try:
+            return result(await bridge.actor_open(profile_id, request_id=request_id, world=world, channel=channel))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=cleanup_annotations)
+    async def actor_close(
+        session_id: Identifier, expected_generation: Generation, request_id: RequestId,
+    ) -> CallToolResult:
+        """排队正常退出专用角色，可能触发原生队伍/副本离开；仅在清理与存档核实后确认关闭。"""
+        try:
+            return result(await bridge.actor_close(session_id, expected_generation, request_id=request_id))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=read_annotations)
+    async def operation_get(
+        operation_id: Identifier, since_cursor: Cursor = 0, limit: Limit = 100,
+    ) -> CallToolResult:
+        """读取操作真实状态、角色会话和有界事件；读取成功不表示原生操作已成功。"""
+        try:
+            return result(await bridge.operation_get(operation_id, since_cursor=since_cursor, limit=limit))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=cleanup_annotations)
+    async def operation_cancel(operation_id: Identifier, request_id: RequestId) -> CallToolResult:
+        """请求取消排队或进行中的操作；之后查询状态，原生清理完成前不把请求当作已停止。"""
+        try:
+            return result(await bridge.operation_cancel(operation_id, request_id=request_id))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
     return server
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SoloMapling 只读验收 MCP 服务")
+    parser = argparse.ArgumentParser(description="SoloMapling 验收 MCP 服务")
     parser.add_argument("--config", type=Path, required=True, help="本地私密 JSON 配置文件")
     args = parser.parse_args()
     try:

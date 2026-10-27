@@ -8,6 +8,9 @@ import org.gms.net.server.world.World;
 import org.gms.scripting.event.EventInstanceManager;
 import org.gms.server.maps.MapManager;
 import org.gms.server.maps.MapleMap;
+import org.gms.soloacceptance.actor.ActorControlService;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -33,6 +36,8 @@ public final class AcceptanceObservationService {
     private final int registryLimit;
     private Map<String, SceneReference> references = new LinkedHashMap<>();
     private String referenceGeneration;
+    @Autowired(required = false)
+    private ObjectProvider<ActorControlService> actorControls;
 
     public AcceptanceObservationService() {
         this(Server::getInstance, SourceIdentity::read, MAX_SCENES);
@@ -49,8 +54,14 @@ public final class AcceptanceObservationService {
         AcceptanceObservationRuntime.State runtime = AcceptanceObservationRuntime.snapshot();
         Map<String, Object> result = metadata(runtime.generation());
         result.put("service", "solomapling-acceptance");
-        result.put("implementation_round", "R1");
-        result.put("enabled_tools", List.of("game_capabilities", "game_observe"));
+        ActorControlService controls = actorControls == null ? null : actorControls.getIfAvailable();
+        List<String> enabledTools = new ArrayList<>(List.of("game_capabilities", "game_observe"));
+        if (controls != null) {
+            enabledTools.addAll(List.of("actor_open", "actor_close", "operation_get", "operation_cancel"));
+            result.put("actor_control", controls.publicCapabilities());
+        }
+        result.put("implementation_round", controls == null ? "R1" : "R2a");
+        result.put("enabled_tools", enabledTools);
         result.put("scopes", List.of("world", "scene"));
         result.put("actions", List.of());
         result.put("recipes", List.of());
@@ -79,12 +90,7 @@ public final class AcceptanceObservationService {
         AcceptanceObservationRuntime.State runtime = AcceptanceObservationRuntime.snapshot();
         Server server = serverSource.get();
         if (!runtime.active() || !server.isOnline()) throw error(HttpStatus.SERVICE_UNAVAILABLE, "server_offline");
-        if (!runtime.generation().equals(referenceGeneration)) {
-            references.clear();
-            referenceGeneration = runtime.generation();
-        }
-        Discovery discovery = discover(server);
-        reconcile(discovery.scenes(), runtime.generation());
+        Discovery discovery = refreshReferences(server, runtime);
         Map<String, Object> result = metadata(runtime.generation());
         result.put("scope", request.scope());
         if ("world".equals(request.scope())) {
@@ -105,6 +111,49 @@ public final class AcceptanceObservationService {
             throw error(HttpStatus.CONFLICT, "runtime_changed");
         }
         return result;
+    }
+
+    /** Resolve the authenticated controller's current actor directly, without truncating the directory. */
+    public synchronized Map<String, Object> contextForActor(Character actor) {
+        AcceptanceObservationRuntime.State runtime = AcceptanceObservationRuntime.snapshot();
+        Server server = serverSource.get();
+        if (!runtime.active() || !server.isOnline()) throw error(HttpStatus.SERVICE_UNAVAILABLE, "server_offline");
+        if (actor == null || actor.getClient() == null || !actor.isLoggedInWorld()) {
+            throw error(HttpStatus.GONE, "actor_not_in_world");
+        }
+        World world = server.getWorld(actor.getWorld());
+        Channel channel = world == null ? null : world.getChannel(actor.getClient().getChannel());
+        PlayerStorage storage = channel == null ? null : channel.getPlayerStorage();
+        if (storage == null || storage.getCharacterById(actor.getId()) != actor) {
+            throw error(HttpStatus.GONE, "actor_not_in_current_world");
+        }
+        MapleMap actual = actor.getMap();
+        refreshReferences(server, runtime);
+        SceneReference found = null;
+        for (SceneReference ref : references.values()) {
+            if (ref.channel().get() == channel && ref.map().get() == actual) {
+                found = ref;
+                break;
+            }
+        }
+        if (found == null) throw error(HttpStatus.GONE, "actor_scene_unavailable");
+        Map<String, Object> context = found.description(actual);
+        if (!runtime.equals(AcceptanceObservationRuntime.snapshot()) || !server.isOnline()) {
+            references.clear();
+            throw error(HttpStatus.CONFLICT, "runtime_changed");
+        }
+        context.put("runtime_generation", runtime.generation());
+        return context;
+    }
+
+    private Discovery refreshReferences(Server server, AcceptanceObservationRuntime.State runtime) {
+        if (!runtime.generation().equals(referenceGeneration)) {
+            references.clear();
+            referenceGeneration = runtime.generation();
+        }
+        Discovery discovery = discover(server);
+        reconcile(discovery.scenes(), runtime.generation());
+        return discovery;
     }
 
     private Discovery discover(Server server) {

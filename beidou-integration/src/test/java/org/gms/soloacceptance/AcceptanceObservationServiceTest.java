@@ -1,6 +1,7 @@
 package org.gms.soloacceptance;
 
 import org.gms.client.Character;
+import org.gms.client.Client;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -23,6 +24,7 @@ import static org.mockito.Mockito.*;
 
 class AcceptanceObservationServiceTest {
     private Server server;
+    private World world;
     private Channel channel;
     private MapManager maps;
     private PlayerStorage players;
@@ -35,14 +37,16 @@ class AcceptanceObservationServiceTest {
     void start() {
         AcceptanceObservationRuntime.onWorldStarted();
         server = mock(Server.class);
-        World world = mock(World.class);
+        world = mock(World.class);
         channel = mock(Channel.class);
         maps = mock(MapManager.class);
         players = mock(PlayerStorage.class);
         when(server.isOnline()).thenReturn(true);
         when(server.getWorlds()).thenReturn(List.of(world));
+        when(server.getWorld(0)).thenReturn(world);
         when(world.getId()).thenReturn(0);
         when(world.getChannels()).thenReturn(List.of(channel));
+        when(world.getChannel(1)).thenReturn(channel);
         when(channel.getId()).thenReturn(1);
         when(channel.getMapFactory()).thenReturn(maps);
         when(channel.getPlayerStorage()).thenReturn(players);
@@ -83,6 +87,37 @@ class AcceptanceObservationServiceTest {
         verify(maps, never()).getMap(anyInt());
         verify(maps, never()).getDisposableMap(anyInt());
         verify(maps, never()).resetMap(anyInt());
+    }
+
+    @Test
+    void currentActorSceneIsResolvedByObjectEvenOutsideTheReturnedDirectorySlice() {
+        MapleMap first = map(10000);
+        MapleMap actual = map(100000000);
+        Character actor = mock(Character.class);
+        Client client = mock(Client.class);
+        when(actor.getId()).thenReturn(4);
+        when(actor.getWorld()).thenReturn(0);
+        when(actor.getClient()).thenReturn(client);
+        when(client.getChannel()).thenReturn(1);
+        when(actor.isLoggedInWorld()).thenReturn(true);
+        when(actor.getMap()).thenReturn(actual);
+        when(players.getCharacterById(4)).thenReturn(actor);
+        when(players.getAllCharacters()).thenReturn(List.of(actor));
+        when(maps.getMaps()).thenReturn(Map.of(10000, first, 100000000, actual));
+
+        Map<String, Object> directory = observations.observe(new ObservationRequest("world", null, 1));
+        assertEquals(true, envelope(directory, "scenes").get("truncated"));
+        Map<String, Object> context = observations.contextForActor(actor);
+        assertEquals(100000000, context.get("map_id"));
+        assertNotNull(context.get("runtime_generation"));
+        Map<String, Object> scene = observations.observe(new ObservationRequest(
+                "scene", (String) context.get("scene_ref"), 10));
+        assertEquals(context.get("map_instance_key"), envelope(scene, "context").get("map_instance_key"));
+        verify(maps, never()).getMap(anyInt());
+
+        when(players.getCharacterById(4)).thenReturn(mock(Character.class));
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
+                () -> observations.contextForActor(actor)).status());
     }
 
     @Test
