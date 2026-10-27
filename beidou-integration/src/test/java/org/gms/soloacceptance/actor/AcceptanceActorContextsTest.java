@@ -40,6 +40,7 @@ class AcceptanceActorContextsTest {
     private ActorAccountOwnership.Lease lease;
     private NativeActorHandle handle;
     private MockedStatic<ActorAccountOwnership> ownership;
+    private NativeActorExecutionFixture execution;
 
     @BeforeEach
     void nativePlayerRegistration() throws Exception {
@@ -81,6 +82,7 @@ class AcceptanceActorContextsTest {
         ownership.when(() -> ActorAccountOwnership.owns(lease, client)).thenReturn(true);
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(117)).thenReturn(client);
         handle = new NativeActorHandle("primary", 117, client, character, world, channel, lease, false, false);
+        execution = NativeActorExecutionFixture.owned(handle);
     }
 
     @AfterEach
@@ -203,9 +205,9 @@ class AcceptanceActorContextsTest {
         ObservationException scene = assertThrows(ObservationException.class,
                 () -> AcceptanceActorContexts.captureScene(server, handle));
         assertEquals("actor_context_mismatch", scene.reason());
-        assertDoesNotThrow(() -> AcceptanceActorContexts.requireCloseCharacter(server, handle));
-        WorldEpoch.onWorldStopping();
-        assertDoesNotThrow(() -> AcceptanceActorContexts.requireCloseCharacter(server, handle));
+        assertDoesNotThrow(() -> requireClose());
+        execution.stopWorld();
+        assertDoesNotThrow(() -> requireClose());
         verify(disposed, never()).dispose();
     }
 
@@ -235,14 +237,76 @@ class AcceptanceActorContextsTest {
 
     @Test
     void drainingDoesNotAuthorizeCleanupOfAReplacedWorldOrClient() {
-        WorldEpoch.onWorldStopping();
+        execution.stopWorld();
         when(server.getWorld(0)).thenReturn(mock(World.class));
         assertEquals("actor_close_cleanup_unverified_stale_session", assertThrows(ObservationException.class,
-                () -> AcceptanceActorContexts.requireCloseCharacter(server, handle)).reason());
+                () -> requireClose()).reason());
         when(server.getWorld(0)).thenReturn(world);
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(117)).thenReturn(mock(Client.class));
         assertEquals("actor_close_cleanup_unverified_stale_session", assertThrows(ObservationException.class,
-                () -> AcceptanceActorContexts.requireCloseCharacter(server, handle)).reason());
+                () -> requireClose()).reason());
+    }
+
+    @Test
+    void cleanupRequiresTheExecutingWorkAndItsExactRegisteredHandle() {
+        assertEquals("actor_close_cleanup_unverified_scope", assertThrows(ObservationException.class,
+                () -> AcceptanceActorContexts.requireCloseCharacter(server, handle, null)).reason());
+        java.util.concurrent.atomic.AtomicReference<soloMapling.game.execution.ScopeResources.DrainPermit> retained =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        execution.cleanup(permit -> {
+            retained.set(permit);
+            NativeActorHandle other = new NativeActorHandle("primary", 117, client, character,
+                    world, channel, lease, false, false);
+            assertEquals("actor_close_cleanup_unverified_scope", assertThrows(ObservationException.class,
+                    () -> AcceptanceActorContexts.requireCloseCharacter(server, other, permit)).reason());
+            AcceptanceActorContexts.requireCloseCharacter(server, handle, permit);
+            return null;
+        });
+        assertEquals("actor_close_cleanup_unverified_scope", assertThrows(ObservationException.class,
+                () -> AcceptanceActorContexts.requireCloseCharacter(server, handle, retained.get())).reason());
+    }
+
+    @Test
+    void anUncontrolledInactiveEpochDoesNotGrantOwnedCleanup() {
+        WorldEpoch.onWorldStopping();
+        assertThrows(RuntimeException.class, this::requireClose);
+    }
+
+    @Test
+    void aNewWorldEpochRejectsOldCleanupEvenWhenNativeObjectsAreReused() {
+        execution.stopWorld();
+        WorldEpoch.onWorldStarted();
+        assertThrows(RuntimeException.class, this::requireClose);
+        assertSame(character, worldPlayers.getCharacterById(117));
+        assertTrue(client.isLoggedIn());
+    }
+
+    @Test
+    void aLateOpenResultUsesItsAcceptedWorkOriginRatherThanItsStoppedHandleEpoch() {
+        WorldEpoch.Token acceptedEpoch = WorldEpoch.snapshot().token();
+        NativeActorExecutionFixture late = new NativeActorExecutionFixture();
+        NativeActorHandle lateHandle = late.open(() -> {
+            late.bindOrigin(world, channel);
+            late.stopWorld();
+            NativeActorHandle result = new NativeActorHandle("primary", 117, client, character,
+                    world, channel, lease, false, false);
+            late.adopt(result);
+            return result;
+        });
+        assertNotSame(acceptedEpoch, lateHandle.characterRef().epoch());
+        late.cleanup(permit -> {
+            AcceptanceActorContexts.requireCloseCharacter(server, lateHandle, permit);
+            return null;
+        });
+        assertEquals("actor_world_offline", assertThrows(ObservationException.class,
+                () -> AcceptanceActorContexts.requireCharacter(server, lateHandle)).reason());
+    }
+
+    private void requireClose() {
+        execution.cleanup(permit -> {
+            AcceptanceActorContexts.requireCloseCharacter(server, handle, permit);
+            return null;
+        });
     }
 
     private void assertStale() {

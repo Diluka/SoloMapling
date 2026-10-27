@@ -287,7 +287,7 @@ class NativeActorNpcOutcomeTest {
         assertTrue(client.isLoggedIn());
         assertFalse(client.transportClosed());
         verify(client, never()).disconnect(anyBoolean(), anyBoolean());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any());
         verifyNoInteractions(accounts, characters, notes);
     }
 

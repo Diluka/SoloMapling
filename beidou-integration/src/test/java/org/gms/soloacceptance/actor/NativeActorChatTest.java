@@ -341,7 +341,7 @@ class NativeActorChatTest {
         assertFalse(client.transportClosed());
         assertNull(handle.closeEvidence());
         verify(client, never()).disconnect(anyBoolean(), anyBoolean());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any());
         verifyNoInteractions(accounts, characters, notes);
     }
 

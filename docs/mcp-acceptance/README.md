@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复也已完成隔离及实际部署验收。** #117 共享上下文已完成完整构建、CI、隔离及实际部署验收并关闭。当前部署源码为 `8f8ebf485c719b868d5ba7ab4a6950632bfff730`（[PR #130](https://github.com/Diluka/SoloMapling/pull/130)）；#63、#67～#70、#72、限频验收修正 #74、#75 和 #110 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply`，回复仅开放 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。#110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复也已完成隔离及实际部署验收。** #117 共享上下文已完成完整构建、CI、隔离及实际部署验收并关闭。该轮已验收交付源码为 `8f8ebf485c719b868d5ba7ab4a6950632bfff730`（[PR #130](https://github.com/Diluka/SoloMapling/pull/130)）；#63、#67～#70、#72、限频验收修正 #74、#75 和 #110 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply`，回复仅开放 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。#110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -35,11 +35,11 @@ solomapling:
 
 共享上下文只核对已指定的原生对象关系，不读普通登录标志，不依赖验收开关、`Server.getInstance()`、全世界目录或包捕获。MCP继续保留JWT/admin、owner/profile、账号lease/在线Client、GM0、排除bot、普通登录状态和request_id历史。Bot薄适配以BotClient及精确BotRegistry登记授信，保持V1角色真实loggedIn=false；其真实原生对象/宿主路由替身测试不代表完整V2模块已经运行。V2/PQ通过内部Java适配消费，不经Python/HTTP/MCP发动作，也不复制整个ActorControlService。
 
-世界token、MCP session、V2 runtime/模块代次、包sequence和dialogue_version分别归各自层；内部CharacterRef能跨正常地图变化继续有效，SceneRef绑定具体Map/EIM。共同生命周期先停世界token，新动作拒绝旧绑定；现有已拥有角色的登出保留消费侧精确guard，专用排空上下文仍由 [#118](https://github.com/Diluka/SoloMapling/issues/118) 推进，不给公共API增加ignoreEpoch入口。
+世界token、MCP session、V2 runtime/模块代次、包sequence和dialogue_version分别归各自层；内部CharacterRef能跨正常地图变化继续有效，SceneRef绑定具体Map/EIM。共同生命周期先停世界 token，新动作拒绝旧绑定。[#118](https://github.com/Diluka/SoloMapling/issues/118) 以公共 scope/lane 接入现有 MCP 顺序，并用准确停止票据及精确资源 `DrainPermit` 收尾原生角色，不增加 ignoreEpoch 入口。取消请求、实际 body/队列结算、资源释放及卸载完成分别记录；MCP 仍在实际 work 结算后归还 ACTION 额度。详见[执行与排空参考](../shared-game-foundation/execution-scope.md)，交付状态和完整构建、CI、隔离及实际部署证据以对应 Issue 为准，代码合并或单项测试不代替部署验收。
 
 本轮角色场景观察改为定点登记，world/scene目录浏览保留原发现路径。原生读取故障仍是503而非LOST，场景/context不符409与已知旧session410分开；[#114](https://github.com/Diluka/SoloMapling/issues/114) 的Python映射最小修单独验收，不从共享测试推导已修复。
 
-后续 [#118作用域/排空](https://github.com/Diluka/SoloMapling/issues/118)、[#119原生动作/证据](https://github.com/Diluka/SoloMapling/issues/119)、[#120按需事实/事件](https://github.com/Diluka/SoloMapling/issues/120)、[#121原生NPC会话](https://github.com/Diluka/SoloMapling/issues/121) 及 #122～#129 各动作保持待实现，逐叶范围见共享说明。MCP #110 已验收不等于公共#119/#121交付；现有NPC来源/路径/offer策略的提炼债务仍留#121。#112礼包、#113出行暂后排，任务树和里程碑保留，公共切片、MCP玩法、V2组合与PQ通关分别留证。
+[#118作用域/排空](https://github.com/Diluka/SoloMapling/issues/118) 的实现和各层验收分别记录，后续 [#119原生动作/证据](https://github.com/Diluka/SoloMapling/issues/119)、[#120按需事实/事件](https://github.com/Diluka/SoloMapling/issues/120)、[#121原生NPC会话](https://github.com/Diluka/SoloMapling/issues/121) 及 #122～#129 各动作保持待实现，逐叶范围见共享说明。MCP #110 已验收不等于公共#119/#121交付；现有NPC来源/路径/offer策略的提炼债务仍留#121。#112礼包、#113出行暂后排，任务树和里程碑保留，公共切片、MCP玩法、V2组合与PQ通关分别留证。
 
 ## 目标与定位
 

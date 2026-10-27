@@ -1,6 +1,7 @@
 package org.gms.soloacceptance;
 
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.execution.ExecutionScope;
 
 /** MCP's compatibility view of the shared world lifecycle; this class owns no separate epoch. */
 public final class AcceptanceObservationRuntime {
@@ -11,7 +12,7 @@ public final class AcceptanceObservationRuntime {
     }
 
     public static void onWorldStopped() {
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
     }
 
     public static State snapshot() {

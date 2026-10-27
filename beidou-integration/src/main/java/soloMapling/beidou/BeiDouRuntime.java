@@ -3,6 +3,7 @@ package soloMapling.beidou;
 import org.gms.client.Character;
 import org.gms.manager.ServerManager;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.execution.ExecutionScope;
 import org.gms.soloacceptance.actor.ActorControlService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
@@ -70,9 +71,9 @@ public final class BeiDouRuntime {
     }
 
     public static void onServerStopping() {
-        WorldEpoch.onWorldStopping();
+        var stop = ExecutionScope.tryBeginWorldStop();
         ActorControlService actors = actorControls();
-        if (actors != null) actors.onWorldStopping();
+        if (actors != null) actors.onWorldStopping(stop);
         if (!READY.getAndSet(false) && BotRegistry.snapshot().isEmpty()) {
             return;
         }

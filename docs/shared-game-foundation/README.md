@@ -1,6 +1,6 @@
-# 共享游戏基建：角色上下文与世界代次
+# 共享游戏基建：上下文、执行与资源归属
 
-**状态：[#117](https://github.com/Diluka/SoloMapling/issues/117) 已完成实现、完整构建、CI、隔离及实际部署验收并关闭。** 当前代码已加入三种中立上下文类型，并由 MCP 和 Bot 两种薄适配消费；公共结构检查、MCP 资格及 Bot 适配已有定向测试。当前部署源码为 `8f8ebf485c719b868d5ba7ab4a6950632bfff730`（[PR #130](https://github.com/Diluka/SoloMapling/pull/130)），公共接口可以由Java消费方直接使用；这不代表后续作用域、动作或V2成品均已完成。
+**状态：[#117](https://github.com/Diluka/SoloMapling/issues/117) 已完成实现、完整构建、CI、隔离及实际部署验收并关闭。** 当前代码已加入三种中立上下文类型，并由 MCP 和 Bot 两种薄适配消费；公共结构检查、MCP 资格及 Bot 适配已有定向测试。该轮已验收交付源码为 `8f8ebf485c719b868d5ba7ab4a6950632bfff730`（[PR #130](https://github.com/Diluka/SoloMapling/pull/130)），公共接口可以由Java消费方直接使用；[#118 执行作用域与取消排空](execution-scope.md) 提供公共实现及 MCP 接线，交付状态和各层证据以该 Issue 为准，代码合并或单项测试不代表实际部署通过；后续动作与 V2/PQ 成品分别验收。
 
 本目录说明内部 Java 接口与使用边界。MCP 的工具、配置和实际玩法记录见 [MCP 验收说明](../mcp-acceptance/README.md)，构建入口见 [集成构建](../../beidou-integration/README.md)。所有新增实现都在 Solo，官方北斗 submodule 仍固定 `75a86268738ca8845e06ea9d59ec36d15b22c91b`，受控文件保持原样。
 
@@ -11,9 +11,10 @@
 | 层次 | 当前职责 |
 |---|---|
 | `soloMapling.game.context` | 世界生命周期 token；角色、客户端、世界、频道、地图与事件的精确对象关系；固定结构失败原因 |
+| `soloMapling.game.execution` | 工作/资源归属、取消与真实排空、角色短命令时序；不含模块优先级或业务授权 |
 | MCP 薄适配 | 继续保留普通账号、GM0、排除 bot、原生登录标志、账号 lease/在线归属；JWT/admin、owner/profile/session/request_id 历史仍在 MCP 服务 |
 | Bot 薄适配 | `BotClient` 与 `BotRegistry.isRegistered` 的精确角色实例登记，不借用 MCP 账号或 session |
-| V2/PQ 消费侧 | 模块/预设、优先级、资源仲裁、动作资格和执行 scope；本轮未迁入或宣称已运行 |
+| V2/PQ 消费侧 | 模块/预设、优先级、资源仲裁、动作资格及公共 scope 的接入；本轮未迁入或宣称已运行 |
 
 V2/PQ 不经 Python、HTTP 或 MCP 发动作，也不复制整个 `ActorControlService`。#110 已验收的 NPC 实现仍有自己的来源、路径、offer 和版本策略，不能因公共上下文加入就视为共享原生动作或 NPC 会话已经交付。
 
@@ -26,6 +27,8 @@ public final class WorldEpoch {
     public static void onWorldStarted();
     public static void onWorldStopping();
     public static State snapshot();
+    public static StopTransition stopTransition();
+    public record StopTransition(State source, State stopped, boolean transitioned) {}
     public record State(boolean active, Token token) {}
     public static final class Token {
         // 构造不公开，按对象身份比较。
@@ -86,16 +89,16 @@ public final class NativeContextChecks {
 
 | 标识 | 谁维护、何时失效 |
 |---|---|
-| `WorldEpoch.Token` | 共同世界生命周期；每次启动和停止都换新token，即使复用原生对象也使旧绑定失效 |
+| `WorldEpoch.Token` | 共同世界生命周期；每次启动及实际 active→stopped 过渡换新 token；同次受控停止复用当前停止 token，旧绑定始终失效 |
 | MCP `runtime_generation` | 同一个世界token的文本投影；不是第二套独立世界时钟 |
 | MCP session ID/代次、profile、lease | MCP验收会话与账号控制权；同CID重开不能继承旧会话资格 |
 | V2 runtime/module代次、execution/scope ID | V2消费侧维护，公共上下文不合并其策略或仲裁 |
 | packet sequence、dialogue_version、NPC来源token | 对应Client/对话层，不与世界token互换或比较大小 |
 | MCP `scene_ref/runtime_key` | 观察服务的不透明外部引用，与内部 `GameContext.SceneRef` 分开 |
 
-[BeiDouRuntime](../../beidou-integration/src/main/java/soloMapling/beidou/BeiDouRuntime.java) 在共同ready入口启动WorldEpoch，在stopping入口先使其失效，再进行actor drain和原生清理；不以验收开关为条件。[AcceptanceObservationRuntime](../../beidou-integration/src/main/java/org/gms/soloacceptance/AcceptanceObservationRuntime.java) 仅作为旧接口的无独立状态委托，不能同时调用新旧生命周期入口而重复换代。
+[BeiDouRuntime](../../beidou-integration/src/main/java/soloMapling/beidou/BeiDouRuntime.java) 在共同 ready 入口启动 WorldEpoch； #118 在 stopping 入口经 `ExecutionScope.tryBeginWorldStop()` 原子停止并取得专用票据，再进行 actor drain 和原生清理，不以验收开关为条件。[AcceptanceObservationRuntime](../../beidou-integration/src/main/java/org/gms/soloacceptance/AcceptanceObservationRuntime.java) 仅作为旧接口的无独立状态委托；停止委托复用同一受控工厂，生命周期接线不另造世界时钟或清理权限。
 
-世界停用后，新动作必须拒绝旧token。现有已拥有的MCP登出仍使用 `AcceptanceActorContexts.requireCloseCharacter` 保留精确注册、lease和身份检查，使正常存档可以在停服排空阶段继续；它是MCP消费侧的收尾债务，归 [#118](https://github.com/Diluka/SoloMapling/issues/118) 后续提供专用排空上下文。公共API没有忽略epoch的入口，正常动作不能借登出路径绕过代次检查。
+世界停用后，新动作必须拒绝旧 token。 #118 将原已拥有角色的登出接入 `ScopeResources.DrainPermit`，保留 MCP 的精确注册、lease 和身份检查；只有对应停止来源及当前清理窗口内的原生入口才可继续。下一世界启动后旧许可不能进入新清理，已经合法完成的旧资源释放可如实入账。具体票据、资源握手及取消/排空区别见[执行与清理参考](execution-scope.md)；公共 API 没有忽略 epoch 的入口。
 
 ## MCP定点观察与失败语义
 
@@ -116,7 +119,7 @@ public final class NativeContextChecks {
 | [#116共享入口](https://github.com/Diluka/SoloMapling/issues/116) 下的切片 | 本文对应状态 |
 |---|---|
 | [#117上下文与世界代次](https://github.com/Diluka/SoloMapling/issues/117) | 已交付并关闭；完整/隔离/实际原生验收通过，Bot薄适配合同另列 |
-| [#118作用域与排空](https://github.com/Diluka/SoloMapling/issues/118) | 待实现；承接停止接收、旧回调失效与已拥有角色收尾 |
+| [#118作用域与排空](https://github.com/Diluka/SoloMapling/issues/118) | 公共实现与 MCP 接线见[执行参考](execution-scope.md)；交付状态及各层验收证据见对应 Issue |
 | [#119原生动作与证据](https://github.com/Diluka/SoloMapling/issues/119) | 待实现；保留原生资格、编码、执行及实际后态 |
 | [#120按需事实与事件](https://github.com/Diluka/SoloMapling/issues/120) | 待实现；不把MCP全局目录变成所有消费侧依赖 |
 | [#121原生NPC会话](https://github.com/Diluka/SoloMapling/issues/121) | 待实现；承接当前MCP来源、版本、offer和CM/路由策略 |

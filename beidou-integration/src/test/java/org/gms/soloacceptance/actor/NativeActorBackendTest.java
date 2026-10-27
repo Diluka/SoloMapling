@@ -12,6 +12,8 @@ import org.gms.dao.entity.CharactersDO;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
+import org.gms.net.server.channel.handlers.PlayerLoggedinHandler;
+import org.gms.net.server.handlers.login.CharSelectedHandler;
 import org.gms.net.server.coordinator.matchchecker.MatchCheckerCoordinator;
 import org.gms.net.server.coordinator.session.Hwid;
 import org.gms.net.server.coordinator.session.SessionCoordinator;
@@ -67,6 +69,7 @@ class NativeActorBackendTest {
     private NativeActorBackend backend;
     private MockedStatic<ActorAccountOwnership> ownership;
     private ActorAccountOwnership.Lease lease;
+    private NativeActorExecutionFixture execution;
 
     @BeforeEach
     void setup() {
@@ -126,6 +129,7 @@ class NativeActorBackendTest {
         ownership.when(() -> ActorAccountOwnership.owns(lease, client)).thenReturn(true);
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(client);
         handle = new NativeActorHandle("primary", 17, client, character, world, channel, lease, false, false);
+        execution = NativeActorExecutionFixture.owned(handle);
     }
 
     @AfterEach
@@ -144,14 +148,62 @@ class NativeActorBackendTest {
 
     @Test
     void cancelledOpenDoesNotReadOrWriteFixtures() {
-        assertThrows(CancellationException.class, () -> backend.open("primary", null, null, () -> true));
+        NativeActorExecutionFixture attempt = new NativeActorExecutionFixture();
+        assertThrows(CancellationException.class, () -> attempt.open(backend, () -> true));
+        assertEquals(0, attempt.scope.resources().snapshot().outstanding());
         verifyNoInteractions(accounts, characters, server);
+    }
+
+    @Test
+    void anUnverifiedNoHandleNativeAttemptRetainsItsPendingOwnershipEvidence() {
+        AccountsDO account = account();
+        when(accounts.findByName("mcp_primary")).thenReturn(account);
+        when(accounts.findById(17)).thenReturn(account);
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+        NativeActorExecutionFixture attempt = new NativeActorExecutionFixture();
+        try (MockedConstruction<AcceptanceClient> clients = mockConstruction(AcceptanceClient.class,
+                (nativeClient, context) -> when(nativeClient.login(anyString(), anyString(), any())).thenAnswer(invocation -> {
+                    WorldEpoch.onWorldStopping();
+                    return 7;
+                }))) {
+            ObservationException failure = assertThrows(ObservationException.class,
+                    () -> attempt.open(backend, () -> false));
+            assertEquals("actor_open_cleanup_unverified", failure.reason());
+            assertEquals(1, attempt.scope.resources().snapshot().outstanding());
+            assertEquals(1, attempt.scope.resources().snapshot().unverified());
+            verify(clients.constructed().getFirst(), never()).disconnect(anyBoolean(), anyBoolean());
+            ownership.verify(() -> ActorAccountOwnership.release(lease), never());
+        }
+    }
+
+    @Test
+    void anAdmittedNoHandleAttemptCanFinishItsExactRollbackInTheControlledStopWindow() {
+        AccountsDO account = account();
+        when(accounts.findByName("mcp_primary")).thenReturn(account);
+        when(accounts.findById(17)).thenReturn(account);
+        ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+        ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
+        NativeActorExecutionFixture attempt = new NativeActorExecutionFixture();
+        try (MockedStatic<SessionCoordinator> sessions = mockStatic(SessionCoordinator.class);
+             MockedConstruction<AcceptanceClient> clients = mockConstruction(AcceptanceClient.class,
+                     (nativeClient, context) -> when(nativeClient.login(anyString(), anyString(), any())).thenAnswer(invocation -> {
+                         attempt.stopWorld();
+                         return 7;
+                     }))) {
+            sessions.when(SessionCoordinator::getInstance).thenReturn(mock(SessionCoordinator.class));
+            ObservationException failure = assertThrows(ObservationException.class,
+                    () -> attempt.open(backend, () -> false));
+            assertEquals("actor_native_login_rejected", failure.reason());
+            assertEquals(0, attempt.scope.resources().snapshot().outstanding());
+            verify(clients.constructed().getFirst(), times(1)).closeSession();
+            ownership.verify(() -> ActorAccountOwnership.release(lease), times(1));
+        }
     }
 
     @Test
     void missingAccountRequiresExplicitFixtureCreationPermission() throws Exception {
         assertEquals("actor_account_missing", assertThrows(ObservationException.class,
-                () -> backend.open("primary", null, null, () -> false)).reason());
+                () -> open(() -> false)).reason());
         verify(accounts, never()).addAccount(any());
         verifyNoInteractions(characters);
     }
@@ -162,12 +214,12 @@ class NativeActorBackendTest {
         account.setWebadmin(1);
         when(accounts.findByName("mcp_primary")).thenReturn(account);
         assertEquals("actor_account_not_eligible", assertThrows(ObservationException.class,
-                () -> backend.open("primary", null, null, () -> false)).reason());
+                () -> open(() -> false)).reason());
         account.setWebadmin(0);
         account.setLoggedin(Client.LOGIN_LOGGEDIN);
         when(accounts.findById(17)).thenReturn(account);
         assertEquals("actor_account_in_use", assertThrows(ObservationException.class,
-                () -> backend.open("primary", null, null, () -> false)).reason());
+                () -> open(() -> false)).reason());
         verify(accounts, never()).update(any());
         verify(accounts, never()).addAccount(any());
         verifyNoInteractions(characters);
@@ -180,7 +232,7 @@ class NativeActorBackendTest {
         when(accounts.findById(17)).thenReturn(account);
         when(worldPlayers.getAllCharacters()).thenReturn(List.of(character));
         assertEquals("actor_account_in_use", assertThrows(ObservationException.class,
-                () -> backend.open("primary", null, null, () -> false)).reason());
+                () -> open(() -> false)).reason());
         verifyNoInteractions(characters);
     }
 
@@ -193,7 +245,7 @@ class NativeActorBackendTest {
         when(accounts.findById(17)).thenReturn(account);
         AtomicInteger checks = new AtomicInteger();
         assertThrows(CancellationException.class,
-                () -> backend.open("primary", null, null, () -> checks.incrementAndGet() > 1));
+                () -> open(() -> checks.incrementAndGet() > 1));
         verify(accounts, times(1)).addAccount(any());
 
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
@@ -208,7 +260,7 @@ class NativeActorBackendTest {
                      })) {
             sessions.when(SessionCoordinator::getInstance).thenReturn(mock(SessionCoordinator.class));
             assertEquals("actor_native_login_conflict", assertThrows(ObservationException.class,
-                    () -> backend.open("primary", null, null, () -> false)).reason());
+                    () -> open(() -> false)).reason());
             AcceptanceClient nativeClient = clients.constructed().getFirst();
             verify(nativeClient, times(1)).acceptToS();
             verify(nativeClient, times(2)).login(eq("mcp_primary"), eq("test-private-password"), any(Hwid.class));
@@ -232,11 +284,97 @@ class NativeActorBackendTest {
                              .thenReturn(23))) {
             sessions.when(SessionCoordinator::getInstance).thenReturn(mock(SessionCoordinator.class));
             assertEquals("actor_native_login_rejected", assertThrows(ObservationException.class,
-                    () -> backend.open("primary", null, null, () -> false)).reason());
+                    () -> open(() -> false)).reason());
             verify(clients.constructed().getFirst(), never()).acceptToS();
             verify(clients.constructed().getFirst(), never()).finishLogin();
         }
         verifyNoInteractions(characters);
+    }
+
+    @Test
+    void aHandleIsOwnedBeforeNativeEntryValidationCanFailAndRollbackRunsInItsCleanupWork() {
+        AccountsDO account = account();
+        when(accounts.findByName("mcp_primary")).thenReturn(account);
+        when(accounts.findById(17)).thenReturn(account);
+        when(characters.findByName("McpPrimary")).thenReturn(stored());
+        when(characters.findById(41)).thenReturn(stored());
+        MatchCheckerCoordinator match = mock(MatchCheckerCoordinator.class);
+        when(world.getMatchCheckerCoordinator()).thenReturn(match);
+        when(match.getMatchConfirmationLeaderid(41)).thenReturn(-1);
+        ownership.when(() -> ActorAccountOwnership.release(lease)).thenReturn(true);
+        NativeActorBackend guarded = spy(backend);
+        java.util.concurrent.atomic.AtomicReference<NativeActorHandle> adopted = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<AcceptanceClient> active = new java.util.concurrent.atomic.AtomicReference<>();
+        NativeActorExecutionFixture openScope = new NativeActorExecutionFixture();
+        NativeActorBackend.OpenOwnership openOwnership = new NativeActorBackend.OpenOwnership() {
+            public void bindOrigin(World value, Channel current) { openScope.bindOrigin(value, current); }
+            public void adopt(NativeActorHandle value) { openScope.adopt(value); adopted.set(value); }
+            public void rollback(NativeActorHandle value) {
+                assertSame(adopted.get(), value);
+                Map<String, Object> evidence = openScope.close(guarded);
+                assertEquals(true, evidence.get("native_cleanup_verified"));
+            }
+            public void confirmAbsent() { openScope.confirmAbsent(); }
+            public void creationFailed(String reason) { openScope.creationFailed(reason); }
+            public void requireOrigin(World value, Channel current) { openScope.requireOrigin(value, current); }
+        };
+        doAnswer(invocation -> {
+            assertSame(adopted.get(), invocation.getArgument(0));
+            return false;
+        }).when(guarded).isCurrent(any());
+        try (MockedStatic<SessionCoordinator> sessions = mockStatic(SessionCoordinator.class);
+             MockedConstruction<AcceptanceClient> clients = mockConstruction(AcceptanceClient.class,
+                     (nativeClient, context) -> {
+                         when(nativeClient.getAccID()).thenReturn(17);
+                         when(nativeClient.getWorld()).thenReturn(0);
+                         when(nativeClient.getChannel()).thenReturn(1);
+                         when(nativeClient.getLanguage()).thenReturn(3);
+                         when(nativeClient.getWorldServer()).thenReturn(world);
+                         when(nativeClient.getChannelServer()).thenReturn(channel);
+                         when(nativeClient.login(anyString(), anyString(), any())).thenReturn(0);
+                         when(nativeClient.isLoggedIn()).thenReturn(true);
+                         when(nativeClient.finishLogin()).thenAnswer(invocation -> {
+                             account.setLoggedin(Client.LOGIN_LOGGEDIN);
+                             return 0;
+                         });
+                         when(nativeClient.isInTransition()).thenReturn(true);
+                         if (context.getCount() == 2) {
+                             active.set(nativeClient);
+                             when(nativeClient.getPlayer()).thenReturn(character);
+                             when(character.getClient()).thenReturn(nativeClient);
+                             ownership.when(() -> ActorAccountOwnership.owns(lease, nativeClient)).thenReturn(true);
+                             ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(nativeClient);
+                             doAnswer(invocation -> {
+                                 account.setLoggedin(Client.LOGIN_NOTLOGGEDIN);
+                                 when(nativeClient.getPlayer()).thenReturn(null);
+                                 when(nativeClient.isLoggedIn()).thenReturn(false);
+                                 when(character.isLoggedIn()).thenReturn(false);
+                                 when(character.isLoggedInWorld()).thenReturn(false);
+                                 when(worldPlayers.getCharacterById(41)).thenReturn(null);
+                                 when(channelPlayers.getCharacterById(41)).thenReturn(null);
+                                 when(map.getCharacterById(41)).thenReturn(null);
+                                 ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
+                                 return null;
+                             }).when(nativeClient).disconnect(false, false);
+                         }
+                     });
+             MockedConstruction<CharSelectedHandler> selected = mockConstruction(CharSelectedHandler.class,
+                     (handler, context) -> {
+                         when(handler.validateState(any())).thenReturn(true);
+                         doAnswer(invocation -> {
+                             account.setLoggedin(Client.LOGIN_SERVER_TRANSITION);
+                             return null;
+                         }).when(handler).handlePacket(any(), any());
+                     });
+             MockedConstruction<PlayerLoggedinHandler> entered = mockConstruction(PlayerLoggedinHandler.class,
+                     (handler, context) -> when(handler.validateState(any())).thenReturn(true))) {
+            sessions.when(SessionCoordinator::getInstance).thenReturn(mock(SessionCoordinator.class));
+            ObservationException rejected = assertThrows(ObservationException.class, () -> openScope.open(() ->
+                    guarded.open("primary", null, null, () -> false, openOwnership)));
+            assertEquals("actor_native_entry_unverified", rejected.reason());
+            assertNotNull(adopted.get());
+            verify(active.get(), times(1)).disconnect(false, false);
+        }
     }
 
     @Test
@@ -311,9 +449,9 @@ class NativeActorBackendTest {
             ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(null);
             return null;
         }).when(client).disconnect(false, false);
-        WorldEpoch.onWorldStopping();
+        execution.stopWorld();
         assertFalse(backend.isCurrent(handle));
-        Map<String, Object> closed = backend.close(handle);
+        Map<String, Object> closed = execution.close(backend);
         assertEquals(true, closed.get("native_cleanup_verified"));
         assertEquals(true, closed.get("persisted_state_verified"));
         verify(client).disconnect(false, false);
@@ -323,7 +461,7 @@ class NativeActorBackendTest {
     @Test
     void staleCloseCannotStartNativeLogoutOrTouchPersistence() {
         when(server.getWorld(0)).thenReturn(mock(World.class));
-        ObservationException failure = assertThrows(ObservationException.class, () -> backend.close(handle));
+        ObservationException failure = assertThrows(ObservationException.class, () -> execution.close(backend));
         assertTrue(failure.reason().contains("cleanup_unverified"));
         verify(client, never()).disconnect(anyBoolean(), anyBoolean());
         verifyNoInteractions(accounts, characters);
@@ -333,7 +471,7 @@ class NativeActorBackendTest {
     void verifiedCloseEvidenceIsIdempotentAndDoesNotOperateOnAnAlreadyClosedSession() {
         Map<String, Object> evidence = Map.of("native_cleanup_verified", true, "fixture_retained", true);
         handle.recordClose(evidence);
-        assertEquals(evidence, backend.close(handle));
+        assertEquals(evidence, execution.close(backend));
         assertFalse(backend.isCurrent(handle));
         verifyNoInteractions(accounts, characters);
         verify(client, never()).disconnect(anyBoolean(), anyBoolean());
@@ -349,7 +487,7 @@ class NativeActorBackendTest {
         account.setLoggedin(Client.LOGIN_LOGGEDIN);
         when(accounts.findById(17)).thenReturn(account);
 
-        ObservationException first = assertThrows(ObservationException.class, () -> backend.close(handle));
+        ObservationException first = assertThrows(ObservationException.class, () -> execution.close(backend));
         assertTrue(first.reason().contains("cleanup_unverified"));
         assertNotNull(handle.closeContext());
         assertNull(handle.closeEvidence());
@@ -373,23 +511,23 @@ class NativeActorBackendTest {
         // Native CM/QM maps must also be empty, even after Character.empty() cleared its client/map.
         NPCConversationManager remainingCm = mock(NPCConversationManager.class);
         when(client.getCM()).thenReturn(remainingCm);
-        assertTrue(assertThrows(ObservationException.class, () -> backend.close(handle)).reason().contains("cleanup_unverified"));
+        assertTrue(assertThrows(ObservationException.class, () -> execution.close(backend)).reason().contains("cleanup_unverified"));
         ownership.verify(() -> ActorAccountOwnership.release(lease), never());
         when(client.getCM()).thenReturn(null);
         QuestActionManager remainingQm = mock(QuestActionManager.class);
         when(client.getQM()).thenReturn(remainingQm);
-        assertTrue(assertThrows(ObservationException.class, () -> backend.close(handle)).reason().contains("cleanup_unverified"));
+        assertTrue(assertThrows(ObservationException.class, () -> execution.close(backend)).reason().contains("cleanup_unverified"));
         ownership.verify(() -> ActorAccountOwnership.release(lease), never());
         when(client.getQM()).thenReturn(null);
 
-        Map<String, Object> evidence = backend.close(handle);
+        Map<String, Object> evidence = execution.cleanup(permit -> backend.close(handle, permit));
         assertEquals(true, evidence.get("native_cleanup_verified"));
         assertEquals(true, evidence.get("persisted_state_verified"));
         assertEquals(true, evidence.get("native_dialogue_cleanup_verified"));
         verify(client, times(1)).invalidateDialogue();
         verify(client, times(1)).disconnect(false, false);
         verify(match, times(1)).dismissMatchConfirmation(41);
-        assertEquals(evidence, backend.close(handle));
+        assertEquals(evidence, execution.close(backend));
         ownership.verify(() -> ActorAccountOwnership.release(lease), times(1));
     }
 
@@ -398,7 +536,7 @@ class NativeActorBackendTest {
         handle.beginClose(new NativeActorHandle.CloseContext(map, 41, 17, 0, "McpPrimary",
                 1, 0, 50, 5, 0, 0, 10000));
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(mock(Client.class));
-        ObservationException failure = assertThrows(ObservationException.class, () -> backend.close(handle));
+        ObservationException failure = assertThrows(ObservationException.class, () -> execution.close(backend));
         assertEquals("actor_close_cleanup_unverified_stale_owner", failure.reason());
         verify(client, never()).disconnect(anyBoolean(), anyBoolean());
         ownership.verify(() -> ActorAccountOwnership.release(lease), never());
@@ -531,6 +669,10 @@ class NativeActorBackendTest {
         Field field = declaringClass.getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private NativeActorHandle open(java.util.function.BooleanSupplier cancelled) {
+        return new NativeActorExecutionFixture().open(backend, cancelled);
     }
 
     private AccountsDO account() {
