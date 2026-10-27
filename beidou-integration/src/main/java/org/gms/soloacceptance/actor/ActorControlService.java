@@ -7,6 +7,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.execution.CharacterCommandLane;
+import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.execution.ScopeResources;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -21,12 +25,11 @@ import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /** Owns control leases and operations; native registration and persistence stay in the backend. */
@@ -90,32 +93,54 @@ public final class ActorControlService {
 
     /** Bounded draining: unfinished native cleanup keeps its profile quarantined across world starts. */
     public void onWorldStopping() {
+        onWorldStopping(ExecutionScope.tryBeginWorldStop());
+    }
+
+    public void onWorldStopping(Optional<ExecutionScope.WorldStopTicket> stop) {
+        List<Session> draining;
         synchronized (monitor) {
             accepting = false;
             worldGeneration = null;
-            for (Session session : new ArrayList<>(profiles.values())) {
+            draining = new ArrayList<>(profiles.values());
+            for (Session session : draining) {
                 cancelUndispatchedActions(session);
                 Operation opening = operations.get(session.openingOperation);
                 if (opening != null && !terminal(opening.status)) requestCancellation(opening);
-                if (session.handle != null && (opening == null || terminal(opening.status))
-                        && !session.cleanupScheduled && !"CLOSED".equals(session.state)) {
-                    session.cleanupScheduled = true;
-                    session.state = "CLOSING";
-                    submit(session, () -> runClose(session, null), null);
+            }
+        }
+        for (Session session : draining) {
+            synchronized (session.submissionMonitor) {
+                session.execution.beginDrain(stop);
+                NativeActorHandle exactHandle = session.execution.adoptedHandle();
+                boolean cleanup;
+                ExecutionScope.WorkHandle waitFor = null;
+                synchronized (monitor) {
+                    Operation opening = operations.get(session.openingOperation);
+                    cleanup = exactHandle != null && (opening == null || terminal(opening.status))
+                            && !cleanupInFlight(session) && !session.execution.resourceReleased();
+                    if (cleanup) {
+                        session.cleanupScheduled = true;
+                        session.state = "CLOSING";
+                    } else if (!session.execution.resourceReleased() && stop.isPresent()
+                            && stop.get().sourceEpoch() == session.execution.scope().acceptedEpoch()
+                            && session.stopRetryTicket != stop.get()) {
+                        waitFor = session.cleanupWork != null ? session.cleanupWork : opening == null ? null : opening.work;
+                        if (waitFor != null && !waitFor.isSettled()) session.stopRetryTicket = stop.get();
+                        else waitFor = null;
+                    }
+                }
+                if (cleanup) submitCleanup(session, null, exactHandle);
+                if (waitFor != null) {
+                    ExecutionScope.WorkHandle exactWork = waitFor;
+                    waitFor.completion().whenComplete((fact, failure) -> retryStoppedCleanup(session, exactWork));
                 }
             }
-            long deadline = System.nanoTime() + stoppingWait.toNanos();
-            while (profiles.values().stream().anyMatch(session -> session.cleanupScheduled
-                    || "OPENING".equals(session.state))) {
-                long remaining = deadline - System.nanoTime();
-                if (remaining <= 0) break;
-                try {
-                    TimeUnit.NANOSECONDS.timedWait(monitor, remaining);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
+        }
+        long deadline = System.nanoTime() + stoppingWait.toNanos();
+        for (Session session : draining) {
+            session.execution.awaitDrained(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
+        }
+        synchronized (monitor) {
             for (Session session : profiles.values()) {
                 if (!"CLOSED".equals(session.state)) session.state = "QUARANTINED";
             }
@@ -134,12 +159,14 @@ public final class ActorControlService {
             throw error(HttpStatus.BAD_REQUEST, "invalid_actor_location");
         }
         Operation prior;
+        Operation accepted = null;
         synchronized (monitor) {
             RequestKey key = new RequestKey("OPEN", owner, request.profileId(), requestId);
             prior = duplicate(key, request);
             if (prior == null) {
                 requireAccepting();
                 backend.validateProfile(request.profileId(), request.world(), request.channel());
+                requireAccepting();
                 if (profiles.containsKey(request.profileId())) throw error(HttpStatus.CONFLICT, "profile_in_use");
                 if (profiles.size() >= maxSessions) throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_capacity_exceeded");
                 requireHistoryCapacity(true);
@@ -148,16 +175,36 @@ public final class ActorControlService {
                         || requests.size() + reservedFirstCloses() + 2 > maxHistory) {
                     throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
                 }
-                Session session = new Session("session-" + UUID.randomUUID(), nextGeneration.incrementAndGet(),
-                        owner, request.profileId(), worldGeneration, executorFactory.apply(request.profileId()));
-                Operation operation = operation("OPEN", session);
+                WorldEpoch.Token admittedEpoch = WorldEpoch.snapshot().token();
+                ExecutorService createdExecutor = executorFactory.apply(request.profileId());
+                Session session = null;
+                Operation operation;
+                try {
+                    requireAccepting();
+                    session = new Session("session-" + UUID.randomUUID(), nextGeneration.incrementAndGet(),
+                            owner, request.profileId(), worldGeneration, admittedEpoch, backend, createdExecutor);
+                    operation = operation("OPEN", session);
+                } catch (RuntimeException failure) {
+                    if (session != null) closeReleasedLane(session);
+                    else createdExecutor.shutdown();
+                    throw failure;
+                }
                 session.openingOperation = operation.id;
                 sessions.put(session.id, session);
                 profiles.put(session.profile, session);
                 requests.put(key, new RequestRecord(request, operation.id));
-                submit(session, () -> runOpen(session, operation, request), operation);
-                return response(operation, 0, 100);
+                accepted = operation;
             }
+        }
+        if (accepted != null) {
+            Session session = accepted.session;
+            Operation operation = accepted;
+            synchronized (session.submissionMonitor) {
+                CharacterCommandLane.Submission submission = session.execution.submitOpen(operation.work,
+                        () -> runOpen(session, operation, request), () -> workSettled(session, operation));
+                requireSubmitted(submission, operation);
+            }
+            synchronized (monitor) { return response(operation, 0, 100); }
         }
         return refreshedResponse(prior, 0, 100);
     }
@@ -170,26 +217,42 @@ public final class ActorControlService {
             throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
         }
         Operation prior;
+        Session session;
+        RequestKey key = new RequestKey("CLOSE", owner, request.sessionId(), requestId);
         synchronized (monitor) {
-            RequestKey key = new RequestKey("CLOSE", owner, request.sessionId(), requestId);
             prior = duplicate(key, request);
-            if (prior == null) {
-                requireAccepting();
-                Session session = ownedSession(owner, request.sessionId(), request.expectedGeneration());
-                if (!sameWorld(session)) throw error(HttpStatus.GONE, "stale_actor_session");
-                if (!("OPEN".equals(session.state) || "LOST".equals(session.state)
-                        || "QUARANTINED".equals(session.state)) || session.handle == null || session.cleanupScheduled) {
-                    throw error(HttpStatus.CONFLICT, "actor_not_closeable");
+            session = prior == null ? ownedSession(owner, request.sessionId(), request.expectedGeneration()) : prior.session;
+        }
+        if (prior != null) return refreshedResponse(prior, 0, 100);
+        synchronized (session.submissionMonitor) {
+            Operation accepted;
+            NativeActorHandle exactHandle;
+            synchronized (monitor) {
+                prior = duplicate(key, request);
+                if (prior == null) {
+                    requireAccepting();
+                    if (!sameWorld(session)) throw error(HttpStatus.GONE, "stale_actor_session");
+                    if (!("OPEN".equals(session.state) || "LOST".equals(session.state)
+                            || "QUARANTINED".equals(session.state)) || session.handle == null || cleanupInFlight(session)) {
+                        throw error(HttpStatus.CONFLICT, "actor_not_closeable");
+                    }
+                    requireCloseHistoryCapacity(session);
+                    session.firstCloseReserved = false;
+                    accepted = operation("CLOSE", session);
+                    session.state = "CLOSING";
+                    session.cleanupScheduled = true;
+                    cancelUndispatchedActions(session);
+                    requests.put(key, new RequestRecord(request, accepted.id));
+                    exactHandle = session.handle;
+                } else {
+                    accepted = null;
+                    exactHandle = null;
                 }
-                requireCloseHistoryCapacity(session);
-                session.firstCloseReserved = false;
-                Operation operation = operation("CLOSE", session);
-                session.state = "CLOSING";
-                session.cleanupScheduled = true;
-                cancelUndispatchedActions(session);
-                requests.put(key, new RequestRecord(request, operation.id));
-                submit(session, () -> runClose(session, operation), operation);
-                return response(operation, 0, 100);
+            }
+            if (accepted != null) {
+                session.execution.beginDrain(Optional.empty());
+                submitCleanup(session, accepted, exactHandle);
+                synchronized (monitor) { return response(accepted, 0, 100); }
             }
         }
         return refreshedResponse(prior, 0, 100);
@@ -242,32 +305,41 @@ public final class ActorControlService {
             if (prior != null) return refreshedResponse(prior, 0, 100);
             throw failure;
         }
-        synchronized (monitor) {
-            // Concurrent callers may have accepted this ID while native validation was running.
-            prior = duplicate(key, fingerprint);
-            if (prior == null) {
-                requireAccepting();
-                if (ownedSession(owner, request.sessionId(), request.expectedGeneration()) != session) {
-                    throw error(HttpStatus.GONE, "stale_actor_session");
-                }
-                requireActionSession(session, handle);
-                if (operations.size() + reservedFirstCloses() + 1 > maxHistory
-                        || requests.size() + reservedFirstCloses() + 1 > maxHistory) {
-                    throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
-                }
-                if (session.pendingActions >= MAX_PENDING_ACTIONS) {
-                    throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_action_capacity_exceeded");
-                }
-                Operation operation = operation("ACTION", session);
-                operation.action = request.action();
-                operation.actionSlotHeld = true;
-                session.pendingActions++;
-                requests.put(key, new RequestRecord(fingerprint, operation.id));
+        synchronized (session.submissionMonitor) {
+            Operation accepted;
+            synchronized (monitor) {
+                // Concurrent callers may have accepted this ID while native validation was running.
+                prior = duplicate(key, fingerprint);
+                if (prior == null) {
+                    requireAccepting();
+                    if (ownedSession(owner, request.sessionId(), request.expectedGeneration()) != session) {
+                        throw error(HttpStatus.GONE, "stale_actor_session");
+                    }
+                    requireActionSession(session, handle);
+                    if (operations.size() + reservedFirstCloses() + 1 > maxHistory
+                            || requests.size() + reservedFirstCloses() + 1 > maxHistory) {
+                        throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
+                    }
+                    if (session.pendingActions >= MAX_PENDING_ACTIONS) {
+                        throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_action_capacity_exceeded");
+                    }
+                    accepted = operation("ACTION", session);
+                    accepted.action = request.action();
+                    accepted.actionSlotHeld = true;
+                    session.pendingActions++;
+                    requests.put(key, new RequestRecord(fingerprint, accepted.id));
+                } else accepted = null;
+            }
+            if (accepted != null) {
                 Session acceptedSession = session;
                 NativeActorHandle acceptedHandle = handle;
-                submit(session, () -> runAction(acceptedSession, operation, acceptedHandle, text, dialogueVersion,
-                        replyKind, selection, context), operation);
-                return response(operation, 0, 100);
+                ExecutionScope.WorkHandle actualWork = accepted.work;
+                actualWork.completion().whenComplete((fact, failure) -> actionCarrierCompleted(accepted, actualWork));
+                CharacterCommandLane.Submission submission = session.execution.submitAction(accepted.work,
+                        () -> runAction(acceptedSession, accepted, acceptedHandle, text, dialogueVersion,
+                                replyKind, selection, context), () -> workSettled(acceptedSession, accepted));
+                requireSubmitted(submission, accepted);
+                synchronized (monitor) { return response(accepted, 0, 100); }
             }
         }
         return refreshedResponse(prior, 0, 100);
@@ -442,25 +514,37 @@ public final class ActorControlService {
                 }
                 running(operation, "native_actor_open_started");
             }
-            handle = backend.open(session.profile, request.world(), request.channel(), () -> cancelled(session, operation));
+            NativeActorBackend.OpenOwnership ownership = session.execution.beginOpen(operation.work);
+            handle = backend.open(session.profile, request.world(), request.channel(), () -> cancelled(session, operation), ownership);
+            if (session.execution.adoptedHandle() != handle) throw error(HttpStatus.CONFLICT, "native_actor_cleanup_unverified");
             synchronized (monitor) { session.handle = handle; }
             Map<String, Object> snapshot = actorSnapshot(handle);
             if (!backend.isCurrent(handle) || !Boolean.TRUE.equals(snapshot.get("logged_in_world"))) {
                 throw error(HttpStatus.CONFLICT, "native_actor_not_online");
             }
-            synchronized (monitor) {
-                if (!cancelled(session, operation)) {
-                    session.lastActor = copy(snapshot);
-                    session.state = "OPEN";
-                    operation.result = Map.of("observed_outcome", "native_actor_online", "actor", copy(snapshot));
-                    finish(operation, "SUCCEEDED", "native_actor_online");
-                    return;
-                }
-                session.state = "CLOSING";
-                session.cleanupScheduled = true;
+            if (!cancelled(session, operation)) {
+                session.execution.bindActor(handle);
+                AtomicBoolean published = new AtomicBoolean();
+                session.execution.publishOpen(operation.work, () -> {
+                    synchronized (monitor) {
+                        if (!cancelled(session, operation)) {
+                            session.lastActor = copy(snapshot);
+                            session.state = "OPEN";
+                            operation.result = Map.of("observed_outcome", "native_actor_online", "actor", copy(snapshot));
+                            finish(operation, "SUCCEEDED", "native_actor_online");
+                            published.set(true);
+                        }
+                    }
+                });
+                if (published.get()) return;
             }
-            Map<String, Object> cleanup = backend.close(handle);
-            verifyCleanup(cleanup);
+            synchronized (monitor) {
+                if (!"CLOSED".equals(session.state)) {
+                    session.state = "CLOSING";
+                    session.cleanupScheduled = true;
+                }
+            }
+            Map<String, Object> cleanup = session.execution.rollbackInline();
             synchronized (monitor) {
                 session.cleanupScheduled = false;
                 release(session, "CANCELLED");
@@ -473,19 +557,19 @@ public final class ActorControlService {
     }
 
     private void handleOpenFailure(Session session, Operation operation, NativeActorHandle handle, Throwable failure) {
-        boolean rolledBack = handle == null && (failure instanceof ObservationException || failure instanceof CancellationException)
-                && !safeReason(failure, "native_actor_open_failed").contains("cleanup_unverified");
+        if (handle == null) handle = session.execution.adoptedHandle();
+        boolean rolledBack = session.execution.resourceReleased();
         Map<String, Object> cleanup = null;
-        if (handle != null) {
+        if (handle != null && !rolledBack) {
             try {
-                cleanup = backend.close(handle);
-                verifyCleanup(cleanup);
+                cleanup = session.execution.rollbackInline();
                 rolledBack = true;
             } catch (Throwable ignored) {
                 rolledBack = false;
             }
         }
         synchronized (monitor) {
+            if (!rolledBack && handle != null) session.handle = handle;
             session.cleanupScheduled = false;
             boolean cancelled = operation.cancelRequested || !sameWorld(session);
             if (rolledBack) release(session, cancelled ? "CANCELLED" : "FAILED");
@@ -558,8 +642,6 @@ public final class ActorControlService {
                     finish(operation, operation.dispatchStarted ? "INDETERMINATE" : "FAILED", reason);
                 }
             }
-        } finally {
-            synchronized (monitor) { releaseActionSlot(operation); }
         }
     }
 
@@ -738,14 +820,14 @@ public final class ActorControlService {
         }
     }
 
-    private void runClose(Session session, Operation operation) {
+    private void runClose(Session session, Operation operation, NativeActorHandle exactHandle,
+                          ScopeResources.CleanupAttempt attempt) {
         synchronized (monitor) {
             if (operation != null) running(operation, "native_actor_close_started");
             session.state = "CLOSING";
         }
         try {
-            Map<String, Object> cleanup = backend.close(session.handle);
-            verifyCleanup(cleanup);
+            Map<String, Object> cleanup = session.execution.cleanup(attempt, exactHandle);
             synchronized (monitor) {
                 session.cleanupScheduled = false;
                 release(session, "CLOSED");
@@ -760,7 +842,6 @@ public final class ActorControlService {
             }
         } catch (Throwable failure) {
             synchronized (monitor) {
-                session.cleanupScheduled = false;
                 session.state = "QUARANTINED";
                 session.lastActor = null;
                 if (operation != null) {
@@ -769,13 +850,6 @@ public final class ActorControlService {
                 }
                 monitor.notifyAll();
             }
-        }
-    }
-
-    private static void verifyCleanup(Map<String, Object> result) {
-        if (result == null || !Boolean.TRUE.equals(result.get("native_cleanup_verified"))
-                || !Boolean.TRUE.equals(result.get("persisted_state_verified"))) {
-            throw error(HttpStatus.CONFLICT, "native_actor_cleanup_unverified");
         }
     }
 
@@ -833,7 +907,6 @@ public final class ActorControlService {
         session.lastActor = null;
         session.handle = null;
         profiles.remove(session.profile, session);
-        session.executor.shutdown();
         monitor.notifyAll();
     }
 
@@ -845,39 +918,151 @@ public final class ActorControlService {
 
     private Operation operation(String kind, Session session) {
         Operation operation = new Operation("op-" + UUID.randomUUID(), kind, session);
+        if (!"CLOSE".equals(kind)) {
+            try { operation.work = session.execution.acceptWork(); }
+            catch (ExecutionScope.Invalid failure) {
+                WorldEpoch.State current = WorldEpoch.snapshot();
+                if ("scope_not_active".equals(failure.reason()) && (!current.active()
+                        || current.token() != session.execution.scope().acceptedEpoch())) {
+                    throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_world_offline");
+                }
+                throw failure;
+            }
+        }
         operations.put(operation.id, operation);
         event(operation, "queued");
         return operation;
     }
 
-    private void submit(Session session, Runnable task, Operation operation) {
+    private void submitCleanup(Session session, Operation operation, NativeActorHandle exactHandle) {
         try {
-            session.executor.execute(task);
-        } catch (RejectedExecutionException rejected) {
-            if (operation != null && "ACTION".equals(operation.kind)) {
-                operation.error = Map.of("reason", "actor_queue_full");
-                operation.result = Map.of("observed_outcome", "chat".equals(operation.action) ? "chat_not_dispatched"
-                        : "action_not_dispatched", "native_dispatch_started", false);
-                finish(operation, "FAILED", "actor_queue_full");
-                releaseActionSlot(operation);
-                throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
+            ScopeResources.CleanupAttempt attempt = session.execution.cleanupAttempt();
+            synchronized (monitor) {
+                session.cleanupWork = attempt.work();
+                if (operation != null) operation.work = attempt.work();
             }
-            session.cleanupScheduled = false;
-            if (operation != null) {
-                operation.error = Map.of("reason", "actor_queue_full");
-                finish(operation, "FAILED", "actor_queue_full");
-                if ("OPEN".equals(operation.kind) && session.handle == null) release(session, "FAILED");
-                else session.state = sameWorld(session) ? "OPEN" : "QUARANTINED";
-            } else {
-                session.state = "QUARANTINED";
-                monitor.notifyAll();
-                return;
+            CharacterCommandLane.Submission submission = session.execution.submitCleanup(attempt,
+                    () -> runClose(session, operation, exactHandle, attempt),
+                    () -> cleanupSettled(session, operation, attempt.work()));
+            if (submission.status() == CharacterCommandLane.Status.REJECTED
+                    || submission.status() == CharacterCommandLane.Status.CLEANUP_PENDING
+                    || submission.status() == CharacterCommandLane.Status.DUPLICATE) {
+                synchronized (monitor) { cleanupSubmissionFailed(session, operation, "actor_queue_full"); }
             }
+        } catch (RuntimeException unavailable) {
+            synchronized (monitor) { cleanupSubmissionFailed(session, operation, "actor_close_cleanup_unverified_scope"); }
+        }
+    }
+
+    /** One explicit stop intent may recheck an owned resource after the preceding physical carrier settles. */
+    private void retryStoppedCleanup(Session session, ExecutionScope.WorkHandle previous) {
+        synchronized (session.submissionMonitor) {
+            NativeActorHandle exactHandle;
+            synchronized (monitor) {
+                if (!previous.isSettled() || session.execution.resourceReleased() || cleanupInFlight(session)) return;
+                exactHandle = session.execution.adoptedHandle();
+                if (exactHandle == null) return;
+                session.cleanupScheduled = true;
+                session.state = "CLOSING";
+            }
+            submitCleanup(session, null, exactHandle);
+        }
+    }
+
+    private void cleanupSubmissionFailed(Session session, Operation operation, String reason) {
+        session.cleanupScheduled = session.cleanupWork != null && !session.cleanupWork.isSettled();
+        session.state = "QUARANTINED";
+        session.lastActor = null;
+        if (operation != null && !terminal(operation.status)) {
+            operation.error = Map.of("reason", reason);
+            finish(operation, "INDETERMINATE", "native_actor_cleanup_unverified");
+        }
+        monitor.notifyAll();
+    }
+
+    private void requireSubmitted(CharacterCommandLane.Submission submission, Operation operation) {
+        if (submission.status() == CharacterCommandLane.Status.REJECTED) {
             throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
         }
     }
 
+    private void cleanupSettled(Session session, Operation operation, ExecutionScope.WorkHandle work) {
+        boolean released;
+        synchronized (monitor) {
+            if (work.snapshot().rejected() || operation != null && !terminal(operation.status)
+                    || operation == null && session.cleanupScheduled) {
+                cleanupSubmissionFailed(session, operation, "actor_close_cleanup_unverified_scope");
+            }
+            if (operation != null) operation.work = null;
+            released = !profiles.containsValue(session) && session.execution.resourceReleased();
+            if (released && session.cleanupWork == work) {
+                session.cleanupScheduled = false;
+                session.cleanupWork = null;
+            }
+            monitor.notifyAll();
+        }
+        if (released) closeReleasedLane(session);
+    }
+
+    private void workSettled(Session session, Operation operation) {
+        boolean released;
+        synchronized (monitor) {
+            ExecutionScope.WorkHandle work = operation.work;
+            if (!terminal(operation.status)) {
+                if (work.snapshot().rejected()) {
+                    operation.error = Map.of("reason", "actor_queue_full");
+                    if ("ACTION".equals(operation.kind)) operation.result = Map.of("observed_outcome",
+                            "chat".equals(operation.action) ? "chat_not_dispatched" : "action_not_dispatched",
+                            "native_dispatch_started", false);
+                    finish(operation, "FAILED", "actor_queue_full");
+                    if ("OPEN".equals(operation.kind) && session.execution.resourceReleased()) release(session, "FAILED");
+                } else if ("OPEN".equals(operation.kind)) {
+                    if (session.execution.resourceReleased()) cancelledBeforeOpen(session, operation);
+                    else {
+                        session.state = "QUARANTINED";
+                        operation.error = Map.of("reason", "native_actor_cleanup_unverified");
+                        finish(operation, "INDETERMINATE", "native_actor_cleanup_unverified");
+                    }
+                } else if (operation.cancelRequested || !sameWorld(session) || session.cleanupScheduled) {
+                    cancelledBeforeAction(operation);
+                } else {
+                    operation.error = Map.of("reason", "actor_command_rejected");
+                    finish(operation, "FAILED", "actor_command_rejected");
+                }
+            }
+            if (!"ACTION".equals(operation.kind)) operation.work = null;
+            released = !profiles.containsValue(session) && session.execution.resourceReleased();
+            monitor.notifyAll();
+        }
+        if (released) closeReleasedLane(session);
+    }
+
+    /** Pure receipt of the factual completion, after the lane's physical tail and settle hook have exited. */
+    private void actionCarrierCompleted(Operation operation, ExecutionScope.WorkHandle exactWork) {
+        synchronized (monitor) {
+            if (operation.work != exactWork) return;
+            releaseActionSlot(operation);
+            operation.work = null;
+            monitor.notifyAll();
+        }
+    }
+
+    private static void closeReleasedLane(Session session) {
+        session.execution.beginDrain(Optional.empty());
+        session.execution.closeLane();
+    }
+
+    /** A terminal operation is not permission to reuse a cleanup whose carrier is still settling. */
+    private static boolean cleanupInFlight(Session session) {
+        if (session.cleanupScheduled && session.cleanupWork != null && session.cleanupWork.isSettled()) {
+            session.cleanupScheduled = false;
+            session.cleanupWork = null;
+        }
+        return session.cleanupScheduled;
+    }
+
     private void requestCancellation(Operation operation) {
+        operation.session.execution.cancel(operation.work);
         operation.cancelRequested = true;
         operation.status = "CANCEL_REQUESTED";
         operation.step = "cancellation_requested";
@@ -1043,21 +1228,25 @@ public final class ActorControlService {
         final String owner;
         final String profile;
         final String runtimeGeneration;
-        final ExecutorService executor;
+        final Object submissionMonitor = new Object();
+        final AcceptanceActorExecution execution;
         String state = "OPENING";
         String openingOperation;
         NativeActorHandle handle;
         Map<String, Object> lastActor;
         boolean cleanupScheduled;
+        ExecutionScope.WorkHandle cleanupWork;
+        ExecutionScope.WorldStopTicket stopRetryTicket;
         boolean firstCloseReserved = true;
         int pendingActions;
-        Session(String id, long generation, String owner, String profile, String runtimeGeneration, ExecutorService executor) {
+        Session(String id, long generation, String owner, String profile, String runtimeGeneration, WorldEpoch.Token admittedEpoch,
+                NativeActorBackend backend, ExecutorService executor) {
             this.id = id;
             this.generation = generation;
             this.owner = owner;
             this.profile = profile;
             this.runtimeGeneration = runtimeGeneration;
-            this.executor = executor;
+            this.execution = new AcceptanceActorExecution(backend, this, admittedEpoch, executor);
         }
     }
     private static final class Operation {
@@ -1070,6 +1259,7 @@ public final class ActorControlService {
         boolean cancelRequested;
         boolean dispatchStarted;
         boolean actionSlotHeld;
+        ExecutionScope.WorkHandle work;
         String action;
         long sequence;
         Map<String, Object> result = Map.of();

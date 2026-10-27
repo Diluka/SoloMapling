@@ -41,6 +41,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import soloMapling.beidou.BotRegistry;
 import soloMapling.game.context.GameContext;
+import soloMapling.game.execution.ScopeResources;
 
 import java.sql.Date;
 import java.nio.ByteBuffer;
@@ -66,6 +67,21 @@ import java.util.function.Supplier;
 @ConditionalOnProperty(prefix = "solomapling.acceptance", name = {"enabled", "actors-enabled"},
         havingValue = "true", matchIfMissing = false)
 public final class NativeActorBackend {
+    /** The accepted OPEN work owns the result before native entry validation can fail. */
+    public interface OpenOwnership {
+        void bindOrigin(World world, Channel channel);
+        void adopt(NativeActorHandle handle);
+        void rollback(NativeActorHandle handle);
+        void confirmAbsent();
+        void creationFailed(String fixedReason);
+        void requireOrigin(World world, Channel channel);
+    }
+
+    private static final class OpenProgress {
+        boolean nativeAttempt;
+        boolean released;
+    }
+
     private static final AtomicLong SESSION_IDS = new AtomicLong(Long.MIN_VALUE);
     private static final long CLEANUP_TIMEOUT_NANOS = 15_000_000_000L;
     private static final InventoryType[] INVENTORIES = {InventoryType.EQUIPPED, InventoryType.EQUIP,
@@ -457,7 +473,24 @@ public final class NativeActorBackend {
         return Collections.unmodifiableMap(response);
     }
 
-    public NativeActorHandle open(String profileId, Integer worldId, Integer channelId, BooleanSupplier cancelled) {
+    public NativeActorHandle open(String profileId, Integer worldId, Integer channelId, BooleanSupplier cancelled,
+                                  OpenOwnership ownership) {
+        Objects.requireNonNull(ownership, "open ownership");
+        OpenProgress progress = new OpenProgress();
+        try {
+            return openOwned(profileId, worldId, channelId, cancelled, ownership, progress);
+        } catch (RuntimeException failure) {
+            if (!progress.released) {
+                if (progress.nativeAttempt) ownership.creationFailed("actor_open_cleanup_unverified");
+                else ownership.confirmAbsent();
+            }
+            throw failure;
+        }
+    }
+
+    private NativeActorHandle openOwned(String profileId, Integer worldId, Integer channelId,
+                                        BooleanSupplier cancelled, OpenOwnership openOwnership,
+                                        OpenProgress progress) {
         ActorProfiles.Resolved profile = profiles.resolve(profileId, worldId, channelId);
         checkCancelled(cancelled);
         Server server = servers.get();
@@ -465,6 +498,7 @@ public final class NativeActorBackend {
         Channel channel = world == null ? null : world.getChannel(profile.channel());
         if (world == null || channel == null) throw unavailable("actor_world_unavailable");
         if (world.isWorldCapacityFull()) throw conflict("actor_world_full");
+        openOwnership.bindOrigin(world, channel);
 
         AccountsDO account = accounts.findByName(profile.accountName());
         boolean accountCreated = false;
@@ -493,6 +527,7 @@ public final class NativeActorBackend {
         Hwid hwid = new Hwid(String.format("%08X", accountId));
         AcceptanceClient login = client(Client.Type.LOGIN, remote, world, channel, accountId, profile.accountName());
         ActorAccountOwnership.Lease ownership = ActorAccountOwnership.claim(accountId);
+        progress.nativeAttempt = true;
         AcceptanceClient active = login;
         NativeActorHandle handle = null;
         boolean loginOwned = false;
@@ -557,6 +592,7 @@ public final class NativeActorBackend {
             if (character == null) throw unavailable("actor_native_entry_rejected");
             handle = new NativeActorHandle(profileId, accountId, active, character, world, channel, ownership,
                     accountCreated, characterCreated);
+            openOwnership.adopt(handle);
             if (!isCurrent(handle) || character.getId() != characterId || character.gmLevel() != 0
                     || BotRegistry.isBot(character) || !loggedIn(accountId, Client.LOGIN_LOGGEDIN)) {
                 throw unavailable("actor_native_entry_unverified");
@@ -566,12 +602,15 @@ public final class NativeActorBackend {
         } catch (RuntimeException failure) {
             try {
                 if (handle != null) {
-                    close(handle);
+                    openOwnership.rollback(handle);
                 } else if (loginOwned || ActorAccountOwnership.currentOnlineClient(accountId) == login
                         || ActorAccountOwnership.currentOnlineClient(accountId) == active) {
-                    cleanupFailedOpen(server, login, active, accountId);
+                    openOwnership.requireOrigin(world, channel);
+                    cleanupFailedOpen(server, login, active, accountId, world, channel, openOwnership);
                     releaseOwnership(ownership);
+                    openOwnership.confirmAbsent();
                 } else {
+                    openOwnership.requireOrigin(world, channel);
                     // Never log off an account merely because a rejected login populated accID.
                     SessionCoordinator.getInstance().closeLoginSession(login);
                     login.closeSession();
@@ -580,7 +619,9 @@ public final class NativeActorBackend {
                         throw unavailable("actor_open_cleanup_unverified_rejected_login");
                     }
                     releaseOwnership(ownership);
+                    openOwnership.confirmAbsent();
                 }
+                progress.released = true;
             } catch (RuntimeException cleanupFailure) {
                 throw unavailable("actor_open_cleanup_unverified");
             }
@@ -641,14 +682,15 @@ public final class NativeActorBackend {
         }
     }
 
-    public Map<String, Object> close(NativeActorHandle handle) {
+    public Map<String, Object> close(NativeActorHandle handle, ScopeResources.DrainPermit permit) {
+        AcceptanceActorContexts.requireDrainPermit(handle, permit);
         synchronized (handle) {
             if (handle.closeEvidence() != null) return handle.closeEvidence();
             Character character = handle.character();
             AcceptanceClient client = handle.client();
             NativeActorHandle.CloseContext context = handle.closeContext();
             if (context == null) {
-                AcceptanceActorContexts.requireCloseCharacter(servers.get(), handle);
+                AcceptanceActorContexts.requireCloseCharacter(servers.get(), handle, permit);
                 // These are native cooperative exits; dropping Java references leaves shared state behind.
                 withClient(client, () -> {
                     if (character.getParty() != null) Party.leaveParty(character.getParty(), client);
@@ -661,12 +703,14 @@ public final class NativeActorBackend {
                 }
                 context = closeContext(handle, character.getMap());
                 handle.beginClose(context);
+                AcceptanceActorContexts.requireDrainPermit(handle, permit);
                 client.disconnect(false, false);
             } else {
+                AcceptanceActorContexts.requireDrainPermit(handle, permit);
                 requireCloseOwnership(handle);
             }
             NativeActorHandle.CloseContext closing = context;
-            await(() -> nativeCleanupComplete(handle, closing), "actor_close_cleanup_unverified");
+            await(() -> nativeCleanupComplete(handle, closing, permit), "actor_close_cleanup_unverified");
             client.closeSession();
             client.invalidateDialogue();
             CharactersDO stored = characters.findById(closing.characterId());
@@ -686,8 +730,10 @@ public final class NativeActorBackend {
         }
     }
 
-    private void cleanupFailedOpen(Server server, AcceptanceClient login, AcceptanceClient active, int accountId) {
-        if (servers.get().getWorld(login.getWorld()) != login.getWorldServer()) {
+    private void cleanupFailedOpen(Server server, AcceptanceClient login, AcceptanceClient active, int accountId,
+                                   World world, Channel channel, OpenOwnership ownership) {
+        ownership.requireOrigin(world, channel);
+        if (servers.get().getWorld(world.getId()) != world || world.getChannel(channel.getId()) != channel) {
             throw unavailable("actor_open_cleanup_unverified_world_replaced");
         }
         if (hasForeignOnlineCharacter(server, accountId, active.getPlayer())) {
@@ -704,10 +750,13 @@ public final class NativeActorBackend {
             server.freeCharacteridInTransition(active);
             active.disconnect(false, false);
         }
-        await(() -> loggedIn(accountId, Client.LOGIN_NOTLOGGEDIN)
+        await(() -> {
+            ownership.requireOrigin(world, channel);
+            return loggedIn(accountId, Client.LOGIN_NOTLOGGEDIN)
                 && ActorAccountOwnership.currentOnlineClient(accountId) == null
                 && !hasForeignOnlineCharacter(server, accountId, null)
-                && active.getPlayer() == null && !active.isLoggedIn(), "actor_open_cleanup_unverified");
+                && active.getPlayer() == null && !active.isLoggedIn();
+        }, "actor_open_cleanup_unverified");
         SessionCoordinator.getInstance().closeLoginSession(login);
         server.unregisterLoginState(login);
         login.closeSession();
@@ -724,7 +773,9 @@ public final class NativeActorBackend {
         }
     }
 
-    private boolean nativeCleanupComplete(NativeActorHandle handle, NativeActorHandle.CloseContext context) {
+    private boolean nativeCleanupComplete(NativeActorHandle handle, NativeActorHandle.CloseContext context,
+                                          ScopeResources.DrainPermit permit) {
+        AcceptanceActorContexts.requireDrainPermit(handle, permit);
         requireCloseOwnership(handle);
         Character character = handle.character();
         return loggedIn(handle.accountId(), Client.LOGIN_NOTLOGGEDIN)

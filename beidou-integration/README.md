@@ -92,8 +92,10 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 
 共享基础的内部ABI及验收范围见 [共享游戏基建](../docs/shared-game-foundation/README.md)。
 #117 加入中立WorldEpoch、角色/场景结构检查和MCP/Bot薄适配，完整构建、CI、隔离及实际部署原生验证已过，PR #130交付并关闭117；
-实际部署保持#110源码身份，公共层不增加MCP工具或动作。Bot真实对象/宿主路由替身测试与完整V2运行分别留证。
-后续按 [共享基础 #116](https://github.com/Diluka/SoloMapling/issues/116) 的#118～#129实际依赖推进，
+实际运行已包含 #117，公共层不增加 MCP 工具或动作。Bot 真实对象/宿主路由替身测试与完整 V2 运行分别留证。
+#118 提供 ExecutionScope、ScopeResources、CharacterCommandLane 及 MCP 薄接线；
+[内部执行接口与取消排空](../docs/shared-game-foundation/execution-scope.md)区分取消、真实退出、精确资源释放和世界停止窗口。交付状态与完整构建、CI、隔离及实际部署证据见对应 Issue，代码合并或定向测试不代替部署验收。
+后续按 [共享基础 #116](https://github.com/Diluka/SoloMapling/issues/116) 的 #119～#129 实际依赖推进，
 不扩展平行实现；已有MCP交付不冒充公共动作/NPC层完成，礼包及出行暂后排。
 
 ## 验证边界

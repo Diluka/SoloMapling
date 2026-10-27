@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import soloMapling.beidou.BotRegistry;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
+import soloMapling.game.execution.ScopeResources;
 
 /** MCP ownership policy around the shared, identity-only native context checks. */
 public final class AcceptanceActorContexts {
@@ -49,11 +50,20 @@ public final class AcceptanceActorContexts {
         }
     }
 
-    /**
-     * Owned logout may drain after WorldEpoch has stopped; this never grants an action lease.
-     * Keep the prior exact registration guard until #118 supplies a dedicated drain context.
-     */
-    public static void requireCloseCharacter(Server server, NativeActorHandle handle) {
+    /** Only the executing cleanup work may use its exact owned result during draining. */
+    public static void requireDrainPermit(NativeActorHandle handle, ScopeResources.DrainPermit permit) {
+        try {
+            if (permit == null) throw new IllegalStateException("missing cleanup permit");
+            permit.requireExecuting(handle);
+        } catch (RuntimeException invalid) {
+            throw error(HttpStatus.CONFLICT, "actor_close_cleanup_unverified_scope");
+        }
+    }
+
+    /** The resource-specific permission never grants an ordinary character action lease. */
+    public static void requireCloseCharacter(Server server, NativeActorHandle handle,
+                                             ScopeResources.DrainPermit permit) {
+        requireDrainPermit(handle, permit);
         try {
             requireIdentity(handle);
             World world = server.getWorld(handle.world().getId());

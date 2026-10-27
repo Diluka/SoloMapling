@@ -21,6 +21,18 @@ public final class WorldEpoch {
         return CURRENT.get();
     }
 
+    /** Atomically reports the exact active source of a stop, without inventing an inactive source. */
+    public static StopTransition stopTransition() {
+        while (true) {
+            State source = CURRENT.get();
+            if (!source.active()) return new StopTransition(source, source, false);
+            State stopped = new State(false, new Token());
+            if (CURRENT.compareAndSet(source, stopped)) return new StopTransition(source, stopped, true);
+        }
+    }
+
+    public record StopTransition(State source, State stopped, boolean transitioned) { }
+
     public record State(boolean active, Token token) { }
 
     /** Tokens compare by object identity; text is only a stable boundary projection. */

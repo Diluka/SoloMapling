@@ -9,6 +9,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
+import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.execution.CharacterCommandLane;
+import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.execution.ScopeResources;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -24,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -44,22 +49,19 @@ class ActorControlServiceTest {
         backend = mock(NativeActorBackend.class);
         when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200L,
                 "native_clock_update_interval_ms", 777L));
-        handle = mock(NativeActorHandle.class);
         client = mock(AcceptanceClient.class);
-        when(handle.client()).thenReturn(client);
-        GameContext.CharacterRef binding = mock(GameContext.CharacterRef.class);
-        when(handle.characterRef()).thenReturn(binding);
-        when(backend.open(anyString(), any(), any(), any())).thenReturn(handle);
+        handle = handleFixture(client);
+        doAnswer(invocation -> adoptOpen(invocation.getArgument(4), handle)).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
         when(backend.isCurrent(handle)).thenReturn(true);
         when(backend.snapshot(handle)).thenReturn(Map.of("character_id", 73, "logged_in_world", true,
                 "persisted", true, "packet_events", List.of()));
-        when(backend.close(handle)).thenReturn(Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
     }
 
     @AfterEach
     void stopFixtures() {
-        AcceptanceObservationRuntime.onWorldStopped();
-        services.forEach(ActorControlService::onWorldStopping);
+        var stop = ExecutionScope.tryBeginWorldStop();
+        services.forEach(service -> service.onWorldStopping(stop));
         new ArrayList<>(executors).forEach(ManualExecutor::drain);
         executors.forEach(ManualExecutor::shutdownNow);
     }
@@ -71,7 +73,7 @@ class ActorControlServiceTest {
         assertEquals("QUEUED", opened.get("status"));
         assertEquals("OPENING", session(opened).get("state"));
         assertNull(session(opened).get("actor"));
-        verify(backend, never()).open(anyString(), any(), any(), any());
+        verify(backend, never()).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
 
         executors.getFirst().runNext();
         var completed = service.get("admin", id(opened), 0, 100);
@@ -96,8 +98,8 @@ class ActorControlServiceTest {
         assertEquals("CLOSED", session(repeatedOpen).get("state"));
         var repeatedClose = service.close("admin", "close-one", closeRequest(opened));
         assertEquals(id(closing), id(repeatedClose));
-        verify(backend, times(1)).open(anyString(), any(), any(), any());
-        verify(backend, times(1)).close(handle);
+        verify(backend, times(1)).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+        verify(backend, times(1)).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -150,7 +152,7 @@ class ActorControlServiceTest {
         assertEquals(0, service.publicCapabilities().get("active_sessions"));
         assertEquals(1, service.publicCapabilities().get("idempotency_records"));
         assertEquals(id(opened), id(open(service, "open-one")));
-        verify(backend, never()).open(anyString(), any(), any(), any());
+        verify(backend, never()).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
     }
 
     @Test
@@ -158,11 +160,14 @@ class ActorControlServiceTest {
         ActorControlService service = service(4, 20, 64);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
-        when(backend.open(anyString(), any(), any(), any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            ownership.bindOrigin(handle.world(), handle.channel());
             entered.countDown();
             assertTrue(complete.await(5, TimeUnit.SECONDS));
+            ownership.adopt(handle);
             return handle;
-        });
+        }).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
         var opened = open(service, "open-one");
         Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
         try {
@@ -178,7 +183,7 @@ class ActorControlServiceTest {
         var cancelled = service.get("admin", id(opened), 0, 100);
         assertEquals("CANCELLED", cancelled.get("status"));
         assertEquals(true, ((Map<?, ?>) result(cancelled).get("cleanup")).get("native_cleanup_verified"));
-        verify(backend, times(1)).close(handle);
+        verify(backend, times(1)).close(eq(handle), any(ScopeResources.DrainPermit.class));
         assertEquals(0, service.publicCapabilities().get("active_sessions"));
     }
 
@@ -194,7 +199,7 @@ class ActorControlServiceTest {
         assertEquals("SUCCEEDED", done.get("status"));
         assertEquals("CLOSED", session(done).get("state"));
         assertEquals(true, result(done).get("cancel_too_late"));
-        verify(backend).close(handle);
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -202,7 +207,7 @@ class ActorControlServiceTest {
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "open-one");
         executors.getFirst().runNext();
-        when(backend.close(handle)).thenReturn(Map.of("native_cleanup_verified", true, "persisted_state_verified", false));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(Map.of("native_cleanup_verified", true, "persisted_state_verified", false));
         var closing = service.close("admin", "close-one", closeRequest(opened));
         executors.getFirst().runNext();
         var uncertain = service.get("admin", id(closing), 0, 100);
@@ -213,37 +218,339 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void aPreviousWorldCannotPublishALateActorAndItsProfileStaysReservedUntilCleanup() throws Exception {
+    void aStoppedWorldCanCleanItsLateActorBeforeTheNextWorldStarts() throws Exception {
         ActorControlService service = service(4, 20, 64);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
         AtomicBoolean sawCancellation = new AtomicBoolean();
-        when(backend.open(anyString(), any(), any(), any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             BooleanSupplier cancelled = invocation.getArgument(3);
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            ownership.bindOrigin(handle.world(), handle.channel());
             entered.countDown();
             assertTrue(complete.await(5, TimeUnit.SECONDS));
             sawCancellation.set(cancelled.getAsBoolean());
+            ownership.adopt(handle);
             return handle;
-        });
+        }).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
         var opened = open(service, "open-one");
         Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            AcceptanceObservationRuntime.onWorldStopped();
             service.onWorldStopping();
-            AcceptanceObservationRuntime.onWorldStarted();
-            service.onWorldStarted();
-            assertEquals("profile_in_use", assertThrows(ObservationException.class, () -> open(service, "open-new-world")).reason());
+            assertEquals(1, service.publicCapabilities().get("active_sessions"));
+            assertEquals(false, service.publicCapabilities().get("actor_accepting_requests"));
         } finally {
             complete.countDown();
             worker.join(5_000);
         }
+        assertFalse(worker.isAlive());
         assertTrue(sawCancellation.get());
         assertEquals("CANCELLED", service.get("admin", id(opened), 0, 100).get("status"));
-        verify(backend, times(1)).close(handle);
+        verify(backend, times(1)).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        assertEquals(0, service.publicCapabilities().get("active_sessions"));
+        AcceptanceObservationRuntime.onWorldStarted();
+        service.onWorldStarted();
         var newWorld = open(service, "open-new-world");
         assertNotEquals(opened.get("runtime_generation"), newWorld.get("runtime_generation"));
         assertTrue(generation(newWorld) > generation(opened));
+    }
+
+    @Test
+    void aNewWorldCannotAuthorizeCleanupOfThePreviousWorldsLateActor() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            ownership.bindOrigin(handle.world(), handle.channel());
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            ownership.adopt(handle);
+            return handle;
+        }).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+        var opened = open(service, "open-old-world");
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.onWorldStopping();
+            AcceptanceObservationRuntime.onWorldStarted();
+            service.onWorldStarted();
+        } finally {
+            complete.countDown();
+            worker.join(5_000);
+        }
+        assertFalse(worker.isAlive());
+        var uncertain = service.get("admin", id(opened), 0, 100);
+        assertEquals("INDETERMINATE", uncertain.get("status"));
+        assertEquals("QUARANTINED", session(uncertain).get("state"));
+        assertEquals(false, session(uncertain).get("actor_current"));
+        assertNull(session(uncertain).get("actor"));
+        assertEquals(1, service.publicCapabilities().get("active_sessions"));
+        assertEquals("profile_in_use", assertThrows(ObservationException.class,
+                () -> open(service, "open-new-world")).reason());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void anAdoptedOpenResultThatNeverReturnsStillHasAnOwnedCleanupAndCanBeVerifiedLater() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        doAnswer(invocation -> {
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            adoptOpen(ownership, handle);
+            ownership.creationFailed("actor_open_cleanup_unverified");
+            throw new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_open_cleanup_unverified");
+        }).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
+            invocation.<ScopeResources.DrainPermit>getArgument(1).requireExecuting(handle);
+            return Map.of("native_cleanup_verified", false, "persisted_state_verified", false);
+        });
+        var opened = open(service, "open-adopted-failure");
+        executors.getFirst().runNext();
+        var failure = service.get("admin", id(opened), 0, 100);
+        assertEquals("INDETERMINATE", failure.get("status"));
+        assertEquals("QUARANTINED", session(failure).get("state"));
+        AcceptanceActorExecution execution = execution(service, opened);
+        assertSame(handle, execution.adoptedHandle());
+        assertEquals(1, execution.scope().snapshot().outstandingResources());
+        assertFalse(execution.scope().snapshot().unloadComplete());
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
+            invocation.<ScopeResources.DrainPermit>getArgument(1).requireExecuting(handle);
+            return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
+        });
+        var closed = service.close("admin", "verify-adopted-resource", closeRequest(opened));
+        executors.getFirst().runNext();
+        assertEquals("SUCCEEDED", service.get("admin", id(closed), 0, 100).get("status"));
+        assertEquals(0, execution.scope().snapshot().outstandingResources());
+        assertTrue(execution.scope().snapshot().unloadComplete());
+        assertNull(execution.adoptedHandle());
+        verify(backend, times(2)).close(eq(handle), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void backendInlineRollbackBeforeOpenReturnsCannotTriggerASecondQueuedCleanup() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        doAnswer(invocation -> {
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            adoptOpen(ownership, handle);
+            ownership.rollback(handle);
+            throw new ObservationException(HttpStatus.CONFLICT, "actor_native_entry_unverified");
+        }).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
+            invocation.<ScopeResources.DrainPermit>getArgument(1).requireExecuting(handle);
+            return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
+        });
+        var opened = open(service, "open-inline-rollback");
+        executors.getFirst().runNext();
+        assertEquals("FAILED", service.get("admin", id(opened), 0, 100).get("status"));
+        assertEquals(0, service.publicCapabilities().get("active_sessions"));
+        assertTrue(execution(service, opened).scope().snapshot().unloadComplete());
+        service.onWorldStopping();
+        executors.getFirst().drain();
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        verify(backend, never()).close(isNull(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void aNewWorldStopsItsOwnActorWithoutRenewingAnOlderQuarantinedResourcesPermit() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            ownership.bindOrigin(handle.world(), handle.channel());
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            ownership.adopt(handle);
+            return handle;
+        }).when(backend).open(eq("primary"), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+        var old = open(service, "open-old-resource");
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.onWorldStopping();
+            AcceptanceObservationRuntime.onWorldStarted();
+            service.onWorldStarted();
+        } finally {
+            complete.countDown();
+            worker.join(5_000);
+        }
+        NativeActorHandle secondary = handleFixture(mock(AcceptanceClient.class));
+        doAnswer(invocation -> adoptOpen(invocation.getArgument(4), secondary)).when(backend).open(
+                eq("secondary"), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+        when(backend.isCurrent(secondary)).thenReturn(true);
+        when(backend.snapshot(secondary)).thenReturn(Map.of("character_id", 74, "logged_in_world", true));
+        when(backend.close(eq(secondary), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
+            invocation.<ScopeResources.DrainPermit>getArgument(1).requireExecuting(secondary);
+            return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
+        });
+        var current = service.open("admin", "open-current-resource", new ActorOpenRequest("secondary", 0, 1));
+        executors.getLast().runNext();
+        assertDoesNotThrow(() -> { service.onWorldStopping(); });
+        executors.getLast().drain();
+        assertEquals("QUARANTINED", session(service.get("admin", id(old), 0, 100)).get("state"));
+        assertEquals("CLOSED", session(service.get("admin", id(current), 0, 100)).get("state"));
+        assertEquals(1, execution(service, old).scope().snapshot().outstandingResources());
+        assertFalse(execution(service, old).scope().snapshot().unloadComplete());
+        assertTrue(execution(service, current).scope().snapshot().unloadComplete());
+        verify(backend, never()).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        verify(backend).close(eq(secondary), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void repeatedWorldStopAndExplicitCloseShareTheSameInFlightNativeCleanup() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-before-close");
+        executors.getFirst().runNext();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
+            invocation.<ScopeResources.DrainPermit>getArgument(1).requireExecuting(handle);
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
+        });
+        var closing = service.close("admin", "close-before-stop", closeRequest(opened));
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.onWorldStopping();
+            service.onWorldStopping();
+            assertFalse(execution(service, opened).scope().snapshot().unloadComplete());
+        } finally {
+            complete.countDown();
+            worker.join(5_000);
+        }
+        assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+        assertTrue(execution(service, opened).scope().snapshot().unloadComplete());
+        assertTrue(executors.getFirst().queue.isEmpty());
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        verify(backend, never()).close(isNull(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void closeRetryAndWorldStopCannotResubmitTheSameAttemptBeforeItsPhysicalSettlementCompletes() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-settlement-race");
+        executors.getFirst().runNext();
+        var closing = service.close("admin", "close-settlement-race", closeRequest(opened));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(
+                Map.of("native_cleanup_verified", false, "persisted_state_verified", false),
+                Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
+        AcceptanceActorExecution execution = execution(service, opened);
+        var laneField = AcceptanceActorExecution.class.getDeclaredField("lane");
+        laneField.setAccessible(true);
+        Object lane = laneField.get(execution);
+        var laneMonitorField = lane.getClass().getDeclaredField("monitor");
+        laneMonitorField.setAccessible(true);
+        Object laneMonitor = laneMonitorField.get(lane);
+        executors.getFirst().runNext();
+        // Start an explicit retry whose native result is held until the lane tail lock is acquired.
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(release.await(5, TimeUnit.SECONDS));
+            return Map.of("native_cleanup_verified", false, "persisted_state_verified", false);
+        }).when(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        var retry = service.close("admin", "retry-before-tail", closeRequest(opened));
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            synchronized (laneMonitor) {
+                release.countDown();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (operationWork(service, retry) != null && System.nanoTime() < deadline) {
+                    service.get("admin", id(retry), 0, 100);
+                    Thread.sleep(1);
+                }
+                assertNull(operationWork(service, retry), "service hook reached the lane tail");
+                assertFalse(execution.scope().snapshot().unloadComplete());
+                assertEquals("actor_not_closeable", assertThrows(ObservationException.class,
+                        () -> service.close("admin", "must-wait-for-tail", closeRequest(opened))).reason());
+                service.onWorldStopping();
+                assertTrue(executors.getFirst().queue.isEmpty());
+            }
+        } finally {
+            release.countDown();
+            worker.join(5_000);
+        }
+        assertFalse(worker.isAlive());
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(
+                Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
+        service.onWorldStopping();
+        executors.getFirst().drain();
+        assertEquals("CLOSED", session(service.get("admin", id(closing), 0, 100)).get("state"));
+        assertTrue(execution.scope().snapshot().unloadComplete());
+    }
+
+    @Test
+    void aTerminalActionDoesNotRefundItsMcpSlotOrSpendNewHistoryBeforeTheLaneTailExits() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareChat(service);
+        var opened = open(service, "open-action-tail");
+        executors.getFirst().runNext();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(backend.chat(handle, "运行中的第一条")).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(release.await(5, TimeUnit.SECONDS));
+            return chatSuccess();
+        });
+        var first = service.act("admin", "action-first", chatRequest(opened, "运行中的第一条"));
+        for (int i = 0; i < 6; i++) service.act("admin", "action-queued-" + i, chatRequest(opened, "排队" + i));
+        Object execution = execution(service, opened);
+        var laneField = AcceptanceActorExecution.class.getDeclaredField("lane");
+        laneField.setAccessible(true);
+        Object lane = laneField.get(execution);
+        var laneMonitorField = lane.getClass().getDeclaredField("monitor");
+        laneMonitorField.setAccessible(true);
+        Object laneMonitor = laneMonitorField.get(lane);
+        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            synchronized (laneMonitor) {
+                release.countDown();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (!"SUCCEEDED".equals(service.get("admin", id(first), 0, 100).get("status"))
+                        && System.nanoTime() < deadline) Thread.sleep(1);
+                assertEquals("SUCCEEDED", service.get("admin", id(first), 0, 100).get("status"));
+                assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                        () -> service.act("admin", "action-before-tail", chatRequest(opened, "不能先退额"))).reason());
+                assertEquals(8, service.publicCapabilities().get("operation_history_size"));
+                var closing = service.close("admin", "close-before-action-tail", closeRequest(opened));
+                assertEquals("CLOSING", session(closing).get("state"));
+                assertEquals(7, executors.getFirst().queue.size());
+            }
+        } finally {
+            release.countDown();
+            worker.join(5_000);
+        }
+        assertFalse(worker.isAlive());
+        executors.getFirst().drain();
+        assertEquals("CLOSED", session(service.get("admin", id(first), 0, 100)).get("state"));
+        assertTrue(execution(service, opened).scope().snapshot().unloadComplete());
+        verify(backend, times(1)).chat(any(), any());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ExecutionScope.WorkHandle operationWork(ActorControlService service, Map<String, Object> operation) throws Exception {
+        var operations = ActorControlService.class.getDeclaredField("operations");
+        operations.setAccessible(true);
+        Object item = ((Map<String, ?>) operations.get(service)).get(id(operation));
+        var work = item.getClass().getDeclaredField("work");
+        work.setAccessible(true);
+        return (ExecutionScope.WorkHandle) work.get(item);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AcceptanceActorExecution execution(ActorControlService service, Map<String, Object> operation) throws Exception {
+        var sessions = ActorControlService.class.getDeclaredField("sessions");
+        sessions.setAccessible(true);
+        Object session = ((Map<String, ?>) sessions.get(service)).get(sessionId(operation));
+        var execution = session.getClass().getDeclaredField("execution");
+        execution.setAccessible(true);
+        return (AcceptanceActorExecution) execution.get(session);
     }
 
     @Test
@@ -260,18 +567,18 @@ class ActorControlServiceTest {
         assertEquals(0, service.publicCapabilities().get("active_sessions"));
         assertEquals(HttpStatus.TOO_MANY_REQUESTS, assertThrows(ObservationException.class, () -> open(service, "open-three")).status());
         assertEquals("CLOSED", session(open(service, "open-1")).get("state"));
-        verify(backend, times(2)).open(anyString(), any(), any(), any());
+        verify(backend, times(2)).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
     }
 
     @Test
     void aCloseRetryCannotSpendAnotherSessionsFirstCloseAndStoppingStillCleansAtCapacity() {
         ActorControlService service = service(4, 4, 64);
-        NativeActorHandle secondary = mock(NativeActorHandle.class);
-        when(backend.open(eq("secondary"), any(), any(), any())).thenReturn(secondary);
+        NativeActorHandle secondary = handleFixture(mock(AcceptanceClient.class));
+        doAnswer(invocation -> adoptOpen(invocation.getArgument(4), secondary)).when(backend).open(eq("secondary"), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
         when(backend.isCurrent(secondary)).thenReturn(true);
         when(backend.snapshot(secondary)).thenReturn(Map.of("character_id", 74, "logged_in_world", true));
-        when(backend.close(secondary)).thenReturn(Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
-        when(backend.close(handle)).thenReturn(
+        when(backend.close(eq(secondary), any(ScopeResources.DrainPermit.class))).thenReturn(Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(
                 Map.of("native_cleanup_verified", true, "persisted_state_verified", false),
                 Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
 
@@ -298,14 +605,13 @@ class ActorControlServiceTest {
         assertEquals("QUARANTINED", session(service.get("admin", id(failedClose), 0, 100)).get("state"));
         assertThrows(ObservationException.class, () -> service.close("admin", "retry-primary", closeRequest(first)));
 
-        AcceptanceObservationRuntime.onWorldStopped();
         service.onWorldStopping();
         executors.getFirst().runNext();
         assertEquals(0, service.publicCapabilities().get("active_sessions"));
         assertEquals(4, service.publicCapabilities().get("operation_history_size"));
         assertEquals("CLOSED", session(service.get("admin", id(failedClose), 0, 100)).get("state"));
-        verify(backend, times(2)).close(handle);
-        verify(backend).close(secondary);
+        verify(backend, times(2)).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        verify(backend).close(eq(secondary), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -339,13 +645,152 @@ class ActorControlServiceTest {
         assertEquals("FAILED", duplicate.get("status"));
         assertEquals("FAILED", session(duplicate).get("state"));
         assertEquals(0, service.publicCapabilities().get("active_sessions"));
-        verify(backend, never()).open(anyString(), any(), any(), any());
+        verify(backend, never()).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+    }
+
+    @Test
+    void aStopDuringProfileValidationRejectsOpenAsOfflineBeforeAllocatingAnExecutor() {
+        AtomicInteger factories = new AtomicInteger();
+        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> {
+            factories.incrementAndGet();
+            return new ManualExecutor();
+        }, Duration.ZERO);
+        services.add(service);
+        service.onWorldStarted();
+        doAnswer(invocation -> {
+            ExecutionScope.tryBeginWorldStop();
+            return null;
+        }).when(backend).validateProfile("primary", 0, 1);
+        ObservationException failure = assertThrows(ObservationException.class, () -> open(service, "open-validation-stop"));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status());
+        assertEquals("actor_world_offline", failure.reason());
+        assertEquals(0, factories.get());
+        assertEquals(0, service.publicCapabilities().get("operation_history_size"));
+        verify(backend, never()).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
+    }
+
+    @Test
+    void aStopInTheExecutorFactoryRejectsOpenAndShutsDownItsPrestartedPrivateWorker() throws Exception {
+        AtomicReference<ThreadPoolExecutor> created = new AtomicReference<>();
+        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> {
+            ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(8), Thread.ofVirtual().factory());
+            executor.prestartAllCoreThreads();
+            created.set(executor);
+            ExecutionScope.tryBeginWorldStop();
+            return executor;
+        }, Duration.ZERO);
+        services.add(service);
+        service.onWorldStarted();
+        try {
+            ObservationException failure = assertThrows(ObservationException.class, () -> open(service, "open-factory-stop"));
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status());
+            assertEquals("actor_world_offline", failure.reason());
+            assertTrue(created.get().isShutdown());
+            assertTrue(created.get().awaitTermination(5, TimeUnit.SECONDS));
+            assertEquals(0, service.publicCapabilities().get("active_sessions"));
+            assertEquals(0, service.publicCapabilities().get("idempotency_records"));
+        } finally {
+            if (created.get() != null) created.get().shutdownNow();
+        }
+    }
+
+    @Test
+    void aStopDuringLaneConstructionPreservesTheOfflineStatusAndClosesItsPrivateExecutor() {
+        AtomicBoolean stopOnce = new AtomicBoolean(true);
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(8), Thread.ofVirtual().factory()) {
+            @Override public int getCorePoolSize() {
+                if (stopOnce.compareAndSet(true, false)) ExecutionScope.tryBeginWorldStop();
+                return super.getCorePoolSize();
+            }
+        };
+        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> executor, Duration.ZERO);
+        services.add(service);
+        service.onWorldStarted();
+        try {
+            ObservationException failure = assertThrows(ObservationException.class, () -> open(service, "open-constructor-stop"));
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status());
+            assertEquals("actor_world_offline", failure.reason());
+            assertTrue(executor.isShutdown());
+            assertEquals(0, service.publicCapabilities().get("operation_history_size"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void anOpenScopeAdmissionStopAfterConstructionClosesTheUnregisteredSessionAndExecutor() {
+        ManualExecutor executor = new ManualExecutor();
+        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> executor, Duration.ZERO);
+        services.add(service);
+        service.onWorldStarted();
+        AtomicBoolean stopped = new AtomicBoolean();
+        try (org.mockito.MockedStatic<WorldEpoch> epoch = mockStatic(WorldEpoch.class, CALLS_REAL_METHODS)) {
+            epoch.when(WorldEpoch::snapshot).thenAnswer(invocation -> {
+                boolean acceptingWork = java.util.Arrays.stream(Thread.currentThread().getStackTrace())
+                        .anyMatch(frame -> frame.getClassName().equals(ExecutionScope.class.getName())
+                                && frame.getMethodName().equals("acceptWork"));
+                if (acceptingWork && stopped.compareAndSet(false, true)) ExecutionScope.tryBeginWorldStop();
+                return invocation.callRealMethod();
+            });
+            ObservationException failure = assertThrows(ObservationException.class, () -> open(service, "open-accept-stop"));
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status());
+            assertEquals("actor_world_offline", failure.reason());
+            assertTrue(stopped.get());
+        }
+        assertTrue(executor.isShutdown());
+        assertTrue(executor.queue.isEmpty());
+        assertEquals(0, service.publicCapabilities().get("active_sessions"));
+        assertEquals(0, service.publicCapabilities().get("operation_history_size"));
+    }
+
+    @Test
+    void anActionStopAtScopeAdmissionKeepsTheExistingHistoryAndReportsOffline() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opened = open(service, "open-action-admission");
+        executors.getFirst().runNext();
+        ExecutionScope scope = execution(service, opened).scope();
+        var monitorField = ExecutionScope.class.getDeclaredField("monitor");
+        monitorField.setAccessible(true);
+        Object scopeMonitor = monitorField.get(scope);
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        Thread caller;
+        synchronized (scopeMonitor) {
+            caller = Thread.ofVirtual().start(() -> {
+                try { outcome.set(service.act("admin", "action-admission-stop", chatRequest(opened, "受理停服竞态"))); }
+                catch (Throwable failure) { outcome.set(failure); }
+            });
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            boolean waiting = false;
+            while (!waiting && System.nanoTime() < deadline) {
+                waiting = java.util.Arrays.stream(caller.getStackTrace()).anyMatch(frame ->
+                        frame.getClassName().equals(ExecutionScope.class.getName()) && frame.getMethodName().equals("acceptWork"));
+                if (!waiting) Thread.sleep(1);
+            }
+            assertTrue(waiting, "action reached the real scope admission while its epoch was still active");
+            ExecutionScope.tryBeginWorldStop();
+        }
+        caller.join(5_000);
+        assertFalse(caller.isAlive());
+        ObservationException failure = assertInstanceOf(ObservationException.class, outcome.get());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status());
+        assertEquals("actor_world_offline", failure.reason());
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        assertEquals(1, service.publicCapabilities().get("idempotency_records"));
+        assertTrue(executors.getFirst().queue.isEmpty());
+        verify(backend, never()).chat(any(), any());
     }
 
     @Test
     void unexpectedBackendFailureIsPrivateAndRetainsAQuarantineInsteadOfAssumingRollback() {
         ActorControlService service = service(4, 20, 64);
-        when(backend.open(anyString(), any(), any(), any())).thenThrow(new IllegalStateException("password=must-not-escape"));
+        doAnswer(invocation -> {
+            NativeActorBackend.OpenOwnership ownership = invocation.getArgument(4);
+            ownership.creationFailed("actor_open_cleanup_unverified");
+            throw new IllegalStateException("password=must-not-escape");
+        }).when(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
         var opened = open(service, "open-one");
         executors.getFirst().runNext();
         var failed = service.get("admin", id(opened), 0, 100);
@@ -380,7 +825,7 @@ class ActorControlServiceTest {
         assertEquals("LOST", session(duplicate).get("state"));
         assertEquals(false, session(duplicate).get("actor_current"));
         assertNull(session(duplicate).get("actor"));
-        verify(backend).open(anyString(), any(), any(), any());
+        verify(backend).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
     }
 
     @Test
@@ -396,7 +841,7 @@ class ActorControlServiceTest {
         assertEquals("LOST", session(cancelled).get("state"));
         assertEquals(false, session(cancelled).get("actor_current"));
         assertNull(session(cancelled).get("actor"));
-        verify(backend, never()).close(handle);
+        verify(backend, never()).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -415,7 +860,6 @@ class ActorControlServiceTest {
         Thread reader = Thread.ofVirtual().start(() -> observation.add(service.get("admin", id(opened), 0, 100)));
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            AcceptanceObservationRuntime.onWorldStopped();
             service.onWorldStopping();
             assertEquals(false, service.publicCapabilities().get("actor_accepting_requests"));
             executors.getFirst().runNext();
@@ -426,7 +870,7 @@ class ActorControlServiceTest {
         assertFalse(reader.isAlive());
         assertEquals("CLOSED", session(observation.getFirst()).get("state"));
         assertNull(session(observation.getFirst()).get("actor"));
-        verify(backend).close(handle);
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -507,7 +951,7 @@ class ActorControlServiceTest {
         var close = service.close("admin", "close-during-projection-failure", closeRequest(opened));
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(close), 0, 100)).get("state"));
-        verify(backend).close(handle);
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -528,8 +972,8 @@ class ActorControlServiceTest {
         var recovered = service.get("admin", id(opened), 0, 100);
         assertEquals("OPEN", session(recovered).get("state"));
         assertEquals("scene-restored", ((Map<?, ?>) actor(recovered).get("scene")).get("scene_ref"));
-        verify(backend, never()).close(handle);
-        verify(backend, times(1)).open(anyString(), any(), any(), any());
+        verify(backend, never()).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        verify(backend, times(1)).open(anyString(), any(), any(), any(), any(NativeActorBackend.OpenOwnership.class));
     }
 
     @Test
@@ -603,7 +1047,7 @@ class ActorControlServiceTest {
         assertEquals("stale_actor_session", assertThrows(ObservationException.class,
                 () -> service.observe("admin", observeRequest(opened, 0, 1))).reason());
         assertEquals("LOST", session(service.get("admin", id(opened), 0, 100)).get("state"));
-        when(backend.close(handle)).thenReturn(Map.of("native_cleanup_verified", false, "persisted_state_verified", false));
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(Map.of("native_cleanup_verified", false, "persisted_state_verified", false));
         service.close("admin", "close-lost", closeRequest(opened));
         executors.getFirst().runNext();
         assertEquals("QUARANTINED", session(service.get("admin", id(opened), 0, 100)).get("state"));
@@ -673,7 +1117,6 @@ class ActorControlServiceTest {
         Thread reader = observeAsync(service, observeRequest(opened, 0, 1), outcome);
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            AcceptanceObservationRuntime.onWorldStopped();
             service.onWorldStopping();
             executors.getFirst().runNext();
             assertEquals(0, service.publicCapabilities().get("active_sessions"));
@@ -786,7 +1229,7 @@ class ActorControlServiceTest {
         assertEquals(false, result(cancelled).get("native_dispatch_started"));
         assertEquals("OPEN", session(cancelled).get("state"));
         verify(backend, never()).chat(any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
         var next = service.act("admin", "chat-two", chatRequest(opened, "可以发这条"));
         executors.getFirst().runNext();
         assertEquals("SUCCEEDED", service.get("admin", id(next), 0, 100).get("status"));
@@ -809,7 +1252,7 @@ class ActorControlServiceTest {
         assertEquals("OPEN", session(failed).get("state"));
         assertEquals(1, service.publicCapabilities().get("active_sessions"));
         verify(backend, never()).chat(any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -828,7 +1271,7 @@ class ActorControlServiceTest {
         assertEquals(false, result(failed).get("native_dispatch_started"));
         assertEquals("OPEN", session(failed).get("state"));
         verify(backend, never()).chat(any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -845,7 +1288,7 @@ class ActorControlServiceTest {
         assertEquals(false, result(failed).get("native_dispatch_started"));
         assertEquals(false, result(failed).get("cancel_too_late"));
         assertEquals("OPEN", session(failed).get("state"));
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -876,7 +1319,7 @@ class ActorControlServiceTest {
                 assertNull(result(finished).get("packet_cursor_after"));
             }
         }
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
         assertEquals(1, service.publicCapabilities().get("active_sessions"));
     }
 
@@ -912,7 +1355,7 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(action), 0, 100)).get("state"));
         verify(backend).chat(handle, "正在发言");
-        verify(backend).close(handle);
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -969,7 +1412,7 @@ class ActorControlServiceTest {
             verify(backend, times(1)).chat(any(), any());
             verify(backend, never()).npcCenterOpen(any());
             verify(backend, never()).npcReply(any(), anyLong(), any(), any());
-            verify(backend).close(handle);
+            verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
         } finally {
             complete.countDown();
             executor.shutdownNow();
@@ -1011,7 +1454,6 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         var first = service.act("admin", "chat-first", chatRequest(opened, "尚未发一"));
         var second = service.act("admin", "chat-second", chatRequest(opened, "尚未发二"));
-        AcceptanceObservationRuntime.onWorldStopped();
         service.onWorldStopping();
         executors.getFirst().runNext();
         assertEquals("CANCELLED", service.get("admin", id(first), 0, 100).get("status"));
@@ -1022,7 +1464,7 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(second), 0, 100)).get("state"));
         verify(backend, never()).chat(any(), any());
-        verify(backend).close(handle);
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1040,7 +1482,7 @@ class ActorControlServiceTest {
         assertEquals("OPEN", session(rejected).get("state"));
         assertEquals(1, service.publicCapabilities().get("active_sessions"));
         verify(backend, never()).chat(any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1092,7 +1534,6 @@ class ActorControlServiceTest {
         });
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            AcceptanceObservationRuntime.onWorldStopped();
             service.onWorldStopping();
             AcceptanceObservationRuntime.onWorldStarted();
             service.onWorldStarted();
@@ -1142,7 +1583,7 @@ class ActorControlServiceTest {
         ordering.verify(backend).npcCenterOpen(handle);
         ordering.verify(backend).npcCancel(handle, 37L);
         verify(backend, never()).chat(any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
         Map<?, ?> capability = (Map<?, ?>) service.publicCapabilities().get("npc_dialogue");
         assertEquals(List.of("native_ui_center"), capability.get("entrypoints"));
         assertEquals(List.of(4, 12), capability.get("message_types"));
@@ -1230,7 +1671,7 @@ class ActorControlServiceTest {
         assertEquals(false, result(failed).get("native_dispatch_started"));
         assertEquals("OPEN", session(failed).get("state"));
         verify(backend, never()).npcCancel(any(), anyLong());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1248,7 +1689,7 @@ class ActorControlServiceTest {
         assertEquals(false, result(cancelled).get("native_dispatch_started"));
         assertEquals("OPEN", session(cancelled).get("state"));
         verify(backend, never()).npcCancel(any(), anyLong());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1289,7 +1730,7 @@ class ActorControlServiceTest {
         assertEquals("INDETERMINATE", finished.get("status"));
         assertEquals("native_npc_outcome_unknown", result(finished).get("observed_outcome"));
         assertFalse(finished.toString().contains("private NPC"));
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1350,7 +1791,7 @@ class ActorControlServiceTest {
         assertEquals("CLOSING", session(finished).get("state"));
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(operation), 0, 100)).get("state"));
-        verify(backend).close(handle);
+        verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1389,7 +1830,7 @@ class ActorControlServiceTest {
         verify(backend).npcReply(handle, 37L, "select", 0);
         verify(backend).npcReply(handle, 38L, "decline", null);
         verify(backend, never()).npcCancel(any(), anyLong());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1523,7 +1964,7 @@ class ActorControlServiceTest {
             assertEquals("OPEN", session(failed).get("state"));
         }
         verify(backend, never()).npcReply(any(), anyLong(), any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1543,7 +1984,7 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         assertEquals(Map.of("reason", "actor_context_mismatch"), service.get("admin", id(moved), 0, 100).get("error"));
         verify(backend, never()).npcReply(any(), anyLong(), any(), any());
-        verify(backend, never()).close(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1717,8 +2158,6 @@ class ActorControlServiceTest {
 
     private AcceptanceObservationService prepareChat(ActorControlService service) {
         AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
-        org.gms.client.Character character = mock(org.gms.client.Character.class);
-        when(handle.character()).thenReturn(character);
         when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-current",
                 "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
         service.setObservations(observations);
@@ -1735,6 +2174,28 @@ class ActorControlServiceTest {
     private static ActorActRequest chatRequest(Map<String, Object> opened, String text) {
         return new ActorActRequest(sessionId(opened), generation(opened), "chat", new ActorActRequest.Parameters(text),
                 new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
+    }
+
+    private static NativeActorHandle handleFixture(AcceptanceClient client) {
+        NativeActorHandle result = mock(NativeActorHandle.class);
+        org.gms.client.Character character = mock(org.gms.client.Character.class);
+        org.gms.net.server.world.World world = mock(org.gms.net.server.world.World.class);
+        org.gms.net.server.channel.Channel channel = mock(org.gms.net.server.channel.Channel.class);
+        when(world.getId()).thenReturn(0);
+        when(channel.getId()).thenReturn(1);
+        when(result.client()).thenReturn(client);
+        when(result.character()).thenReturn(character);
+        when(result.world()).thenReturn(world);
+        when(result.channel()).thenReturn(channel);
+        when(result.characterRef()).thenReturn(new GameContext.CharacterRef(
+                WorldEpoch.snapshot().token(), character, client, world, channel));
+        return result;
+    }
+
+    private static NativeActorHandle adoptOpen(NativeActorBackend.OpenOwnership ownership, NativeActorHandle result) {
+        ownership.bindOrigin(result.world(), result.channel());
+        ownership.adopt(result);
+        return result;
     }
 
     private static Thread observeAsync(ActorControlService service, ActorObserveRequest request,
@@ -1775,16 +2236,57 @@ class ActorControlServiceTest {
     @SuppressWarnings("unchecked") private static Map<String, Object> result(Map<String, Object> value) { return (Map<String, Object>) value.get("result"); }
     @SuppressWarnings("unchecked") private static Map<String, Object> events(Map<String, Object> value) { return (Map<String, Object>) value.get("events"); }
 
-    private static final class ManualExecutor extends AbstractExecutorService {
+    private static final class ManualExecutor extends AbstractExecutorService
+            implements CharacterCommandLane.SerialBoundedExecutor {
         private final ArrayDeque<Runnable> queue = new ArrayDeque<>();
         private boolean shutdown;
-        @Override public synchronized void shutdown() { shutdown = true; }
-        @Override public synchronized List<Runnable> shutdownNow() { shutdown = true; List<Runnable> remaining = new ArrayList<>(queue); queue.clear(); return remaining; }
+        private boolean running;
+
+        @Override public int commandQueueCapacity() { return 8; }
+        @Override public synchronized void shutdown() { shutdown = true; notifyAll(); }
+        @Override public synchronized List<Runnable> shutdownNow() {
+            // Accepted commands must still depart through the lane's settlement wrapper.
+            shutdown();
+            return List.of();
+        }
         @Override public synchronized boolean isShutdown() { return shutdown; }
-        @Override public synchronized boolean isTerminated() { return shutdown && queue.isEmpty(); }
-        @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return isTerminated(); }
-        @Override public synchronized void execute(Runnable command) { if (shutdown) throw new RejectedExecutionException(); queue.addLast(command); }
-        void runNext() { Runnable command; synchronized (this) { command = queue.pollFirst(); } if (command != null) command.run(); }
-        void drain() { for (int attempts = 0; attempts < 20; attempts++) { synchronized (this) { if (queue.isEmpty()) return; } runNext(); } throw new AssertionError("test executor did not drain"); }
+        @Override public synchronized boolean isTerminated() { return shutdown && queue.isEmpty() && !running; }
+        @Override public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            long budget = unit.toNanos(timeout);
+            long began = System.nanoTime();
+            synchronized (this) {
+                while (!isTerminated()) {
+                    long remaining = budget - (System.nanoTime() - began);
+                    if (remaining <= 0) return false;
+                    TimeUnit.NANOSECONDS.timedWait(this, remaining);
+                }
+                return true;
+            }
+        }
+        @Override public synchronized void execute(Runnable command) {
+            if (shutdown || queue.size() >= commandQueueCapacity()) throw new RejectedExecutionException();
+            queue.addLast(command);
+        }
+        void runNext() {
+            Runnable command;
+            synchronized (this) {
+                if (running) throw new IllegalStateException("test executor already running");
+                command = queue.pollFirst();
+                if (command == null) return;
+                running = true;
+            }
+            try {
+                command.run();
+            } finally {
+                synchronized (this) { running = false; notifyAll(); }
+            }
+        }
+        void drain() {
+            for (int attempts = 0; attempts < 20; attempts++) {
+                synchronized (this) { if (queue.isEmpty()) return; }
+                runNext();
+            }
+            throw new AssertionError("test executor did not drain");
+        }
     }
 }

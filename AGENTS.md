@@ -52,8 +52,11 @@ python3 beidou-integration/scripts/build.py --help
 - 世界代次、MCPsession、V2runtime/模块代次、执行句柄、包序号、对话版本分别建模；同一内部执行句柄防重复派发，新的合法重复动作允许，不把攻击tick全部登记为外部operation。公共层不依赖acceptance开关、管理JWT或全世界扫描，不强制所有bot保留256包正文历史。
 - 共享上下文位于 `soloMapling.game.context`：`WorldEpoch` 是唯一世界时钟，旧验收runtime仅投影委托；`CharacterRef` 固定角色/Client/World/Channel与捕获epoch，`SceneRef` 另外固定Map及成员/地图EIM。重验不能刷新旧epoch或按同ID替代对象；正常跨图不自动使角色绑定失效，场景资格另核。当前角色观察定点登记MCP不透明scene_ref，不借全目录刷新作为控制资格。
 - 公共检查只核对象结构，不核普通登录或授予控制权。MCP薄适配保留账号/lease/GM0/普通登录/排bot，Bot薄适配核精确BotRegistry对象与BotClient；V1模板通过非频道加载，Character.loggedIn可为false，不能为复用而改其存档/登录标记。getter故障是读取不可用，不能把活会话标LOST；角色资格和场景冲突分别处理。
-- 停服先失效公共epoch，禁止旧上下文继续新动作；原已拥有MCP角色的关闭排空暂保留消费侧精确对象/lease守卫，不要求epoch仍活跃，也不以EIM健康阻断退出。此为 #118 待收敛债务，不向公共API增加ignoreEpoch或把该关闭守卫用于新动作。
-- 共享切片用真实原生场景和第二类薄上下文适配器独立验收，不等完整V2成品；MCP工具开放、V2组合和PQ通关仍在原任务分别验收。若公共提炼扩大当前切片风险，先收口已授权小切片，并在共享叶子写清适配债务与下一步，不能把“以后复用”当已完成。#117已完成共享上下文交付，当前继续优先#118～#121实际依赖，再继续礼包/出行。
+- #118 公共执行位于 `soloMapling.game.execution`：`ExecutionScope` 记录固定 epoch/runtime/module 身份与实际工作，`ScopeResources` 记录精确资源及一次握手，`CharacterCommandLane` 串行执行单个实际角色的短命令。MCP 经 `AcceptanceActorExecution` 薄接入，同一 session 不另建第二队列；公共容量由调用方配置，不硬编码 MCP 7/8/256 策略。Scope 的普通工作与清理工作分别使用显式有界额度；允许持有资源时至少保留一个清理工作名额，不能只预留 lane 物理槽而让工作账本阻塞清理。
+- CharacterCommandLane 允许调用方已授予的多个合法 Grant 并存，只做 FIFO 与原生资格复核；V2 自己决定资源冲突和交接。revoke 只撤对应 Grant，不自动排空整个 scope；释放等待只跟踪相关工作，不能让其他模块或后继 Grant 的持续命令拖住旧授权。撤销前已受理 carrier 仍须真实结算；撤销后新递交旧 Grant 立即锁外拒绝并结算，不入 FIFO 占用其他模块容量或续旧债务。
+- 取消请求、body 退出、队列承载/结算完成、资源释放与卸载完成分开核验。`Future.cancel/isDone` 或 operation 终态不能提前归还物理槽；MCP ACTION 仅在精确 work 实际结算后归还额度。自回调排空返回 `SELF_WAIT`，未知创建/释放保留债务，不能假报 CLOSED。
+- 停服经 `ExecutionScope.tryBeginWorldStop()` 原子取得对应 active→stopped 的 `WorldStopTicket`；同次停止复用票据，未知 inactive 不造权。只给来源 epoch 一致的 scope 加入专用清理窗口，下一世界启动后旧原生入口与轮询拒绝；旧 quarantine 不借新票据续权。清理使用原登记精确对象的 `DrainPermit`，已合法完成的释放事实可晚到入账；不给公共 API 增加 ignoreEpoch，也不借清理执行新动作或创建新资源。
+- 共享切片用真实原生场景和第二类薄上下文适配器独立验收，不等完整V2成品；MCP工具开放、V2组合和PQ通关仍在原任务分别验收。若公共提炼扩大当前切片风险，先收口已授权小切片，并在共享叶子写清适配债务与下一步，不能把“以后复用”当已完成。#117 已完成共享上下文交付；#118 的交付/验收状态及证据以对应 Issue 为准，不能用合并或定向测试代替实际部署；按 #119～#121 实际依赖继续推进，再做礼包/出行。
 - 总任务用于串联进度，开发 Issue 按可独立实现和验收的功能切片组织。例如原生角色生命周期、普通聊天与机器人回复、NPC 多页对话分别交付；不要把一个空接口或局部测试通过标成整轮完成。
 - 使用 GitHub 原生 parent/sub-issue 关系组织树形拆分；正文清单用于说明和验收，不代替实际关联。新增子项时检查父节点，完成后同步父任务状态，避免重复建单或错挂到不相关任务。
 - 每个切片在实现前明确范围和验收结果。实现、对应测试、隔离/实际 MCP 验收通过后及时关闭该 Issue，并同步总任务；仍缺证据的项目保持开放，具体写明未验部分。
