@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：R1 观察桥已有实际服务与 SDK stdio 验证；R2a 已新增原生角色生命周期代码，隔离及实际部署验收仍待完成。** MCP 客户端实现六个工具，后端实际开放项以 `game_capabilities.enabled_tools` 为准。R2b 普通聊天、R2c NPC 对话以及 R3～R5 继续独立推进；尚无 `game_act`、聊天、NPC、移动或命名 recipe。每个切片完成实现和实际验收后及时关闭对应 Issue，并同步本文、工具说明与相关 `AGENTS.md`。
+**状态：R1 观察桥和 R2a 原生角色生命周期已实现，已有官方 SDK stdio 的隔离游戏验证。** R2a 已验证创建/登录、正常保存退出、同 CID 重开、重复请求、实际取消，以及同 JVM 世界停启后的存档与旧场景失效；部署结果、宿主原生工具加载和真实客户端验收分别记录。MCP 客户端实现六个工具，后端实际开放项以 `game_capabilities.enabled_tools` 为准。R2b 普通聊天、R2c NPC 对话以及 R3～R5 继续独立推进；尚无 `game_act`、聊天、NPC、移动或命名 recipe。每个切片完成实现和实际验收后及时关闭对应 Issue，并同步本文、工具说明与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -155,7 +155,7 @@ recipe清单要显示`planned/available/blocked`、版本、所需能力和参�
 | 轮次 | 能力切片 | 本轮结束必须有的证据 |
 |---|---|---|
 | R1 协议与观察 | 本地stdio MCP、正常鉴权桥、capabilities与只读快照 | 初始化/协商、tools/list和call、真实后端身份/场景；未鉴权拒绝、结果无密钥；当前Codex实际可调用独立核对 |
-| R2a 原生角色生命周期 | 专用原生持久 fixture、session/操作队列、登录/退出/保存；代码已加入，实际验收待完成 | 同一CID打开/释放/再加载，原生在线/存档连续，幂等、取消与冲突；不混环境bot，不改既有玩家 |
+| R2a 原生角色生命周期 | 专用原生持久 fixture、session/操作队列、登录/退出/保存；隔离 MCP 生命周期验证已通过，部署另留证 | 同一CID打开/释放/再加载，原生在线/存档连续，幂等、取消与冲突；同JVM停启后能保存，不混环境bot，不改既有玩家 |
 | R2b 普通聊天与回复 | 普通聊天入口、结构化聊天/提示及 SocialBot 往返，尚未实现 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
 | R2c NPC 对话 | NPC正文/菜单、多页对话版本与取消，尚未实现 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
 | R3 原生动作 | 移动、门户、组队和物品/机关逐项增量 | 每动作正常原生路径及结果；不可达/拒绝/失败清楚返回；真实库存与任务进度一致；多actor无互相控制 |
@@ -186,7 +186,7 @@ enabled = true
 
 ## 当前源码依据
 
-R2a 实现入口为 [ActorControlController](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlController.java)、[ActorControlService](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java)、[NativeActorBackend](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java)、[ActorProfiles](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorProfiles.java) 与 [账号所有权切面](../../beidou-integration/src/main/aspect/soloMapling/beidou/AcceptanceSessionOwnership.aj)。这些代码的存在不代表隔离、部署或真实客户端验收已经通过；运行源码身份以 capabilities 与构建报告核对。
+R2a 实现入口为 [ActorControlController](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlController.java)、[ActorControlService](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java)、[NativeActorBackend](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java)、[ActorProfiles](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorProfiles.java) 与 [账号所有权切面](../../beidou-integration/src/main/aspect/soloMapling/beidou/AcceptanceSessionOwnership.aj)。运行源码身份以 capabilities 与构建报告核对；验收以相应游戏后态和实际运行记录为准，不能仅凭代码存在判定完成。
 
 - [BotClient](../../beidou-integration/src/main/java/org/gms/client/BotClient.java#L38)、[BotRegistry](../../beidou-integration/src/main/java/soloMapling/beidou/BotRegistry.java#L57)、[GameplayHooks](../../beidou-integration/src/main/aspect/soloMapling/beidou/GameplayHooks.aj#L39)：环境bot身份、聊天排除与地图脚本分支。
 - [CharacterFactory](../../upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/creator/CharacterFactory.java#L42)、[Character](../../upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java#L613)、[EIM](../../upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java#L270)：原生创建、角色在线状态、事件登记。
