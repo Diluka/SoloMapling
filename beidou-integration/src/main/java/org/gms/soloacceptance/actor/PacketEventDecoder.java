@@ -14,12 +14,13 @@ final class PacketEventDecoder {
     static final int SERVER_MESSAGE = 0x44;
     static final int CHAT_TEXT = 0xA2;
     static final int PLAYER_HINT = 0xD6;
+    static final int NPC_TALK = 0x130;
 
     private PacketEventDecoder() { }
 
     static Map<String, Object> decode(byte[] bytes, Charset charset) {
         int opcode = (bytes[0] & 0xff) | (bytes[1] & 0xff) << 8;
-        if (opcode != SERVER_MESSAGE && opcode != CHAT_TEXT && opcode != PLAYER_HINT) {
+        if (opcode != SERVER_MESSAGE && opcode != CHAT_TEXT && opcode != PLAYER_HINT && opcode != NPC_TALK) {
             return summary("unsupported", "unsupported_opcode");
         }
         try {
@@ -38,6 +39,18 @@ final class PacketEventDecoder {
                 fields.put("height", reader.unsignedShort());
                 fields.put("enabled", reader.bool());
                 fields.put("clears_previous", ".".equals(fields.get("text")));
+            } else if (opcode == NPC_TALK) {
+                int speakerType = reader.unsignedByte();
+                if (speakerType != 4) return summary("unsupported", "unsupported_npc_speaker_type");
+                int npc = reader.integer();
+                int type = reader.unsignedByte();
+                if (type != 4) return summary("unsupported", "unsupported_npc_message_type");
+                fields.put("event_type", "npc_dialogue");
+                fields.put("speaker_type", speakerType);
+                fields.put("npc_template_id", npc);
+                fields.put("message_type", type);
+                fields.put("speaker", reader.unsignedByte());
+                reader.text(fields);
             } else {
                 int type = reader.unsignedByte();
                 if (type > 7) return summary("unsupported", "unsupported_server_message_type");

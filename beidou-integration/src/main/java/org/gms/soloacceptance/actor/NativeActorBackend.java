@@ -19,6 +19,8 @@ import org.gms.net.packet.ByteBufInPacket;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.channel.handlers.GeneralChatHandler;
+import org.gms.net.server.channel.handlers.EnterMTSHandler;
+import org.gms.net.server.channel.handlers.NPCMoreTalkHandler;
 import org.gms.net.server.channel.handlers.PlayerLoggedinHandler;
 import org.gms.net.server.coordinator.session.Hwid;
 import org.gms.net.server.coordinator.session.SessionCoordinator;
@@ -26,6 +28,8 @@ import org.gms.net.server.handlers.login.CharSelectedHandler;
 import org.gms.net.server.world.Party;
 import org.gms.net.server.world.World;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.CashShop;
+import org.gms.scripting.npc.NPCConversationManager;
 import org.gms.service.AccountService;
 import org.gms.service.CharacterService;
 import org.gms.service.NoteService;
@@ -184,9 +188,7 @@ public final class NativeActorBackend {
     }
 
     private byte[] encodeChat(NativeActorHandle handle, String text) {
-        if (!isCurrent(handle) || handle.character().gmLevel() != 0 || BotRegistry.isBot(handle.character())) {
-            throw conflict("actor_session_stale");
-        }
+        requireOrdinaryActor(handle);
         if (text == null || text.isBlank() || text.length() > Byte.MAX_VALUE
                 || text.charAt(0) == '@' || text.charAt(0) == '/') {
             throw new ObservationException(HttpStatus.BAD_REQUEST, "invalid_chat_text");
@@ -201,6 +203,150 @@ public final class NativeActorBackend {
         } catch (CharacterCodingException ignored) {
             throw new ObservationException(HttpStatus.BAD_REQUEST, "chat_text_not_encodable");
         }
+    }
+
+    public void validateNpcCenterOpen(NativeActorHandle handle) {
+        requireOrdinaryActor(handle);
+        if (GameConfig.getServerBoolean("use_mts")) throw conflict("native_center_mts_enabled");
+        if (handle.client().getCM() != null || handle.client().getQM() != null) {
+            throw conflict("native_dialogue_already_active");
+        }
+    }
+
+    public Map<String, Object> npcCenterOpen(NativeActorHandle handle) {
+        validateNpcCenterOpen(handle);
+        AcceptanceClient client = handle.client();
+        long before = client.latestPacketSequence();
+        boolean[] started = {false};
+        boolean handlerError = false;
+        try {
+            dispatch(new EnterMTSHandler(), client, packet -> { }, () -> {
+                validateNpcCenterOpen(handle);
+                started[0] = true;
+            });
+        } catch (RuntimeException failure) {
+            if (!started[0]) throw failure;
+            handlerError = true;
+        }
+
+        Long after = null;
+        Long sequence = null;
+        boolean complete = false;
+        boolean uncertainPacket = false;
+        Boolean active = null;
+        boolean verified = false;
+        try {
+            Map<String, Object> window = client.packetEvents(before, 500);
+            after = (Long) window.get("latest_cursor");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> events = (List<Map<String, Object>>) window.get("items");
+            for (Map<String, Object> event : events) {
+                long eventSequence = (Long) event.get("sequence");
+                if (eventSequence <= before || after == null || eventSequence > after) continue;
+                if ("npc_dialogue".equals(event.get("event_type"))
+                        && "decoded".equals(event.get("decode_status"))
+                        && Integer.valueOf(9900001).equals(event.get("npc_template_id"))
+                        && Integer.valueOf(4).equals(event.get("speaker_type"))
+                        && Integer.valueOf(4).equals(event.get("message_type"))
+                        && Integer.valueOf(0).equals(event.get("speaker"))) sequence = eventSequence;
+                if ("malformed".equals(event.get("decode_status"))
+                        && (event.get("opcode") == null || Integer.valueOf(0x130).equals(event.get("opcode")))) {
+                    uncertainPacket = true;
+                }
+            }
+            complete = after != null && after >= before && Boolean.FALSE.equals(window.get("cursor_expired"))
+                    && Boolean.FALSE.equals(window.get("truncated"));
+        } catch (RuntimeException ignored) { complete = false; }
+        try {
+            NPCConversationManager cm = client.getCM();
+            boolean noQuest = client.getQM() == null;
+            active = cm != null && noQuest;
+            if (sequence != null && Boolean.TRUE.equals(active)) {
+                client.requireNativeCenterDialogue(sequence);
+                verified = client.getCM() == cm && client.getQM() == null && cm.getNpc() == 9900001
+                        && cm.getNextLevelContext().getLevelType() == null;
+            }
+        } catch (RuntimeException ignored) { active = null; }
+        after = latestPacketCursor(client, after);
+        String status = verified ? "SUCCEEDED" : handlerError || !complete || uncertainPacket || active == null
+                ? "INDETERMINATE" : "FAILED";
+        String outcome = verified ? "center_dialogue_opened" : "INDETERMINATE".equals(status)
+                ? "native_center_outcome_unknown" : "native_center_not_opened";
+        return npcOutcome(status, outcome, started[0], sequence, active, false, before, after, handlerError);
+    }
+
+    public void validateNpcCancel(NativeActorHandle handle, long version) {
+        requireOrdinaryActor(handle);
+        handle.client().requireNativeCenterDialogue(version);
+    }
+
+    public Map<String, Object> npcCancel(NativeActorHandle handle, long version) {
+        validateNpcCancel(handle, version);
+        AcceptanceClient client = handle.client();
+        NPCConversationManager original = client.getCM();
+        long before = client.latestPacketSequence();
+        boolean[] started = {false};
+        boolean handlerError = false;
+        try {
+            dispatch(new NPCMoreTalkHandler(), client, packet -> packet.writeByte(4).writeByte(-1), () -> {
+                validateNpcCancel(handle, version);
+                if (client.getCM() != original) throw conflict("dialogue_not_active");
+                started[0] = true;
+            });
+        } catch (RuntimeException failure) {
+            if (!started[0]) throw failure;
+            handlerError = true;
+        }
+        Boolean active = null;
+        boolean cleaned = false;
+        boolean sameDialogue = false;
+        try {
+            NPCConversationManager cm = client.getCM();
+            boolean noQuest = client.getQM() == null;
+            cleaned = cm == null && noQuest;
+            sameDialogue = cm == original && noQuest;
+            active = cm != null && noQuest;
+            if (cleaned) client.invalidateDialogue();
+        } catch (RuntimeException ignored) { active = null; }
+        String status = cleaned ? "SUCCEEDED" : handlerError || active == null || !sameDialogue ? "INDETERMINATE" : "FAILED";
+        String outcome = cleaned ? "dialogue_cancelled" : "INDETERMINATE".equals(status)
+                ? "native_dialogue_outcome_unknown" : "native_dialogue_not_cancelled";
+        return npcOutcome(status, outcome, started[0], version, active, cleaned,
+                before, latestPacketCursor(client, null), handlerError);
+    }
+
+    private void requireOrdinaryActor(NativeActorHandle handle) {
+        if (!isCurrent(handle) || handle.character().gmLevel() != 0 || BotRegistry.isBot(handle.character())) {
+            throw conflict("actor_session_stale");
+        }
+    }
+
+    private static Long latestPacketCursor(AcceptanceClient client, Long observed) {
+        if (observed != null) return observed;
+        try { return client.latestPacketSequence(); }
+        catch (RuntimeException ignored) { return null; }
+    }
+
+    private static Map<String, Object> npcOutcome(String status, String outcome, boolean started, Long version,
+                                                 Boolean active, boolean cleaned, long before, Long after,
+                                                 boolean handlerError) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("observed_outcome", outcome);
+        result.put("native_dispatch_started", started);
+        result.put("dialogue_version", version);
+        result.put("packet_sequence", version);
+        result.put("npc_template_id", 9900001);
+        result.put("message_type", 4);
+        result.put("active", active);
+        result.put("native_dialogue_cleanup_verified", cleaned);
+        result.put("packet_cursor_before", before);
+        result.put("packet_cursor_after", after);
+        if (handlerError) result.put("native_handler_error", true);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", status);
+        response.put("error_reason", "SUCCEEDED".equals(status) ? null : outcome);
+        response.put("result", Collections.unmodifiableMap(result));
+        return Collections.unmodifiableMap(response);
     }
 
     public NativeActorHandle open(String profileId, Integer worldId, Integer channelId, BooleanSupplier cancelled) {
@@ -348,6 +494,11 @@ public final class NativeActorBackend {
         result.put("hp", character.getHp());
         result.put("mp", character.getMp());
         result.put("meso", character.getMeso());
+        CashShop cashShop = character.getCashShop();
+        result.put("tickets_summary", cashShop == null ? null : Map.of(
+                "nx_credit", cashShop.getCash(CashShop.NX_CREDIT),
+                "maple_point", cashShop.getCash(CashShop.MAPLE_POINT),
+                "nx_prepaid", cashShop.getCash(CashShop.NX_PREPAID)));
         result.put("job_id", character.getJob().getId());
         result.put("guild_id", character.getGuildId());
         result.put("party_id", character.getParty() == null ? null : character.getParty().getId());
@@ -362,6 +513,7 @@ public final class NativeActorBackend {
         result.put("packet_events", handle.client().packetSummaries());
         result.put("packet_events_dropped", handle.client().droppedPacketCount());
         result.put("malformed_packet_events", handle.client().malformedPacketCount());
+        result.put("dialogue", handle.client().dialogueState());
         return result;
     }
 
@@ -411,6 +563,7 @@ public final class NativeActorBackend {
             NativeActorHandle.CloseContext closing = context;
             await(() -> nativeCleanupComplete(handle, closing), "actor_close_cleanup_unverified");
             client.closeSession();
+            client.invalidateDialogue();
             CharactersDO stored = characters.findById(closing.characterId());
             if (!matchesPersistedState(closing, stored)) {
                 throw unavailable("actor_close_cleanup_unverified_persistence");
@@ -419,6 +572,7 @@ public final class NativeActorBackend {
             Map<String, Object> result = identity(handle);
             result.put("native_cleanup_verified", true);
             result.put("persisted_state_verified", true);
+            result.put("native_dialogue_cleanup_verified", true);
             result.put("persistence_verification_scope", List.of("identity", "level", "exp", "hp", "mp",
                     "meso", "job", "native_saved_map", "party"));
             result.put("fixture_retained", true);
@@ -471,6 +625,7 @@ public final class NativeActorBackend {
         return loggedIn(handle.accountId(), Client.LOGIN_NOTLOGGEDIN)
                 && ActorAccountOwnership.currentOnlineClient(handle.accountId()) == null
                 && handle.client().getPlayer() == null && !handle.client().isLoggedIn()
+                && handle.client().getCM() == null && handle.client().getQM() == null
                 && !character.isLoggedIn() && !character.isLoggedInWorld()
                 && handle.world().getPlayerStorage().getCharacterById(context.characterId()) == null
                 && handle.channel().getPlayerStorage().getCharacterById(context.characterId()) == null

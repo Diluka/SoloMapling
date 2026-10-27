@@ -30,6 +30,15 @@ class ChatParameters(BaseModel):
     text: Annotated[str, Field(strict=True)]
 
 
+class CenterOpenParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class NpcCancelParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    dialogue_version: Generation
+
+
 class ExpectedContext(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     scene_ref: Identifier
@@ -44,7 +53,12 @@ class AcceptanceMCPServer(MCPServer):
         tools = await super().list_tools()
         for tool in tools:
             if tool.name == "game_act":
-                tool.input_schema = {**tool.input_schema, "additionalProperties": False}
+                tool.input_schema = {**tool.input_schema, "additionalProperties": False, "allOf": [{"oneOf": [
+                    {"properties": {"action": {"const": action},
+                                    "parameters": {"$ref": "#/$defs/" + model}}}
+                    for action, model in [("chat", "ChatParameters"), ("npc_center_open", "CenterOpenParameters"),
+                                          ("npc_cancel", "NpcCancelParameters")]
+                ]}]}
         return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
@@ -84,7 +98,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         version=__version__,
         instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
-                      "取消请求不等于原生清理完成。game_act 当前仅支持普通 chat，实际能力以桥公告为准；没有 NPC、移动或通关工具。"),
+                      "取消操作不等于结束NPC对话。game_act 支持 chat、固定中心首屏 npc_center_open 和版本绑定 npc_cancel，实际能力以桥公告为准；没有任意NPC、菜单选择、移动或通关工具。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -152,9 +166,10 @@ def build_server(config: BridgeConfig) -> MCPServer:
     @server.tool(annotations=open_annotations)
     async def game_act(
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
-        action: Literal["chat"], parameters: ChatParameters, expected_context: ExpectedContext,
+        action: Literal["chat", "npc_center_open", "npc_cancel"],
+        parameters: ChatParameters | CenterOpenParameters | NpcCancelParameters, expected_context: ExpectedContext,
     ) -> CallToolResult:
-        """在实际 actor 场景中排队普通 chat；同 request_id 恢复，不盲目重发。通过 ACTION 终态及自身 CHATTEXT 回声确认广播，不能用系统公告代替。"""
+        """在实际 actor 场景排队普通 chat、固定中心首屏打开或最新dialogue_version取消；同 request_id 恢复，不盲重发。中心不接收NPC模板、脚本、选项或原始封包。"""
         try:
             return result(await bridge.act(
                 session_id, expected_generation, request_id=request_id, action=action,
