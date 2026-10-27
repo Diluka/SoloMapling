@@ -222,6 +222,75 @@ class ActorObserveBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PASSWORD, str(caught.exception))
         self.assertNotIn(TOKEN, json.dumps(caught.exception.public_data()))
 
+    async def test_410_distinguishes_expired_actor_sessions_from_existing_scene_and_world_errors(self) -> None:
+        self.stub.responder = lambda request: (
+            self.actor_response(request) if request["path"] == "/auth/v1/login"
+            else (410, {"message": PASSWORD + TOKEN, "detail": "private-expired-observation"})
+        )
+        cases = [
+            ("actor", {"session_id": "session-http-fixture", "expected_generation": 17}, "SESSION_EXPIRED"),
+            ("scene", {"scene_ref": "scene-fixture-1"}, "STALE_SCENE"),
+            ("world", {}, "STALE_SCENE"),
+        ]
+        for scope, parameters, expected_code in cases:
+            with self.subTest(scope=scope), self.assertRaises(BridgeError) as caught:
+                await self.client.observe(scope, **parameters)
+            failure = caught.exception
+            data = failure.public_data()
+            self.assertEqual(expected_code, failure.code)
+            self.assertEqual(expected_code, data["error"]["code"])
+            self.assertEqual(410, failure.http_status)
+            self.assertEqual(410, data["error"]["http_status"])
+            self.assertFalse(failure.retryable)
+            self.assertFalse(data["error"]["retryable"])
+            self.assertEqual(str(failure), data["error"]["message"])
+            if scope == "actor":
+                for instruction in ["重新", "打开", "角色", "session_id", "expected_generation"]:
+                    self.assertIn(instruction, str(failure))
+                self.assertNotIn("world", str(failure).lower())
+            else:
+                self.assertEqual("场景引用已失效，请重新观察 world。", str(failure))
+            for secret in [PASSWORD, TOKEN, "private-expired-observation"]:
+                self.assertNotIn(secret, str(failure))
+                self.assertNotIn(secret, json.dumps(data))
+        self.assertEqual(1, self.stub.login_count)
+        self.assertEqual(3, self.stub.resource_count)
+
+    async def test_actor_401_then_410_preserves_session_expiry_after_one_identical_envelope_retry(self) -> None:
+        def reply(request):
+            if request["path"] == "/auth/v1/login":
+                return self.actor_response(request)
+            status = 401 if self.stub.resource_count == 1 else 410
+            return status, {"message": PASSWORD + TOKEN, "detail": "private-expired-observation"}
+
+        self.stub.responder = reply
+        with self.assertRaises(BridgeError) as caught:
+            await self.client.observe(
+                "actor", limit=7, session_id="session-http-fixture", expected_generation=17, since_cursor=5,
+            )
+        failure = caught.exception
+        data = failure.public_data()
+        self.assertEqual("SESSION_EXPIRED", failure.code)
+        self.assertEqual("SESSION_EXPIRED", data["error"]["code"])
+        self.assertEqual(410, failure.http_status)
+        self.assertEqual(410, data["error"]["http_status"])
+        self.assertFalse(failure.retryable)
+        self.assertFalse(data["error"]["retryable"])
+        for instruction in ["重新", "打开", "角色", "session_id", "expected_generation"]:
+            self.assertIn(instruction, str(failure))
+        self.assertNotIn("world", str(failure).lower())
+        for secret in [PASSWORD, TOKEN, "private-expired-observation"]:
+            self.assertNotIn(secret, str(failure))
+            self.assertNotIn(secret, json.dumps(data))
+        requests = [request for request in self.stub.requests if request["path"] != "/auth/v1/login"]
+        self.assertEqual(2, self.stub.login_count)
+        self.assertEqual(2, len(requests))
+        self.assertTrue(all(request["path"] == "/solo/acceptance/v1/actor/observe" for request in requests))
+        self.assertEqual(requests[0]["method"], requests[1]["method"])
+        self.assertEqual(requests[0]["body"], requests[1]["body"])
+        UUID(requests[0]["body"]["requestId"])
+        self.assertNotEqual(requests[0]["headers"]["authorization"], requests[1]["headers"]["authorization"])
+
     async def test_actor_http_failures_preserve_status_without_echoing_backend_content(self) -> None:
         for status in [400, 403, 404, 409, 410, 429, 503, 302]:
             with self.subTest(status=status):
