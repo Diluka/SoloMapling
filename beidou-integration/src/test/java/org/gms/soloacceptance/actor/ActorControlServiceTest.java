@@ -1,6 +1,7 @@
 package org.gms.soloacceptance.actor;
 
 import org.gms.soloacceptance.AcceptanceObservationRuntime;
+import org.gms.soloacceptance.AcceptanceObservationService;
 import org.gms.soloacceptance.ObservationException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,6 +30,7 @@ import static org.mockito.Mockito.*;
 class ActorControlServiceTest {
     private NativeActorBackend backend;
     private NativeActorHandle handle;
+    private AcceptanceClient client;
     private final List<ManualExecutor> executors = new ArrayList<>();
     private final List<ActorControlService> services = new ArrayList<>();
 
@@ -36,6 +40,8 @@ class ActorControlServiceTest {
         AcceptanceObservationRuntime.onWorldStarted();
         backend = mock(NativeActorBackend.class);
         handle = mock(NativeActorHandle.class);
+        client = mock(AcceptanceClient.class);
+        when(handle.client()).thenReturn(client);
         when(backend.open(anyString(), any(), any(), any())).thenReturn(handle);
         when(backend.isCurrent(handle)).thenReturn(true);
         when(backend.snapshot(handle)).thenReturn(Map.of("character_id", 73, "logged_in_world", true,
@@ -416,6 +422,226 @@ class ActorControlServiceTest {
         verify(backend).close(handle);
     }
 
+    @Test
+    void actorObservationReturnsCurrentSceneAndPacketWindowWithoutConsumingControlHistoryOrQueue() {
+        ActorControlService service = service(4, 2, 64);
+        AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
+        org.gms.client.Character character = mock(org.gms.client.Character.class);
+        when(handle.character()).thenReturn(character);
+        Map<String, Object> scene = Map.of("scene_ref", "scene-current", "map_id", 10000,
+                "runtime_generation", AcceptanceObservationRuntime.snapshot().generation());
+        when(observations.contextForActor(character)).thenReturn(scene);
+        service.setObservations(observations);
+        var opened = open(service, "open-one");
+        executors.getFirst().runNext();
+        Map<String, Object> window = Map.of("items", List.of(Map.of("sequence", 1L, "text", "实际公告")),
+                "next_cursor", 1L, "latest_cursor", 2L, "oldest_cursor", 1L, "truncated", true,
+                "cursor_expired", false, "capacity", 256);
+        when(client.packetEvents(0, 1)).thenReturn(window);
+
+        var first = service.observe("admin", observeRequest(opened, 0, 1));
+        var repeated = service.observe("admin", observeRequest(opened, 0, 1));
+        assertEquals(1, first.get("schema_version"));
+        assertNotNull(Instant.parse((String) first.get("captured_at")));
+        assertEquals("actor", first.get("scope"));
+        assertEquals(opened.get("runtime_generation"), first.get("runtime_generation"));
+        assertEquals("server_diagnostic", first.get("information_level"));
+        assertEquals("best_effort", first.get("snapshot_consistency"));
+        assertEquals(sessionId(opened), first.get("session_id"));
+        assertEquals(generation(opened), first.get("session_generation"));
+        assertEquals("primary", first.get("profile_id"));
+        assertEquals(scene, ((Map<?, ?>) first.get("actor")).get("scene"));
+        assertEquals(List.of(), ((Map<?, ?>) first.get("actor")).get("packet_events"));
+        assertEquals(window, first.get("events"));
+        assertEquals(first.get("events"), repeated.get("events"));
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        assertEquals(1, service.publicCapabilities().get("idempotency_records"));
+        assertEquals(1, service.publicCapabilities().get("reserved_first_closes"));
+        assertEquals(AcceptanceClient.packetObservationCapabilities(), service.publicCapabilities().get("packet_observation"));
+        assertTrue(executors.getFirst().queue.isEmpty());
+        verify(client, times(2)).packetEvents(0, 1);
+    }
+
+    @Test
+    void actorObservationValidatesOwnerIdentityAndWindowBeforeReadingPacketText() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-one");
+        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ObservationException.class,
+                () -> service.observe(null, observeRequest(opened, 0, 1))).status());
+        for (ActorObserveRequest invalid : List.of(
+                new ActorObserveRequest(null, 1L, 0L, 1),
+                new ActorObserveRequest("bad session", 1L, 0L, 1),
+                new ActorObserveRequest(sessionId(opened), null, 0L, 1),
+                new ActorObserveRequest(sessionId(opened), 0L, 0L, 1))) {
+            assertEquals("invalid_actor_session", assertThrows(ObservationException.class,
+                    () -> service.observe("admin", invalid)).reason());
+        }
+        assertEquals("invalid_actor_session", assertThrows(ObservationException.class,
+                () -> service.observe("admin", null)).reason());
+        for (ActorObserveRequest invalid : List.of(observeRequest(opened, -1, 1),
+                observeRequest(opened, 0, 0), observeRequest(opened, 0, 501))) {
+            assertEquals("invalid_packet_window", assertThrows(ObservationException.class,
+                    () -> service.observe("admin", invalid)).reason());
+        }
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
+                () -> service.observe("another-admin", observeRequest(opened, 0, 1))).status());
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class, () -> service.observe("admin",
+                new ActorObserveRequest(sessionId(opened), generation(opened) + 1, 0L, 1))).status());
+        assertEquals(HttpStatus.NOT_FOUND, assertThrows(ObservationException.class, () -> service.observe("admin",
+                new ActorObserveRequest("session-unknown", 1L, 0L, 1))).status());
+        assertEquals("actor_not_observable", assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, 0, 1))).reason());
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void actorObservationRejectsClosingClosedCancelledAndOldWorldSessionsBeforeReadingText() {
+        ActorControlService service = service(4, 20, 64);
+        var cancelled = open(service, "open-cancelled");
+        service.cancel("admin", "cancel-opening", id(cancelled));
+        executors.getLast().runNext();
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(cancelled, 0, 1))).status());
+
+        var opened = open(service, "open-current");
+        executors.getLast().runNext();
+        service.close("admin", "close-current", closeRequest(opened));
+        assertEquals("actor_not_observable", assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, 0, 1))).reason());
+        executors.getLast().runNext();
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, 0, 1))).status());
+
+        var current = open(service, "open-next");
+        executors.getLast().runNext();
+        AcceptanceObservationRuntime.onWorldStopped();
+        assertEquals("actor_world_offline", assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(current, 0, 1))).reason());
+        AcceptanceObservationRuntime.onWorldStarted();
+        service.onWorldStarted();
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(current, 0, 1))).status());
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void actorObservationRejectsLostAndQuarantinedSessionsBeforeReadingText() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-one");
+        executors.getFirst().runNext();
+        when(backend.isCurrent(handle)).thenReturn(false);
+        assertEquals("stale_actor_session", assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, 0, 1))).reason());
+        assertEquals("LOST", session(service.get("admin", id(opened), 0, 100)).get("state"));
+        when(backend.close(handle)).thenReturn(Map.of("native_cleanup_verified", false, "persisted_state_verified", false));
+        service.close("admin", "close-lost", closeRequest(opened));
+        executors.getFirst().runNext();
+        assertEquals("QUARANTINED", session(service.get("admin", id(opened), 0, 100)).get("state"));
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, 0, 1))).status());
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void actorObservationPreservesPacketCursorErrorsWithoutAllocatingAnOperation() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-one");
+        executors.getFirst().runNext();
+        when(client.packetEvents(Long.MAX_VALUE, 500)).thenThrow(
+                new ObservationException(HttpStatus.BAD_REQUEST, "packet_cursor_ahead"));
+        ObservationException failure = assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, Long.MAX_VALUE, 500)));
+        assertEquals(HttpStatus.BAD_REQUEST, failure.status());
+        assertEquals("packet_cursor_ahead", failure.reason());
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        assertEquals(1, service.publicCapabilities().get("idempotency_records"));
+        assertTrue(executors.getFirst().queue.isEmpty());
+    }
+
+    @Test
+    void closingDuringASlowActorSnapshotDoesNotBlockOrExposeTheClosedSessionsPacketText() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-one");
+        executors.getFirst().runNext();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(backend.snapshot(handle)).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return Map.of("logged_in_world", true);
+        });
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        Thread reader = observeAsync(service, observeRequest(opened, 0, 1), outcome);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.close("admin", "close-during-observation", closeRequest(opened));
+            executors.getFirst().runNext();
+        } finally {
+            complete.countDown();
+            reader.join(5_000);
+        }
+        assertFalse(reader.isAlive());
+        ObservationException failure = assertInstanceOf(ObservationException.class, outcome.get());
+        assertEquals(HttpStatus.CONFLICT, failure.status());
+        assertEquals("runtime_changed", failure.reason());
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void stoppingDuringAPacketWindowReadRejectsTheCollectedTextAndDoesNotHoldTheControlLock() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-one");
+        executors.getFirst().runNext();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch complete = new CountDownLatch(1);
+        when(client.packetEvents(0, 1)).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(complete.await(5, TimeUnit.SECONDS));
+            return Map.of("items", List.of(Map.of("text", "旧会话正文")));
+        });
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        Thread reader = observeAsync(service, observeRequest(opened, 0, 1), outcome);
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            AcceptanceObservationRuntime.onWorldStopped();
+            service.onWorldStopping();
+            executors.getFirst().runNext();
+            assertEquals(0, service.publicCapabilities().get("active_sessions"));
+        } finally {
+            complete.countDown();
+            reader.join(5_000);
+        }
+        assertFalse(reader.isAlive());
+        ObservationException failure = assertInstanceOf(ObservationException.class, outcome.get());
+        assertEquals(HttpStatus.CONFLICT, failure.status());
+        assertEquals("runtime_changed", failure.reason());
+    }
+
+    @Test
+    void nativeIdentityLossDuringThePacketReadRejectsItsTextAndMarksTheSessionLost() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "open-one");
+        executors.getFirst().runNext();
+        when(client.packetEvents(0, 1)).thenAnswer(invocation -> {
+            when(backend.isCurrent(handle)).thenReturn(false);
+            return Map.of("items", List.of(Map.of("text", "失效角色正文")));
+        });
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class,
+                () -> service.observe("admin", observeRequest(opened, 0, 1))).status());
+        assertEquals("LOST", session(service.get("admin", id(opened), 0, 100)).get("state"));
+    }
+
+    private static Thread observeAsync(ActorControlService service, ActorObserveRequest request,
+                                       AtomicReference<Object> outcome) {
+        return Thread.ofVirtual().start(() -> {
+            try {
+                outcome.set(service.observe("admin", request));
+            } catch (Throwable failure) {
+                outcome.set(failure);
+            }
+        });
+    }
+
     private ActorControlService service(int sessionLimit, int historyLimit, int eventLimit) {
         ActorControlService service = new ActorControlService(backend, sessionLimit, historyLimit, eventLimit,
                 profile -> {
@@ -435,6 +661,9 @@ class ActorControlServiceTest {
     private static String sessionId(Map<String, Object> value) { return (String) value.get("session_id"); }
     private static long generation(Map<String, Object> value) { return ((Number) value.get("session_generation")).longValue(); }
     private static ActorCloseRequest closeRequest(Map<String, Object> value) { return new ActorCloseRequest(sessionId(value), generation(value)); }
+    private static ActorObserveRequest observeRequest(Map<String, Object> value, long cursor, int limit) {
+        return new ActorObserveRequest(sessionId(value), generation(value), cursor, limit);
+    }
     @SuppressWarnings("unchecked") private static Map<String, Object> session(Map<String, Object> value) { return (Map<String, Object>) value.get("session"); }
     @SuppressWarnings("unchecked") private static Map<String, Object> actor(Map<String, Object> value) { return (Map<String, Object>) session(value).get("actor"); }
     @SuppressWarnings("unchecked") private static Map<String, Object> result(Map<String, Object> value) { return (Map<String, Object>) value.get("result"); }

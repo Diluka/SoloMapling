@@ -5,13 +5,13 @@
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
 | `game_capabilities` | 读取实际版本、运行源码身份、后端在线状态和已开放能力 | 只读 |
-| `game_observe` | 观察 world 或一个真实已加载的 scene_ref | 只读，不加载地图或创建实例 |
+| `game_observe` | 观察 world、真实 scene_ref 或已打开角色的包事件窗口 | 只读，不加载地图或创建实例 |
 | `actor_open` | 为已配置的专用 profile 排队执行原生登录 | 可能创建专用 fixture、更新登录状态；必须有 request_id |
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。没有 `game_act`、聊天、NPC、移动或任务脚本工具。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端支持此参数不代表后端已启用。没有 `game_act`、聊天、NPC、移动或任务脚本工具。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 ## 安装与启动
 
@@ -63,6 +63,7 @@ enabled = true
 | `game_capabilities()` | `GET /solo/acceptance/v1/capabilities` |
 | `game_observe(scope="world", limit=100)` | `POST /solo/acceptance/v1/observe`，data 为 scope/limit |
 | `game_observe(scope="scene", scene_ref="…", limit=100)` | 同一 POST，data 加 scene_ref |
+| `game_observe(scope="actor", session_id="…", expected_generation=1, since_cursor=0, limit=100)` | `POST /solo/acceptance/v1/actor/observe`，data 仅为这四个角色/窗口参数 |
 | `actor_open(profile_id="primary", request_id="open-unique-1")` | `POST /solo/acceptance/v1/actor/open`，data 为 profile_id 与可选 world/channel |
 | `actor_close(session_id="…", expected_generation=1, request_id="close-unique-1")` | `POST /solo/acceptance/v1/actor/close` |
 | `operation_get(operation_id="…", since_cursor=0, limit=100)` | `GET /solo/acceptance/v1/operation/{id}?since_cursor=0&limit=100` |
@@ -76,7 +77,11 @@ enabled = true
 
 `actor_close` 同样可能先排队。需查询到原生关闭结果、`native_cleanup_verified=true` 和 `persisted_state_verified=true`，才能确认保存与离线。`operation_cancel` 仅请求取消；不能把 `CANCEL_REQUESTED` 当作已经停止或已清理。
 
-角色和事件观察不改变已有游戏状态。`limit` 为 `1`～`500` 的严格整数，world 不接受 scene_ref；scene 必须使用实际返回的引用。游标为非负整数，超出缓冲范围由后端明确标记。R1 目录最多前500个场景、无分页；R2a 原生角色快照可直接带自己的 scene_ref，不受目录前500限制。
+角色和事件观察不改变已有游戏状态。`limit` 为 `1`～`500` 的严格整数，world 不接受 scene_ref；scene 必须使用实际返回的引用。world/scene 不接受角色会话参数或非零包游标，既有请求正文保持原样。actor 必须提供 `session_id` 和正整数 `expected_generation`，不接受 `scene_ref`。新参数在 Python `BridgeClient.observe` 中为 keyword-only，原有前三个位置参数保持兼容。所有整数拒绝 bool、浮点数和数值字符串。actor 只读 POST 的请求 UUID 不作为写操作去重键，不创建 operation 或占用历史/关闭额度。
+
+actor 的顶层 `events` 使用每会话独立的包 `sequence`，与 `operation_get.events` 的生命周期 `seq` 完全分开。`since_cursor` 表示已读到的位置，默认0；窗口最多保留256包，每页最多 `limit` 项，读取不消费。`next_cursor` 是本页最后一项，没有项时保留输入游标。`truncated` 表示窗口内还有下一页；`cursor_expired` 表示更早历史已淘汰，两者独立。未来游标返回400，关闭或旧代次的已知会话返回410，进程重启后未知会话可能返回404。不能用 operation 历史接口绕过会话状态读取正文。
+
+当前解码 `CHATTEXT`、`PLAYER_HINT` 和 `SERVERMESSAGE` type0～7，按角色原生字符集读取，正文最多1024个 Unicode 字符并注明截断。未知或畸形包只有有界摘要，不返回原始包。type4 公告在正文前有 ticker flag，不能按普通类型误读。已有 `session.actor.packet_events` 继续只返回摘要；完整正文只在 actor 观察的顶层事件窗口中出现。`actor.scene` 是读取时的当前真实场景，不代表每条历史包发生的场景。R1 目录最多前500个场景、无分页；角色自己的 scene_ref 不受该目录限制。
 
 ## 本地测试和只读协议冒烟
 
@@ -120,6 +125,25 @@ enabled = true
 
 保存验证范围会写入报告：后端原生关键字段核实，加关闭后重新加载的公开摘要比较。它不等于验证所有任务计数或超过摘要上限的数据；缺失或截断的摘要不能以 `null == null` 蒙混通过。位置按原生 spawnpoint 恢复，不要求 x/y 完全相同。
 
-流程逐步以 `0600` 检查点保存 request、operation 和 session 恢复标识。已知活动失败会尝试正常清理；同 ID 的明确拒绝不会阻止关闭此前已知的会话。写请求传输结果未知或返回无效操作收据时保留原 ID 并停止自动重放，报告清理未证实。关闭进程或取消 MCP 请求都不保证游戏角色已经离线，应按检查点查询原操作并恢复处理。没有通过的阶段保留失败结果，不覆写为成功。
+流程逐步以 `0600` 检查点保存 request、operation 和 session 恢复标识。每轮需新的证据路径；路径已存在时在登录前拒绝启动，不覆盖上轮恢复 ID。已知活动失败会尝试正常清理；同 ID 的明确拒绝不会阻止关闭此前已知的会话。写请求传输结果未知或返回无效操作收据时保留原 ID 并停止自动重放，报告清理未证实。关闭进程或取消 MCP 请求都不保证游戏角色已经离线，应按检查点查询原操作并恢复处理。没有通过的阶段保留失败结果，不覆写为成功。
 
 角色控制通过仍不代表聊天、NPC 或 PQ 已实现，也不替代真实客户端协议、渲染和操控验收。本目录代码随工程采用 AGPL-3.0，见[根许可证](../../LICENSE)。
+
+## 显式目标的角色包事件验收
+
+独立事件 CLI 复用上述原生角色登录、保存退出及恢复日志逻辑；观察接口只读，但整个流程会正常写专用 fixture：
+
+```bash
+.venv/bin/python -m solo_acceptance_mcp.actor_events_smoke \
+  --config /absolute/private/solo-acceptance.validation.json \
+  --profile primary \
+  --expected-base-url http://explicitly-verified-isolated-address:8686 \
+  --page-limit 1 \
+  --output /absolute/evidence/actor-events.json
+```
+
+目标、profile 和证据路径均必填，地址必须与配置完全一致；`page-limit` 默认为1，范围1～500。先检查六工具、actor scope 及实际解码/游标能力，再正常打开角色，核对角色、会话、运行代次和当前真实场景。它按包序号分页，拒绝同会话最新序号回退，确认同游标重读保持已见前缀、尾页及空页游标正确。未来游标探针使用 `Long.MAX_VALUE`，避免正常新包到达使“上一尾页+1”变成合法游标。脚本查找实际 type4、ticker=true 的系统公告；正文可以为空，不匹配固定欢迎语。
+
+随后正常保存退出，验证旧会话不能再读取正文；同一原生 CID 以新会话重新打开后，旧会话仍被拒绝，最后再次正常退出。每页及负向探针的证据逐步保存，失败不会覆写为通过；写结果未知、畸形收据和中断恢复沿用生命周期 CLI 的处理。
+
+本地测试只连接桩服务，不等于实际系统公告已验收。隔离服和实际部署分别保存 SDK 结果；真实公告验证不代表真实触发过 CHATTEXT、PLAYER_HINT、机器人回复、NPC 或客户端画面。登录包少于256时，实物验收不声称覆盖了淘汰；该分支由后端确定性测试验证。

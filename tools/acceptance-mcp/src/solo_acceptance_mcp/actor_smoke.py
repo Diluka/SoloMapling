@@ -11,6 +11,7 @@ import asyncio
 from copy import deepcopy
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -94,6 +95,13 @@ class ActorAcceptance:
             "model_called": False, "cleanup": {"verified": False, "state": "NOT_STARTED"},
         }
         self.evidence_started = False
+        if self.output is not None:
+            self.output.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descriptor = os.open(self.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                raise ActorSmokeFailure("EVIDENCE_OUTPUT_ALREADY_EXISTS") from None
+            os.close(descriptor)
         self.save()
 
     def save(self) -> None:
@@ -335,10 +343,10 @@ class ActorAcceptance:
         self.save()
 
 
-async def run_actor_smoke(
+def actor_target_config(
     config_path: Path, *, profile_id: str, expected_base_url: str,
-    output: Path | None = None, operation_timeout: float = 60, poll_interval: float = 0.1,
-) -> dict[str, Any]:
+    operation_timeout: float, poll_interval: float,
+) -> BridgeConfig:
     config = load_config(config_path)
     validate_identifier(profile_id, "profile_id", PROFILE_IDENTIFIER)
     expected = BridgeConfig(username="target-check", password="target-check", base_url=expected_base_url).base_url
@@ -348,7 +356,13 @@ async def run_actor_smoke(
         raise ActorSmokeFailure("INVALID_OPERATION_TIMEOUT")
     if not math.isfinite(poll_interval) or not 0.01 <= poll_interval <= 5:
         raise ActorSmokeFailure("INVALID_POLL_INTERVAL")
-    acceptance = ActorAcceptance(profile_id, operation_timeout, poll_interval, output)
+    return config
+
+
+async def run_actor_acceptance(
+    config_path: Path, config: BridgeConfig, acceptance: ActorAcceptance,
+) -> dict[str, Any]:
+    """Run one acceptance workflow with the shared recovery journal and cleanup boundary."""
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "solo_acceptance_mcp", "--config", str(config_path.resolve())],
@@ -371,6 +385,16 @@ async def run_actor_smoke(
         acceptance.report["passed"] = False
     acceptance.save()
     return acceptance.report
+
+
+async def run_actor_smoke(
+    config_path: Path, *, profile_id: str, expected_base_url: str,
+    output: Path | None = None, operation_timeout: float = 60, poll_interval: float = 0.1,
+) -> dict[str, Any]:
+    config = actor_target_config(config_path, profile_id=profile_id, expected_base_url=expected_base_url,
+                                 operation_timeout=operation_timeout, poll_interval=poll_interval)
+    acceptance = ActorAcceptance(profile_id, operation_timeout, poll_interval, output)
+    return await run_actor_acceptance(config_path, config, acceptance)
 
 
 def main() -> None:

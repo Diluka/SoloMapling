@@ -50,6 +50,14 @@ public final class ActorControlController {
         return ResultBody.success(request, actors.close(owner, request.getRequestId(), request.getData()));
     }
 
+    @PostMapping("/actor/observe")
+    public ResultBody<Map<String, Object>> observe(
+            @RequestBody(required = false) SubmitBody<ActorObserveRequest> request) {
+        String owner = AcceptanceAccess.requireAdmin();
+        requireData(request);
+        return ResultBody.success(request, actors.observe(owner, request.getData()));
+    }
+
     @GetMapping("/operation/{id}")
     public ResultBody<Map<String, Object>> operation(
             @PathVariable("id") String operationId,
