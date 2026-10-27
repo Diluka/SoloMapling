@@ -82,7 +82,7 @@ R2a 新增专用原生角色的登录、正常退出、存档核验和异步操�
 MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities` 为准。
 #70 的 actor 包事件窗口已完成隔离和实际部署验收，六工具版本由 PR #71 交付。
 #72 候选新增唯一的 `game_act/action=chat`，成为七工具；同 session 排队，只有自身真实
-CHATTEXT 回声匹配才证明广播成功，当前仍待隔离及实际部署验收。
+CHATTEXT 回声匹配才证明广播成功；隔离中文回声验收已通过，实际部署另行留证。
 `implementation_round` 保留 `R2a`，以顶层 `enabled_tools/actions` 和观察能力字段判别。
 SocialBot 回复、NPC 控制、移动和命名 recipe 继续独立验证，不能从包观察或自身回声推导完成。
 
