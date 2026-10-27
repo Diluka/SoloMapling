@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复为候选，仍待隔离及部署验收。** 当前部署源码为 `d1c3296e186ae86a1dc21d5d96b08e60ba7b60f9`（[PR #77](https://github.com/Diluka/SoloMapling/pull/77)）；#63、#67～#70、#72、限频验收修正 #74 和 #75 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel` 三种动作。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。候选 #110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复已通过隔离 SDK 验收，实际部署另留证。** 当前部署源码为 `d1c3296e186ae86a1dc21d5d96b08e60ba7b60f9`（[PR #77](https://github.com/Diluka/SoloMapling/pull/77)）；#63、#67～#70、#72、限频验收修正 #74 和 #75 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel` 三种动作。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。候选 #110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -270,9 +270,9 @@ NPC operation result 使用单一 `active` 字段，并包含 `dialogue_version/
 
 use_mts=true、现存CM/QM、节流、未知/畸形包、新包使旧version失效及close队列顺序由隔离/确定性测试覆盖；实际服务只重跑隔离通过的短流程。菜单选择、其他NPC回复、门户、礼包领取、出行、SocialBot及真实客户端画面仍是后续验收，完成本子项不关闭总#65。命令与恢复检查点见 [工具运行说明](../../tools/acceptance-mcp/README.md)。
 
-## #110 候选：无收益 NPC 回复与正确取消
+## #110：无收益 NPC 回复与正确取消
 
-此切片属于 [R2c #65](https://github.com/Diluka/SoloMapling/issues/65)，复用 #75 原生中心、对话版本及既有ACTION队列。当前实现和测试推进中，隔离及实际部署验收尚未完成。七工具不变，`game_act` 候选增加第四种动作 `npc_reply`，本轮仅支持 `select/decline`；`accept` 明确未开放。
+此切片属于 [R2c #65](https://github.com/Diluka/SoloMapling/issues/65)，复用 #75 原生中心、对话版本及既有ACTION队列。实现和隔离 SDK 无收益路径验收已通过，实际部署结果另行记录。七工具不变，`game_act` 候选增加第四种动作 `npc_reply`，本轮仅支持 `select/decline`；`accept` 明确未开放。
 
 ```json
 {"action":"npc_reply","parameters":{"dialogue_version":123,"kind":"select","selection":0}}
@@ -321,7 +321,7 @@ select 的成功后态为 `dialogue_replied`，需要派发后新NPC包、已消
 
 ### 本轮验收与后续范围
 
-本轮计划使用未领礼包的普通level1/map10000 fixture，先隔离、再实际部署验证三条无收益路径：中心0→真实type12→decline；重开同路径→npc_cancel；中心71→真实分类2→城镇菜单→拒绝选择目的地→正常取消。当前原生城镇文本约1405字符，超过1024上限，不能选择目的地1，也不提高全局正文上限绕过完整展示要求。
+本轮已在隔离服用未领礼包的普通level1/map10000 fixture，通过官方 SDK 验证三条无收益路径，实际部署将重跑同一短流程：中心0→真实type12→decline；重开同路径→npc_cancel；中心71→真实分类2→城镇菜单→拒绝选择目的地→正常取消。当前原生城镇文本约1405字符，超过1024上限，不能选择目的地1，也不提高全局正文上限绕过完整展示要求。
 
 每条以实际新包、递增version、当前CM/路由及业务前后态作证；核对金币、三种券、领取标记、背包/任务、地图和返回位置无变化。若fixture已领取，原生可能发type0后dispose，不能重置标记或伪造type12；type0仍为摘要时不能宣称已读告别全文。另验隐藏/未审/截断/畸形offer拒绝、同版二次回复拒绝、原请求不多发包，及活跃命名子CM直接close、同CID保存重开和旧session正文拒绝。
 
@@ -366,7 +366,7 @@ recipe清单要显示`planned/available/blocked`、版本、所需能力和参�
 | R1 协议与观察 | 本地stdio MCP、正常鉴权桥、capabilities与只读快照 | 初始化/协商、tools/list和call、真实后端身份/场景；未鉴权拒绝、结果无密钥；当前Codex实际可调用独立核对 |
 | R2a 原生角色生命周期 | 专用原生持久 fixture、session/操作队列、登录/退出/保存；隔离及实际部署已验收，#63关闭 | 同一CID打开/释放/再加载，原生在线/存档连续，幂等、取消与冲突；同JVM停启后能保存，不混环境bot，不改既有玩家 |
 | R2b 普通聊天与回复 | #70/#72/#74 已完成隔离/部署验收并关闭，SocialBot 往返仍待后续 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
-| R2c NPC 对话 | #75 已部署验收；#110无收益select/decline为候选，accept/完整菜单出行由#112/#113推进 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
+| R2c NPC 对话 | #75 已部署验收；#110无收益select/decline已过隔离 SDK 验收、部署另留证，accept/完整菜单出行由#112/#113推进 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
 | R3 原生动作 | 移动、门户、组队和物品/机关逐项增量 | 每动作正常原生路径及结果；不可达/拒绝/失败清楚返回；真实库存与任务进度一致；多actor无互相控制 |
 | R4 预置流程 | recipe发现/版本、run/status/cancel、条件等待、断言与证据 | 一键跑完整基础流程；中断/断线/重试/取消不重复收益；失败可定位到具体步骤与最后事实 |
 | R5 组队协作验收 | 多actor分工、真人保留角色、单个PQ阶段和逐步扩展 | 一真人与合法bot编制逐阶段验证；双队/双频道隔离、同时站位、掉线补位与失败恢复；每种PQ独立留证 |

@@ -88,7 +88,7 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 `implementation_round` 保留 `R2a`，以顶层 `enabled_tools/actions` 和观察能力字段判别。
 #110 候选保持七工具，仅在 game_act 增加无收益 npc_reply/select、decline，并扩展已审子菜单的正常取消；
 以实际完整offer、已审路径与最新version限制派发，截断城镇菜单禁止选择目的地。
-本项仍待隔离及实际部署验收，accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
+本项已过隔离 SDK 验收，实际部署另留证；accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
 
 ## 验证边界
 
