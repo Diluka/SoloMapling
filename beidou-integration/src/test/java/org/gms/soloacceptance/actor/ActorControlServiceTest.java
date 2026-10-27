@@ -8,6 +8,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.action.ChatEvidence;
+import soloMapling.game.action.NativeActionResult;
+import soloMapling.game.action.NativeActionService;
+import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -18,11 +22,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -37,6 +44,9 @@ import static org.mockito.Mockito.*;
 
 class ActorControlServiceTest {
     private NativeActorBackend backend;
+    private ChatDispatch chatDispatch;
+    private final Map<NativeActionService.ActionHandle, PreparedChat> preparedChats =
+            Collections.synchronizedMap(new IdentityHashMap<>());
     private NativeActorHandle handle;
     private AcceptanceClient client;
     private final List<ManualExecutor> executors = new ArrayList<>();
@@ -47,6 +57,7 @@ class ActorControlServiceTest {
         CharacterTestContext.install();
         AcceptanceObservationRuntime.onWorldStarted();
         backend = mock(NativeActorBackend.class);
+        chatDispatch = mock(ChatDispatch.class);
         when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200L,
                 "native_clock_update_interval_ms", 777L));
         client = mock(AcceptanceClient.class);
@@ -492,7 +503,7 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        when(backend.chat(handle, "运行中的第一条")).thenAnswer(invocation -> {
+        when(chatDispatch.execute(handle, "运行中的第一条")).thenAnswer(invocation -> {
             entered.countDown();
             assertTrue(release.await(5, TimeUnit.SECONDS));
             return chatSuccess();
@@ -530,7 +541,7 @@ class ActorControlServiceTest {
         executors.getFirst().drain();
         assertEquals("CLOSED", session(service.get("admin", id(first), 0, 100)).get("state"));
         assertTrue(execution(service, opened).scope().snapshot().unloadComplete());
-        verify(backend, times(1)).chat(any(), any());
+        verify(chatDispatch, times(1)).execute(any(), any());
     }
 
     @SuppressWarnings("unchecked")
@@ -780,7 +791,7 @@ class ActorControlServiceTest {
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
         assertEquals(1, service.publicCapabilities().get("idempotency_records"));
         assertTrue(executors.getFirst().queue.isEmpty());
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
     }
 
     @Test
@@ -1159,12 +1170,12 @@ class ActorControlServiceTest {
         assertEquals(id(first), id(service.act("admin", "chat-one", request)));
         var second = service.act("admin", "chat-two", chatRequest(opened, "第二条"));
         assertEquals(2, executors.getFirst().queue.size());
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         executors.getFirst().runNext();
         executors.getFirst().runNext();
-        var ordering = inOrder(backend);
-        ordering.verify(backend).chat(handle, secretText);
-        ordering.verify(backend).chat(handle, "第二条");
+        var ordering = inOrder(chatDispatch);
+        ordering.verify(chatDispatch).execute(handle, secretText);
+        ordering.verify(chatDispatch).execute(handle, "第二条");
         var firstResult = service.get("admin", id(first), 0, 100);
         assertEquals("SUCCEEDED", firstResult.get("status"));
         assertEquals(false, result(firstResult).get("cancel_too_late"));
@@ -1186,7 +1197,7 @@ class ActorControlServiceTest {
         assertEquals(id(first), id(replay));
         assertEquals("SUCCEEDED", replay.get("status"));
         assertEquals("CLOSED", session(replay).get("state"));
-        verify(backend, times(2)).chat(any(), any());
+        verify(chatDispatch, times(2)).execute(any(), any());
         assertEquals(7, service.publicCapabilities().get("maximum_pending_actions_per_session"));
         assertEquals(8, service.publicCapabilities().get("actor_executor_queue_capacity"));
         assertEquals(List.of("chat", "npc_center_open", "npc_cancel", "npc_reply"), service.publicCapabilities().get("actions"));
@@ -1211,7 +1222,7 @@ class ActorControlServiceTest {
         assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
                 () -> service.act("another-admin", "new-chat", original)).status());
         verify(backend, times(1)).validateChat(handle, "原文");
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
     }
 
     @Test
@@ -1228,7 +1239,7 @@ class ActorControlServiceTest {
         assertEquals("chat_cancelled_before_dispatch", result(cancelled).get("observed_outcome"));
         assertEquals(false, result(cancelled).get("native_dispatch_started"));
         assertEquals("OPEN", session(cancelled).get("state"));
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
         var next = service.act("admin", "chat-two", chatRequest(opened, "可以发这条"));
         executors.getFirst().runNext();
@@ -1244,15 +1255,96 @@ class ActorControlServiceTest {
         var action = service.act("admin", "chat-one", chatRequest(opened, "排队正文"));
         when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-next",
                 "runtime_generation", opened.get("runtime_generation")));
-        executors.getFirst().runNext();
+        ObservationException asynchronousFailure = assertThrows(ObservationException.class, executors.getFirst()::runNext);
+        assertEquals("actor_context_mismatch", asynchronousFailure.reason());
         var failed = service.get("admin", id(action), 0, 100);
         assertEquals("FAILED", failed.get("status"));
         assertEquals(Map.of("reason", "actor_context_mismatch"), failed.get("error"));
         assertEquals(false, result(failed).get("native_dispatch_started"));
         assertEquals("OPEN", session(failed).get("state"));
         assertEquals(1, service.publicCapabilities().get("active_sessions"));
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void contextChangeAfterChatPreparationRejectsSubmissionAndClearsItsUnclaimedOperation() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationService observations = prepareChat(service);
+        var opened = open(service, "open-post-prepare-context");
+        executors.getFirst().runNext();
+        Map<String, Object> original = Map.of("scene_ref", "scene-current",
+                "runtime_generation", opened.get("runtime_generation"));
+        Map<String, Object> changed = Map.of("scene_ref", "scene-changed-after-prepare",
+                "runtime_generation", opened.get("runtime_generation"));
+        when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(original, original, changed);
+        ActorActRequest request = chatRequest(opened, "准备完成后场景失效");
+
+        var failed = service.act("admin", "post-prepare-context", request);
+
+        assertEquals("FAILED", failed.get("status"));
+        assertEquals(Map.of("reason", "actor_context_mismatch"), failed.get("error"));
+        assertEquals(false, result(failed).get("native_dispatch_started"));
+        assertEquals("OPEN", session(failed).get("state"));
+        assertNull(operationWork(service, failed));
+        var operations = ActorControlService.class.getDeclaredField("operations");
+        operations.setAccessible(true);
+        Object operation = ((Map<?, ?>) operations.get(service)).get(id(failed));
+        var chatAction = operation.getClass().getDeclaredField("chatAction");
+        chatAction.setAccessible(true);
+        assertNull(chatAction.get(operation));
+        assertTrue(executors.getFirst().queue.isEmpty());
+        assertEquals(0, execution(service, opened).scope().snapshot().acceptedWork());
+        assertEquals(id(failed), id(service.act("admin", "post-prepare-context", request)));
+        verify(backend, times(1)).prepareChat(eq(handle), any(), any(), any(), any());
+        verify(backend, never()).submitChat(any());
+        verify(chatDispatch, never()).execute(any(), any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void anErrorAfterChatPreparationFailsPrivatelyAndReleasesItsUnclaimedWorkWithoutClosingTheActor() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        AcceptanceObservationService observations = prepareChat(service);
+        var opened = open(service, "open-post-prepare-error");
+        executors.getFirst().runNext();
+        Map<String, Object> original = Map.of("scene_ref", "scene-current",
+                "runtime_generation", opened.get("runtime_generation"));
+        AtomicInteger contextReads = new AtomicInteger();
+        String privateFailure = "private AssertionError after preparation must not escape";
+        doAnswer(invocation -> {
+            if (contextReads.incrementAndGet() == 3) throw new AssertionError(privateFailure);
+            return original;
+        }).when(observations).contextForActor(any(GameContext.CharacterRef.class));
+        ActorActRequest request = chatRequest(opened, "准备后读取失败的聊天原文");
+
+        var failed = service.act("admin", "post-prepare-error", request);
+
+        assertEquals(3, contextReads.get());
+        assertEquals("FAILED", failed.get("status"));
+        assertEquals(Map.of("reason", "native_chat_validation_failed"), failed.get("error"));
+        assertEquals(false, result(failed).get("native_dispatch_started"));
+        assertFalse(failed.toString().contains(privateFailure));
+        assertFalse(failed.toString().contains(request.parameters().text()));
+        assertEquals("OPEN", session(failed).get("state"));
+        assertNull(operationWork(service, failed));
+        var operations = ActorControlService.class.getDeclaredField("operations");
+        operations.setAccessible(true);
+        Object operation = ((Map<?, ?>) operations.get(service)).get(id(failed));
+        var chatAction = operation.getClass().getDeclaredField("chatAction");
+        chatAction.setAccessible(true);
+        assertNull(chatAction.get(operation));
+        assertTrue(executors.getFirst().queue.isEmpty());
+        assertEquals(0, execution(service, opened).scope().snapshot().acceptedWork());
+        assertEquals(id(failed), id(service.act("admin", "post-prepare-error", request)));
+        verify(backend, times(1)).prepareChat(eq(handle), any(), any(), any(), any());
+        verify(backend, never()).submitChat(any());
+        verify(chatDispatch, never()).execute(any(), any());
+        var closing = service.close("admin", "close-post-prepare-error", closeRequest(opened));
+        executors.getFirst().runNext();
+        assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+        assertEquals("CLOSED", session(service.get("admin", id(closing), 0, 100)).get("state"));
+        verify(backend, times(1)).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
     @Test
@@ -1270,7 +1362,7 @@ class ActorControlServiceTest {
         assertEquals(Map.of("reason", "chat_text_not_encodable"), failed.get("error"));
         assertEquals(false, result(failed).get("native_dispatch_started"));
         assertEquals("OPEN", session(failed).get("state"));
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
     }
 
@@ -1280,7 +1372,8 @@ class ActorControlServiceTest {
         prepareChat(service);
         var opened = open(service, "open-chat");
         executors.getFirst().runNext();
-        when(backend.chat(handle, "原生再验证")).thenThrow(new ObservationException(HttpStatus.CONFLICT, "actor_session_stale"));
+        doNothing().doThrow(new ObservationException(HttpStatus.CONFLICT, "actor_session_stale"))
+                .when(backend).validateChat(handle, "原生再验证");
         var action = service.act("admin", "chat-one", chatRequest(opened, "原生再验证"));
         executors.getFirst().runNext();
         var failed = service.get("admin", id(action), 0, 100);
@@ -1297,14 +1390,15 @@ class ActorControlServiceTest {
         prepareChat(service);
         var opened = open(service, "open-chat");
         executors.getFirst().runNext();
-        when(backend.chat(handle, "限频样例")).thenReturn(Map.of("status", "FAILED", "error_reason", "native_chat_not_broadcast",
-                "result", Map.of("native_dispatch_started", true, "echo_matched", false)));
-        Map<String, Object> unknown = new java.util.LinkedHashMap<>(Map.of("native_dispatch_started", true,
-                "echo_matched", false, "native_handler_error", true, "text", "不得保留的正文"));
-        unknown.put("packet_cursor_after", null);
-        when(backend.chat(handle, "未知样例")).thenReturn(Map.of("status", "INDETERMINATE", "error_reason", "native_chat_outcome_unknown",
-                "result", unknown));
-        when(backend.chat(handle, "异常样例")).thenThrow(new IllegalStateException("private text and password must not escape"));
+        NativeActionResult rateLimited = new NativeActionResult(
+                NativeActionResult.Outcome.FAILED, NativeActionResult.Dispatch.STARTED, 73, false, false,
+                "native_chat_not_broadcast", chatEvidence(31L, 31L, null, ChatEvidence.Completeness.COMPLETE));
+        NativeActionResult unknown = new NativeActionResult(
+                NativeActionResult.Outcome.INDETERMINATE, NativeActionResult.Dispatch.STARTED, 73, false, true,
+                "native_chat_outcome_unknown", chatEvidence(31L, null, null, ChatEvidence.Completeness.UNAVAILABLE));
+        when(chatDispatch.execute(handle, "限频样例")).thenReturn(rateLimited);
+        when(chatDispatch.execute(handle, "未知样例")).thenReturn(unknown);
+        when(chatDispatch.execute(handle, "异常样例")).thenThrow(new IllegalStateException("private text and password must not escape"));
         for (String text : List.of("限频样例", "未知样例", "异常样例")) {
             var action = service.act("admin", "chat-" + text.hashCode(), chatRequest(opened, text));
             executors.getFirst().runNext();
@@ -1331,7 +1425,7 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
-        when(backend.chat(handle, "正在发言")).thenAnswer(invocation -> {
+        when(chatDispatch.execute(handle, "正在发言")).thenAnswer(invocation -> {
             entered.countDown();
             assertTrue(complete.await(5, TimeUnit.SECONDS));
             return chatSuccess();
@@ -1354,7 +1448,7 @@ class ActorControlServiceTest {
         assertEquals("CLOSING", session(finished).get("state"));
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(action), 0, 100)).get("state"));
-        verify(backend).chat(handle, "正在发言");
+        verify(chatDispatch).execute(handle, "正在发言");
         verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
@@ -1375,7 +1469,7 @@ class ActorControlServiceTest {
         prepareChat(service);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
-        when(backend.chat(handle, "占住执行线程")).thenAnswer(invocation -> {
+        when(chatDispatch.execute(handle, "占住执行线程")).thenAnswer(invocation -> {
             entered.countDown();
             assertTrue(complete.await(5, TimeUnit.SECONDS));
             return chatSuccess();
@@ -1409,7 +1503,7 @@ class ActorControlServiceTest {
                 assertEquals("CLOSED", session(cancelled).get("state"));
             }
             assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
-            verify(backend, times(1)).chat(any(), any());
+            verify(chatDispatch, times(1)).execute(any(), any());
             verify(backend, never()).npcCenterOpen(any());
             verify(backend, never()).npcReply(any(), anyLong(), any(), any());
             verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
@@ -1443,7 +1537,7 @@ class ActorControlServiceTest {
         assertEquals("SUCCEEDED", service.get("admin", id(closeFirst), 0, 100).get("status"));
         assertEquals("SUCCEEDED", service.get("admin", id(closeSecond), 0, 100).get("status"));
         assertEquals(6, service.publicCapabilities().get("operation_history_size"));
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
     }
 
     @Test
@@ -1463,7 +1557,7 @@ class ActorControlServiceTest {
         assertEquals("QUARANTINED", session(service.get("admin", id(second), 0, 100)).get("state"));
         executors.getFirst().runNext();
         assertEquals("CLOSED", session(service.get("admin", id(second), 0, 100)).get("state"));
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
     }
 
@@ -1479,10 +1573,145 @@ class ActorControlServiceTest {
                 () -> service.act("admin", "chat-rejected", request)).reason());
         var rejected = service.act("admin", "chat-rejected", request);
         assertEquals("FAILED", rejected.get("status"));
+        assertEquals(Map.of("reason", "actor_queue_full"), rejected.get("error"));
         assertEquals("OPEN", session(rejected).get("state"));
         assertEquals(1, service.publicCapabilities().get("active_sessions"));
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void chatPreparationFailureSettlesItsUnqueuedWorkWithoutClosingTheActorOrHoldingAnActionSlot() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareChat(service);
+        var opened = open(service, "open-prepare-failure");
+        executors.getFirst().runNext();
+        doThrow(new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable"))
+                .when(backend).prepareChat(any(), any(), any(), any(), any());
+        var failed = actOrRecover(service, "prepare-failure", chatRequest(opened, "准备失败"));
+        verify(backend, never()).submitChat(any());
+        assertUnqueuedChatFailureAndAllActionSlots(service, opened, failed);
+    }
+
+    @Test
+    void chatSubmissionFailureBeforeEnqueueSettlesItsWorkAndLeavesEveryActionSlotAvailable() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareChat(service);
+        var opened = open(service, "open-submit-failure");
+        executors.getFirst().runNext();
+        doThrow(new IllegalStateException("private submission failure must not escape"))
+                .when(backend).submitChat(any());
+        var failed = actOrRecover(service, "submit-failure", chatRequest(opened, "提交失败"));
+        assertUnqueuedChatFailureAndAllActionSlots(service, opened, failed);
+    }
+
+    @Test
+    void aChatSubmissionThrowAfterEnqueueCannotRefundOrReplayTheAcceptedNativeWork() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareChat(service);
+        var opened = open(service, "open-enqueued-submission-failure");
+        executors.getFirst().runNext();
+        AtomicReference<PreparedChat> actual = new AtomicReference<>();
+        doAnswer(invocation -> {
+            PreparedChat prepared = preparedChats.get(invocation.getArgument(0));
+            actual.set(prepared);
+            prepared.submit();
+            throw new IllegalStateException("private failure after enqueue must not escape");
+        }).when(backend).submitChat(any());
+        ActorActRequest request = chatRequest(opened, "已经受理的原生工作");
+        var first = actOrRecover(service, "submit-after-enqueue", request);
+        assertEquals(1, executors.getFirst().queue.size());
+        assertFalse(actual.get().work.isSettled());
+        assertFalse(actual.get().result.isDone());
+        assertEquals("OPEN", session(first).get("state"));
+        verify(chatDispatch, never()).execute(any(), any());
+
+        doAnswer(invocation -> preparedChats.get(invocation.getArgument(0)).submit()).when(backend).submitChat(any());
+        for (int i = 0; i < 6; i++) service.act("admin", "queued-after-throw-" + i, chatRequest(opened, "后续排队" + i));
+        assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "eighth-after-throw", chatRequest(opened, "仍不能提前退款"))).reason());
+        assertEquals(8, service.publicCapabilities().get("operation_history_size"));
+        executors.getFirst().runNext();
+        assertTrue(actual.get().work.isSettled());
+        var completed = service.get("admin", id(first), 0, 100);
+        assertEquals("SUCCEEDED", completed.get("status"));
+        assertEquals(id(first), id(service.act("admin", "submit-after-enqueue", request)));
+        var closing = service.close("admin", "close-after-enqueued-throw", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+        verify(chatDispatch, times(1)).execute(any(), any());
+    }
+
+    @Test
+    void aChatSubmissionErrorAfterEnqueueKeepsItsWorkAndLateTypedSuccessWithoutReplayingTheChat() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareChat(service);
+        var opened = open(service, "open-enqueued-submission-error");
+        executors.getFirst().runNext();
+        AtomicReference<PreparedChat> actual = new AtomicReference<>();
+        doAnswer(invocation -> {
+            PreparedChat prepared = preparedChats.get(invocation.getArgument(0));
+            actual.set(prepared);
+            prepared.submit();
+            throw new AssertionError("private AssertionError after enqueue must not escape");
+        }).when(backend).submitChat(any());
+        ActorActRequest request = chatRequest(opened, "错误发生前已经受理的原生工作");
+        var first = service.act("admin", "submit-error-after-enqueue", request);
+        assertEquals(1, executors.getFirst().queue.size());
+        assertFalse(actual.get().work.isSettled());
+        assertFalse(actual.get().result.isDone());
+        assertEquals("OPEN", session(first).get("state"));
+        assertFalse(first.toString().contains("private AssertionError"));
+        verify(chatDispatch, never()).execute(any(), any());
+
+        doAnswer(invocation -> preparedChats.get(invocation.getArgument(0)).submit()).when(backend).submitChat(any());
+        for (int i = 0; i < 6; i++) service.act("admin", "queued-after-error-" + i, chatRequest(opened, "后续排队" + i));
+        assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "eighth-after-error", chatRequest(opened, "错误不代表提前退款"))).reason());
+        assertEquals(8, service.publicCapabilities().get("operation_history_size"));
+        executors.getFirst().runNext();
+        assertTrue(actual.get().work.isSettled());
+        assertEquals(NativeActionResult.Outcome.SUCCEEDED, actual.get().result.getNow(null).outcome());
+        var completed = service.get("admin", id(first), 0, 100);
+        assertEquals("SUCCEEDED", completed.get("status"));
+        assertEquals(true, result(completed).get("native_dispatch_started"));
+        assertEquals(true, result(completed).get("echo_matched"));
+        assertEquals(id(first), id(service.act("admin", "submit-error-after-enqueue", request)));
+        var closing = service.close("admin", "close-after-enqueued-error", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+        verify(chatDispatch, times(1)).execute(any(), any());
+    }
+
+    private Map<String, Object> actOrRecover(ActorControlService service, String requestId, ActorActRequest request) {
+        try {
+            return service.act("admin", requestId, request);
+        } catch (ObservationException controlledFailure) {
+            return service.act("admin", requestId, request);
+        }
+    }
+
+    private void assertUnqueuedChatFailureAndAllActionSlots(ActorControlService service, Map<String, Object> opened,
+                                                          Map<String, Object> failed) throws Exception {
+        assertEquals("FAILED", failed.get("status"));
+        assertEquals("OPEN", session(failed).get("state"));
+        assertEquals(false, result(failed).get("native_dispatch_started"));
+        assertFalse(failed.toString().contains("private"));
+        assertNull(operationWork(service, failed));
+        assertTrue(executors.getFirst().queue.isEmpty());
+        assertEquals(0, execution(service, opened).scope().snapshot().acceptedWork());
+        verify(chatDispatch, never()).execute(any(), any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
+        prepareChat(service);
+        for (int i = 0; i < 7; i++) service.act("admin", "queued-after-failure-" + i, chatRequest(opened, "排队" + i));
+        assertEquals(7, executors.getFirst().queue.size());
+        assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "eighth-after-failure", chatRequest(opened, "八条不能受理"))).reason());
+        var closing = service.close("admin", "close-after-failure", closeRequest(opened));
+        assertEquals(8, executors.getFirst().queue.size());
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+        verify(chatDispatch, never()).execute(any(), any());
     }
 
     @Test
@@ -1582,7 +1811,7 @@ class ActorControlServiceTest {
         var ordering = inOrder(backend);
         ordering.verify(backend).npcCenterOpen(handle);
         ordering.verify(backend).npcCancel(handle, 37L);
-        verify(backend, never()).chat(any(), any());
+        verify(chatDispatch, never()).execute(any(), any());
         verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
         Map<?, ?> capability = (Map<?, ?>) service.publicCapabilities().get("npc_dialogue");
         assertEquals(List.of("native_ui_center"), capability.get("entrypoints"));
@@ -2161,14 +2390,115 @@ class ActorControlServiceTest {
         when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-current",
                 "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
         service.setObservations(observations);
-        when(backend.chat(any(), any())).thenReturn(chatSuccess());
+        when(chatDispatch.execute(any(), any())).thenAnswer(invocation -> chatSuccess());
+        doAnswer(invocation -> {
+            NativeActorHandle actor = invocation.getArgument(0);
+            PreparedChat prepared = new PreparedChat(actor, invocation.getArgument(1), invocation.getArgument(2),
+                    invocation.getArgument(3), invocation.getArgument(4), observations);
+            preparedChats.put(prepared.handle, prepared);
+            return prepared.handle;
+        }).when(backend).prepareChat(any(), any(), any(), any(), any());
+        doAnswer(invocation -> preparedChats.get(invocation.getArgument(0)).submit())
+                .when(backend).submitChat(any());
         return observations;
     }
 
-    private static Map<String, Object> chatSuccess() {
-        return Map.of("status", "SUCCEEDED", "result", Map.of("observed_outcome", "native_chat_broadcast",
-                "native_dispatch_started", true, "echo_matched", true, "sender_character_id", 73,
-                "echo_sequence", 32L, "packet_cursor_before", 31L, "packet_cursor_after", 32L));
+    private NativeActionResult chatSuccess() {
+        return new NativeActionResult(NativeActionResult.Outcome.SUCCEEDED, NativeActionResult.Dispatch.STARTED,
+                73, false, false, null, chatEvidence(31L, 32L, 32L, ChatEvidence.Completeness.COMPLETE));
+    }
+
+    private ChatEvidence chatEvidence(Long before, Long after, Long matched,
+                                      ChatEvidence.Completeness completeness) {
+        return new ChatEvidence(ChatEvidence.Source.SELF_NATIVE_CHAT_PACKET, "fixture-self-packets",
+                handle.characterRef().epoch().value(), before, after, matched, completeness, false);
+    }
+
+    /** Only the native behavior is mocked: admission, physical queue and factual settlement remain real. */
+    private interface ChatDispatch {
+        NativeActionResult execute(NativeActorHandle actor, String text);
+    }
+
+    private final class PreparedChat {
+        final NativeActionService.ActionHandle handle = mock(NativeActionService.ActionHandle.class);
+        final NativeActionService.SubmissionReceipt receipt = mock(NativeActionService.SubmissionReceipt.class);
+        final CompletableFuture<NativeActionResult> result = new CompletableFuture<>();
+        final AtomicBoolean dispatched = new AtomicBoolean();
+        final AtomicBoolean submitted = new AtomicBoolean();
+        final AtomicReference<NativeActionService.SubmissionStatus> status =
+                new AtomicReference<>(NativeActionService.SubmissionStatus.PREPARED);
+        final AtomicReference<NativeActionService.SubmissionRejection> rejection =
+                new AtomicReference<>(NativeActionService.SubmissionRejection.NONE);
+        final NativeActorHandle actor;
+        final CharacterCommandLane lane;
+        final CharacterCommandLane.ControlPermit permit;
+        final ExecutionScope.WorkHandle work;
+        final NativeChatAction action;
+        final AcceptanceObservationService observations;
+        final Map<String, Object> expectedScene;
+
+        PreparedChat(NativeActorHandle actor, CharacterCommandLane lane, CharacterCommandLane.ControlPermit permit,
+                     ExecutionScope.WorkHandle work, NativeChatAction action, AcceptanceObservationService observations) {
+            this.actor = actor;
+            this.lane = lane;
+            this.permit = permit;
+            this.work = work;
+            this.action = action;
+            this.observations = observations;
+            expectedScene = observations.contextForActor(actor.characterRef());
+            when(handle.result()).thenReturn(result.minimalCompletionStage());
+            when(handle.dispatchStarted()).thenAnswer(invocation -> dispatched.get());
+            when(handle.receipt()).thenReturn(receipt);
+            when(receipt.workId()).thenReturn(work.snapshot().id());
+            when(receipt.status()).thenAnswer(invocation -> status.get());
+            when(receipt.rejection()).thenAnswer(invocation -> rejection.get());
+        }
+
+        NativeActionService.SubmissionReceipt submit() {
+            if (!submitted.compareAndSet(false, true)) return receipt;
+            status.set(NativeActionService.SubmissionStatus.SUBMITTING);
+            CharacterCommandLane.Submission submission = lane.submit(work, permit, this::execute, this::settled);
+            if (submission.status() == CharacterCommandLane.Status.ENQUEUED) {
+                status.set(NativeActionService.SubmissionStatus.ENQUEUED);
+            } else {
+                status.set(NativeActionService.SubmissionStatus.REJECTED);
+                rejection.set(submission.status() == CharacterCommandLane.Status.DUPLICATE
+                        ? NativeActionService.SubmissionRejection.WORK_ALREADY_BOUND
+                        : NativeActionService.SubmissionRejection.valueOf(submission.rejection().name()));
+            }
+            return receipt;
+        }
+
+        void execute() {
+            try {
+                backend.validateChat(actor, action.text());
+                if (!expectedScene.equals(observations.contextForActor(actor.characterRef()))) {
+                    throw new ObservationException(HttpStatus.CONFLICT, "actor_context_mismatch");
+                }
+                dispatched.set(true);
+                NativeActionResult outcome = chatDispatch.execute(actor, action.text());
+                result.complete(new NativeActionResult(outcome.outcome(), outcome.dispatch(), outcome.senderCharacterId(),
+                        work.cancelRequested() || outcome.cancelRequested(), outcome.handlerError(), outcome.fixedReason(),
+                        outcome.evidence()));
+            } catch (Throwable failure) {
+                String reason = dispatched.get() ? "native_chat_outcome_unknown"
+                        : failure instanceof ObservationException known ? known.reason() : "native_action_validation_failed";
+                result.complete(new NativeActionResult(dispatched.get() ? NativeActionResult.Outcome.INDETERMINATE
+                                : NativeActionResult.Outcome.FAILED, dispatched.get() ? NativeActionResult.Dispatch.STARTED
+                                : NativeActionResult.Dispatch.NOT_STARTED, 73, work.cancelRequested(), dispatched.get(), reason,
+                        ChatEvidence.none(work.acceptedEpoch().value())));
+            }
+        }
+
+        void settled() {
+            if (result.isDone()) return;
+            boolean cancelled = work.cancelRequested() || !WorldEpoch.snapshot().active()
+                    || WorldEpoch.snapshot().token() != work.acceptedEpoch();
+            result.complete(new NativeActionResult(cancelled ? NativeActionResult.Outcome.CANCELLED : NativeActionResult.Outcome.FAILED,
+                    NativeActionResult.Dispatch.NOT_STARTED, 73, cancelled, false,
+                    cancelled ? "chat_cancelled_before_dispatch" : "native_action_queue_rejected",
+                    ChatEvidence.none(work.acceptedEpoch().value())));
+        }
     }
 
     private static ActorActRequest chatRequest(Map<String, Object> opened, String text) {

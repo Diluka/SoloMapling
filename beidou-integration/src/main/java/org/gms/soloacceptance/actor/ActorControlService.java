@@ -8,6 +8,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.action.NativeActionResult;
+import soloMapling.game.action.NativeActionService;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
@@ -335,10 +337,17 @@ public final class ActorControlService {
                 NativeActorHandle acceptedHandle = handle;
                 ExecutionScope.WorkHandle actualWork = accepted.work;
                 actualWork.completion().whenComplete((fact, failure) -> actionCarrierCompleted(accepted, actualWork));
-                CharacterCommandLane.Submission submission = session.execution.submitAction(accepted.work,
-                        () -> runAction(acceptedSession, accepted, acceptedHandle, text, dialogueVersion,
-                                replyKind, selection, context), () -> workSettled(acceptedSession, accepted));
-                requireSubmitted(submission, accepted);
+                if ("chat".equals(accepted.action)) {
+                    NativeActionService.SubmissionReceipt receipt = submitChat(acceptedSession, accepted, acceptedHandle, text, context);
+                    if (receipt != null && receipt.status() == NativeActionService.SubmissionStatus.REJECTED) {
+                        throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
+                    }
+                } else {
+                    CharacterCommandLane.Submission submission = session.execution.submitAction(accepted.work,
+                            () -> runAction(acceptedSession, accepted, acceptedHandle, text, dialogueVersion,
+                                    replyKind, selection, context), () -> workSettled(acceptedSession, accepted));
+                    requireSubmitted(submission, accepted);
+                }
                 synchronized (monitor) { return response(accepted, 0, 100); }
             }
         }
@@ -582,6 +591,90 @@ public final class ActorControlService {
         }
     }
 
+    private NativeActionService.SubmissionReceipt submitChat(Session session, Operation operation, NativeActorHandle handle,
+                                                            String text, ActorActRequest.ExpectedContext context) {
+        ExecutionScope.WorkHandle actualWork = operation.work;
+        try {
+            NativeActionService.ActionHandle action = session.execution.prepareChat(actualWork, handle, text,
+                    () -> validateChatEntry(session, operation, handle, context));
+            synchronized (monitor) { operation.chatAction = action; }
+            action.result().whenComplete((result, failure) -> chatCompleted(operation, action, result, failure));
+            // Bind the captured native scene to the caller's opaque context before the one physical submission.
+            validateActionContext(handle, context);
+            return session.execution.submitChat(action);
+        } catch (Throwable failure) {
+            ExecutionScope.WorkSnapshot fact = actualWork.snapshot();
+            synchronized (monitor) {
+                if (!terminal(operation.status)) {
+                    if (fact.carrierClaimed() && !fact.settled() && !fact.rejected()) {
+                        operation.step = "native_chat_submission_confirmation_pending";
+                        event(operation, operation.step);
+                    } else if (actionCancelled(session, operation)) cancelledBeforeAction(operation);
+                    else chatFailedBeforeDispatch(operation, safeReason(failure, "native_chat_validation_failed"));
+                }
+            }
+            // No carrier exists to account for an unsubmitted preparation failure.
+            if (!fact.carrierClaimed()) {
+                synchronized (monitor) { operation.chatAction = null; }
+                actualWork.reject();
+            }
+            return null;
+        }
+    }
+
+    private void validateChatEntry(Session session, Operation operation, NativeActorHandle handle,
+                                   ActorActRequest.ExpectedContext context) {
+        try {
+            synchronized (monitor) {
+                requireAccepting();
+                if (ownedSession(session.owner, session.id, session.generation) != session) {
+                    throw error(HttpStatus.GONE, "stale_actor_session");
+                }
+                requireActionSession(session, handle);
+            }
+            if (!backend.isCurrent(handle)) throw error(HttpStatus.CONFLICT, "actor_session_stale");
+            validateActionContext(handle, context);
+            synchronized (monitor) {
+                requireAccepting();
+                requireActionSession(session, handle);
+            }
+        } catch (ObservationException failure) {
+            synchronized (monitor) { operation.chatEntryFailure = safeReason(failure, "native_chat_validation_failed"); }
+            throw failure;
+        } catch (RuntimeException unavailable) {
+            synchronized (monitor) { operation.chatEntryFailure = "actor_observation_unavailable"; }
+            throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
+        }
+    }
+
+    private void chatCompleted(Operation operation, NativeActionService.ActionHandle source,
+                               NativeActionResult result, Throwable failure) {
+        synchronized (monitor) {
+            if (operation.chatAction != source || terminal(operation.status)) return;
+            if (failure == null && result != null) finishChat(operation, result);
+            else chatResultUnavailable(operation, source.dispatchStarted());
+        }
+    }
+
+    private void chatFailedBeforeDispatch(Operation operation, String reason) {
+        operation.result = Map.of("observed_outcome", "chat_not_dispatched", "native_dispatch_started", false,
+                "cancel_too_late", false);
+        operation.error = Map.of("reason", reason);
+        finish(operation, "FAILED", reason);
+    }
+
+    private void chatResultUnavailable(Operation operation, boolean started) {
+        operation.dispatchStarted = started;
+        if (!started && actionCancelled(operation.session, operation)) cancelledBeforeAction(operation);
+        else if (!started) chatFailedBeforeDispatch(operation, "native_chat_result_unavailable");
+        else {
+            operation.result = Map.of("observed_outcome", "native_chat_outcome_unknown", "native_dispatch_started", true,
+                    "cancel_too_late", operation.cancelRequested);
+            operation.error = Map.of("reason", "native_chat_outcome_unknown");
+            finish(operation, "INDETERMINATE", "native_chat_outcome_unknown");
+        }
+    }
+
     private void runAction(Session session, Operation operation, NativeActorHandle handle, String text, Long dialogueVersion,
                            String replyKind, Integer selection,
                            ActorActRequest.ExpectedContext context) {
@@ -606,15 +699,13 @@ public final class ActorControlService {
                 running(operation, "chat".equals(operation.action) ? "native_chat_dispatch_started" : "native_npc_dispatch_started");
             }
             Map<String, Object> outcome = switch (operation.action) {
-                case "chat" -> backend.chat(handle, text);
                 case "npc_center_open" -> backend.npcCenterOpen(handle);
                 case "npc_cancel" -> backend.npcCancel(handle, dialogueVersion);
                 case "npc_reply" -> backend.npcReply(handle, dialogueVersion, replyKind, selection);
                 default -> throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
             };
             synchronized (monitor) {
-                if ("chat".equals(operation.action)) finishChat(operation, outcome);
-                else finishNpc(operation, outcome, dialogueVersion, replyKind, selection);
+                finishNpc(operation, outcome, dialogueVersion, replyKind, selection);
             }
         } catch (ObservationException failure) {
             synchronized (monitor) {
@@ -645,31 +736,25 @@ public final class ActorControlService {
         }
     }
 
-    private void finishChat(Operation operation, Map<String, Object> outcome) {
-        String status = outcome != null && outcome.get("status") instanceof String value ? value : "INDETERMINATE";
-        Map<?, ?> nativeResult = outcome != null && outcome.get("result") instanceof Map<?, ?> value ? value : Map.of();
-        boolean dispatched = Boolean.TRUE.equals(nativeResult.get("native_dispatch_started"));
-        boolean matched = Boolean.TRUE.equals(nativeResult.get("echo_matched"));
-        if (!(List.of("SUCCEEDED", "FAILED", "INDETERMINATE").contains(status))
-                || "SUCCEEDED".equals(status) && (!dispatched || !matched
-                || !"native_chat_broadcast".equals(nativeResult.get("observed_outcome")))) {
-            status = "INDETERMINATE";
+    private void finishChat(Operation operation, NativeActionResult outcome) {
+        operation.dispatchStarted = outcome.dispatch() == NativeActionResult.Dispatch.STARTED;
+        if (outcome.outcome() == NativeActionResult.Outcome.CANCELLED) {
+            cancelledBeforeAction(operation);
+            return;
         }
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("observed_outcome", "SUCCEEDED".equals(status) ? "native_chat_broadcast"
-                : "FAILED".equals(status) ? "native_chat_not_broadcast" : "native_chat_outcome_unknown");
-        result.put("native_dispatch_started", dispatched);
-        result.put("echo_matched", matched);
-        if (Boolean.TRUE.equals(nativeResult.get("native_handler_error"))) result.put("native_handler_error", true);
-        for (String key : List.of("sender_character_id", "echo_sequence", "packet_cursor_before", "packet_cursor_after")) {
-            if (nativeResult.get(key) instanceof Number value) result.put(key, value);
-            else if (nativeResult.containsKey(key) && nativeResult.get(key) == null) result.put(key, null);
+        String reason = outcome.dispatch() == NativeActionResult.Dispatch.NOT_STARTED && operation.chatEntryFailure != null
+                ? operation.chatEntryFailure : AcceptanceChatResults.errorReason(outcome);
+        if (outcome.outcome() == NativeActionResult.Outcome.FAILED && !operation.dispatchStarted) {
+            chatFailedBeforeDispatch(operation, reason == null ? "native_chat_validation_failed" : reason);
+            return;
         }
-        result.put("cancel_too_late", dispatched && operation.cancelRequested);
+        Map<String, Object> result = new LinkedHashMap<>(AcceptanceChatResults.resultFields(outcome));
+        result.put("cancel_too_late", operation.dispatchStarted && operation.cancelRequested);
         operation.result = result;
-        String reason = "FAILED".equals(status) ? "native_chat_not_broadcast" : "native_chat_outcome_unknown";
-        operation.error = "SUCCEEDED".equals(status) ? null : Map.of("reason", reason);
-        finish(operation, status, "SUCCEEDED".equals(status) ? "native_chat_broadcast_observed" : reason);
+        operation.error = outcome.outcome() == NativeActionResult.Outcome.SUCCEEDED ? null
+                : Map.of("reason", reason == null ? "native_chat_outcome_unknown" : reason);
+        finish(operation, outcome.outcome().name(), outcome.outcome() == NativeActionResult.Outcome.SUCCEEDED
+                ? "native_chat_broadcast_observed" : reason == null ? "native_chat_outcome_unknown" : reason);
     }
 
     private void finishNpc(Operation operation, Map<String, Object> outcome, Long requestedVersion,
@@ -774,7 +859,7 @@ public final class ActorControlService {
 
     private void cancelUndispatchedActions(Session session) {
         for (Operation operation : operations.values()) {
-            if (operation.session == session && "ACTION".equals(operation.kind) && !operation.dispatchStarted
+            if (operation.session == session && "ACTION".equals(operation.kind) && !nativeDispatchStarted(operation)
                     && !terminal(operation.status) && !operation.cancelRequested) requestCancellation(operation);
         }
     }
@@ -1041,8 +1126,12 @@ public final class ActorControlService {
     private void actionCarrierCompleted(Operation operation, ExecutionScope.WorkHandle exactWork) {
         synchronized (monitor) {
             if (operation.work != exactWork) return;
+            if ("chat".equals(operation.action) && !terminal(operation.status)) {
+                chatResultUnavailable(operation, nativeDispatchStarted(operation));
+            }
             releaseActionSlot(operation);
             operation.work = null;
+            operation.chatAction = null;
             monitor.notifyAll();
         }
     }
@@ -1089,6 +1178,10 @@ public final class ActorControlService {
     }
 
     private Map<String, Object> response(Operation operation, long sinceCursor, int limit) {
+        if (!terminal(operation.status) && !operation.cancelRequested && nativeDispatchStarted(operation)
+                && !"native_chat_dispatch_started".equals(operation.step) && "chat".equals(operation.action)) {
+            running(operation, "native_chat_dispatch_started");
+        }
         Session session = operation.session;
         Map<String, Object> sessionData = new LinkedHashMap<>();
         sessionData.put("session_id", session.id);
@@ -1190,6 +1283,11 @@ public final class ActorControlService {
         return List.of("SUCCEEDED", "FAILED", "CANCELLED", "INDETERMINATE").contains(status);
     }
 
+    private static boolean nativeDispatchStarted(Operation operation) {
+        if (operation.chatAction != null && operation.chatAction.dispatchStarted()) operation.dispatchStarted = true;
+        return operation.dispatchStarted;
+    }
+
     private static void validateOwner(String owner) {
         if (owner == null || owner.isBlank() || owner.length() > 128) throw error(HttpStatus.UNAUTHORIZED, "authentication_required");
     }
@@ -1260,6 +1358,8 @@ public final class ActorControlService {
         boolean dispatchStarted;
         boolean actionSlotHeld;
         ExecutionScope.WorkHandle work;
+        NativeActionService.ActionHandle chatAction;
+        String chatEntryFailure;
         String action;
         long sequence;
         Map<String, Object> result = Map.of();

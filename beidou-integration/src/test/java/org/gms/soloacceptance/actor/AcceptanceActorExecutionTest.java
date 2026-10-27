@@ -1,15 +1,21 @@
 package org.gms.soloacceptance.actor;
 
 import org.gms.client.Character;
+import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.soloacceptance.ObservationException;
+import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.action.ChatEvidenceSource;
+import soloMapling.game.action.NativeActionResult;
+import soloMapling.game.action.NativeActionService;
+import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
@@ -286,6 +292,147 @@ class AcceptanceActorExecutionTest {
         await(open);
         assertEquals(1, settlements.get());
         assertEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ZERO));
+    }
+
+    @Test
+    void typedChatPreparationDoesNotQueueAndDuplicateSubmissionUsesOnlyTheOriginalCarrier() throws Exception {
+        bindOwnedActor();
+        wireRealChatService();
+        ExecutionScope.WorkHandle blocker = execution.acceptWork();
+        CountDownLatch blocked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        execution.submitAction(blocker, () -> {
+            blocked.countDown();
+            awaitLatch(release);
+        }, () -> { });
+        ExecutionScope.WorkHandle chat = execution.acceptWork();
+        AtomicInteger preflightCalls = new AtomicInteger();
+        NativeActionService.ActionHandle action;
+        try {
+            assertTrue(blocked.await(5, TimeUnit.SECONDS));
+            long acceptedCarriers = executor.getTaskCount();
+            action = execution.prepareChat(chat, handle, "排队后取消的普通聊天", () -> {
+                preflightCalls.incrementAndGet();
+                fail("a cancelled queued chat must not enter native preflight");
+            });
+            assertEquals(NativeActionService.SubmissionStatus.PREPARED, action.receipt().status());
+            assertEquals(acceptedCarriers, executor.getTaskCount());
+            assertTrue(executor.getQueue().isEmpty());
+            assertFalse(chat.snapshot().carrierClaimed());
+            assertFalse(action.dispatchStarted());
+
+            NativeActionService.SubmissionReceipt receipt = execution.submitChat(action);
+            assertEquals(NativeActionService.SubmissionStatus.ENQUEUED, receipt.status());
+            assertEquals(acceptedCarriers + 1, executor.getTaskCount());
+            assertEquals(1, executor.getQueue().size());
+            assertSame(receipt, execution.submitChat(action));
+            assertEquals(acceptedCarriers + 1, executor.getTaskCount());
+            assertEquals(1, executor.getQueue().size());
+            assertFalse(action.result().toCompletableFuture().isDone());
+            execution.cancel(chat);
+            assertEquals(1, executor.getQueue().size());
+            assertFalse(chat.snapshot().queueDeparted());
+            assertFalse(chat.isSettled());
+        } finally { release.countDown(); }
+
+        await(blocker);
+        await(chat);
+        NativeActionResult result = action.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(NativeActionResult.Outcome.CANCELLED, result.outcome());
+        assertEquals(NativeActionResult.Dispatch.NOT_STARTED, result.dispatch());
+        assertEquals(0, preflightCalls.get());
+        assertFalse(action.dispatchStarted());
+        assertTrue(chat.snapshot().queueDeparted());
+        assertTrue(chat.snapshot().carrierSettled());
+        assertEquals(ExecutionScope.BodyState.NOT_STARTED, chat.snapshot().bodyState());
+        assertFalse(execution.resourceReleased(), "chat cancellation cannot close the actor");
+        verify(backend, times(1)).prepareChat(eq(handle), any(), any(), eq(chat), any());
+        verify(backend, times(2)).submitChat(action);
+
+        execution.beginDrain(Optional.empty());
+        ScopeResources.CleanupAttempt cleanup = execution.cleanupAttempt();
+        execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, handle), () -> { });
+        await(cleanup.work());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ZERO));
+    }
+
+    @Test
+    void typedChatResultCanBeTerminalWhileItsRealCarrierStillBlocksTheSameLanesCleanup() throws Exception {
+        bindOwnedActor();
+        wireRealChatService();
+        ExecutionScope.WorkHandle chat = execution.acceptWork();
+        CountDownLatch preflightEntered = new CountDownLatch(1);
+        CountDownLatch releasePreflight = new CountDownLatch(1);
+        CountDownLatch resultCallbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseResultCallback = new CountDownLatch(1);
+        NativeActionService.ActionHandle action = execution.prepareChat(chat, handle, "派发前取消并等待结算", () -> {
+            preflightEntered.countDown();
+            awaitLatch(releasePreflight);
+        });
+        var callback = action.result().thenAccept(result -> {
+            resultCallbackEntered.countDown();
+            awaitLatch(releaseResultCallback);
+        });
+        ScopeResources.CleanupAttempt cleanup;
+        try {
+            assertEquals(NativeActionService.SubmissionStatus.ENQUEUED, execution.submitChat(action).status());
+            assertTrue(preflightEntered.await(5, TimeUnit.SECONDS));
+            execution.cancel(chat);
+            releasePreflight.countDown();
+            assertTrue(resultCallbackEntered.await(5, TimeUnit.SECONDS));
+            NativeActionResult result = action.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(NativeActionResult.Outcome.CANCELLED, result.outcome());
+            assertEquals(NativeActionResult.Dispatch.NOT_STARTED, result.dispatch());
+            assertEquals(ExecutionScope.BodyState.EXITED, chat.snapshot().bodyState());
+            assertFalse(chat.snapshot().carrierSettled());
+            assertFalse(chat.isSettled());
+            assertFalse(chat.completion().toCompletableFuture().isDone());
+
+            execution.beginDrain(Optional.empty());
+            cleanup = execution.cleanupAttempt();
+            assertEquals(CharacterCommandLane.Status.ENQUEUED,
+                    execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, handle), () -> { }).status());
+            assertEquals(1, executor.getQueue().size());
+            assertFalse(execution.scope().snapshot().unloadComplete());
+            assertNotEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ZERO));
+            verify(backend, never()).close(any(), any());
+        } finally {
+            releasePreflight.countDown();
+            releaseResultCallback.countDown();
+        }
+
+        callback.toCompletableFuture().get(5, TimeUnit.SECONDS);
+        await(chat);
+        await(cleanup.work());
+        assertTrue(chat.snapshot().carrierSettled());
+        assertTrue(execution.resourceReleased());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ZERO));
+        verify(backend).submitChat(action);
+        verify(backend).close(eq(handle), any());
+    }
+
+    private void bindOwnedActor() throws Exception {
+        ExecutionScope.WorkHandle open = execution.acceptWork();
+        execution.submitOpen(open, () -> {
+            adopt(open, handle);
+            execution.bindActor(handle);
+        }, () -> { });
+        await(open);
+    }
+
+    private void wireRealChatService() {
+        NativeActionService actions = new NativeActionService();
+        Server server = mock(Server.class);
+        MapleMap map = mock(MapleMap.class);
+        doAnswer(invocation -> {
+            CharacterCommandLane lane = invocation.getArgument(1);
+            CharacterCommandLane.ControlPermit permit = invocation.getArgument(2);
+            ExecutionScope.WorkHandle work = invocation.getArgument(3);
+            NativeChatAction action = invocation.getArgument(4);
+            return actions.prepareChat(server, lane, permit, work,
+                    new GameContext.SceneRef(permit.characterRef(), map, null, null), action, ChatEvidenceSource.none());
+        }).when(backend).prepareChat(eq(handle), any(), any(), any(), any());
+        doAnswer(invocation -> actions.submitChat(invocation.getArgument(0))).when(backend).submitChat(any());
     }
 
     private NativeActorBackend.OpenOwnership adopt(ExecutionScope.WorkHandle open, NativeActorHandle exact) {
