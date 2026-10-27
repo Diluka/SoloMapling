@@ -53,6 +53,7 @@ python3 beidou-integration/scripts/build.py --help
 - 操作已排队、原生动作完成和游戏目标达成分别记录。MCP 超时/取消不等于后台停止；开关角色、NPC、队伍和任务副作用必须以实际后态验证，不能以原生方法的 void 返回作证。
 - 每次能力变化同步更新工具说明、接口/配置文档和相关 `AGENTS.md`。实际能力以 `game_capabilities` 为准；工作区配置、官方 SDK 协议调用、宿主原生工具加载及真实客户端玩法验收分别留证。
 - R2a 的原生角色控制需同时启用 `solomapling.acceptance.enabled` 与 `actors-enabled`，并在本地配置专用 `actor-profiles`。MCP 仅接收 profile ID，不接收账号密码或任意角色 ID；账号使用 `mcp_` 前缀且无 GM/webadmin。`AcceptanceClient` 直接继承北斗 `Client`，不登记为环境 bot。
+- 原生登录前同时准备 Server 的账号缓存和目标 World 的原生角色视图。同 JVM 停启世界会保留前者并重建后者；验收需包含停启后相同 CID 重登、保存退出和旧场景代次失效，不能只验证首次启动。
 - `actor_open`、`actor_close`、`operation_cancel` 必须携带调用方生成的请求 ID；写请求超时不盲目重放，按原 ID 与 operation/session 检查点恢复。操作受理不等于成功；关闭以原生清理和已声明范围内的持久字段核验为准，失败保留 fixture 和 quarantine。
 - 幂等历史有界且在进程生命周期内不遗忘，进程重启后不能沿用旧去重保证。每个存活会话保留首次关闭额度，额外重试只使用余量；满容量时按明确错误恢复，不绕过校验或静默丢弃旧记录。聊天、NPC 与内置脚本按后续独立 Issue 实现，不借角色生命周期工具执行未开放动作。
 

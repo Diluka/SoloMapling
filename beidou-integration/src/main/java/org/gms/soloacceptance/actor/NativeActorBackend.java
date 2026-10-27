@@ -156,7 +156,7 @@ public final class NativeActorBackend {
                 throw unavailable("actor_login_state_unverified");
             }
             server.registerLoginState(login);
-            server.loadAccountCharacters(login);
+            prepareCharacterViews(server, login, world);
             checkCancelled(cancelled);
 
             CharactersDO stored = characters.findByName(profile.characterName());
@@ -398,6 +398,13 @@ public final class NativeActorBackend {
                 || !profile.accountName().equals(account.getName())
                 || account.getWebadmin() == null || account.getWebadmin() != 0
                 || Boolean.TRUE.equals(account.getBanned())) throw conflict("actor_account_not_eligible");
+    }
+
+    static void prepareCharacterViews(Server server, AcceptanceClient login, World world) {
+        server.loadAccountCharacters(login);
+        // A same-JVM world restart retains Server's account cache but creates fresh World views.
+        // The native getter initializes only a missing account view, preserving any existing entries.
+        world.getAccountCharactersView(login.getAccID());
     }
 
     private static void validateCharacter(CharactersDO stored, ActorProfiles.Resolved profile, int accountId) {

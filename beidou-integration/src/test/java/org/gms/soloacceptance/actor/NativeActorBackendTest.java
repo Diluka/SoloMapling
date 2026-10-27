@@ -29,10 +29,17 @@ import org.mockito.MockedConstruction;
 import soloMapling.beidou.CharacterTestContext;
 
 import java.awt.Point;
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -365,6 +372,67 @@ class NativeActorBackendTest {
         assertEquals("127.0.0.17", NativeActorBackend.remoteAddress(17));
         assertNotEquals(NativeActorBackend.remoteAddress(17), NativeActorBackend.remoteAddress(18));
         assertEquals("127.1.2.3", NativeActorBackend.remoteAddress(0x010203));
+    }
+
+    @Test
+    void sameJvmWorldRestartInitializesNativeAccountViewBeforeTheNextSave() throws Exception {
+        World restartedWorld = nativeWorldWithEmptyAccountViews();
+        Server retainedServer = mock(Server.class);
+        ReentrantReadWriteLock loginLock = new ReentrantReadWriteLock();
+        Map<Integer, Set<Integer>> retainedAccounts = new HashMap<>();
+        retainedAccounts.put(17, new HashSet<>(Set.of(41)));
+        Map<Integer, Integer> retainedWorlds = new HashMap<>(Map.of(41, 0));
+        Map<Integer, Short> retainedCounts = new HashMap<>(Map.of(17, (short) 1));
+        nativeField(Server.class, retainedServer, "lgnRLock", loginLock.readLock());
+        nativeField(Server.class, retainedServer, "lgnWLock", loginLock.writeLock());
+        nativeField(Server.class, retainedServer, "accountChars", retainedAccounts);
+        nativeField(Server.class, retainedServer, "worldChars", retainedWorlds);
+        nativeField(Server.class, retainedServer, "accountCharacterCount", retainedCounts);
+        when(retainedServer.getWorld(0)).thenReturn(restartedWorld);
+        when(retainedServer.getWorlds()).thenReturn(List.of(restartedWorld));
+        doCallRealMethod().when(retainedServer).loadAccountCharacters(client);
+        doCallRealMethod().when(retainedServer).updateCharacterEntry(character);
+        when(character.generateCharacterEntry()).thenReturn(character);
+
+        // Reproduce #67 using the native cached-account early return and exact failing save prefix.
+        retainedServer.loadAccountCharacters(client);
+        assertThrows(NullPointerException.class, () -> retainedServer.updateCharacterEntry(character));
+
+        NativeActorBackend.prepareCharacterViews(retainedServer, client, restartedWorld);
+        assertDoesNotThrow(() -> retainedServer.updateCharacterEntry(character));
+        assertEquals(List.of(character), restartedWorld.getAccountCharactersView(17));
+        assertEquals(Set.of(41), retainedAccounts.get(17));
+        assertEquals(0, retainedWorlds.get(41));
+        assertEquals((short) 1, retainedCounts.get(17));
+        verifyNoInteractions(accounts, characters);
+    }
+
+    @Test
+    void nativeAccountViewPreparationPreservesExistingOtherCharacters() throws Exception {
+        World currentWorld = nativeWorldWithEmptyAccountViews();
+        Character other = mock(Character.class);
+        when(other.getId()).thenReturn(42);
+        currentWorld.loadAccountCharactersView(17, List.of(other));
+
+        NativeActorBackend.prepareCharacterViews(server, client, currentWorld);
+        currentWorld.registerAccountCharacterView(17, character);
+
+        assertEquals(List.of(character, other), currentWorld.getAccountCharactersView(17));
+        verify(server).loadAccountCharacters(client);
+        verifyNoInteractions(accounts, characters);
+    }
+
+    private static World nativeWorldWithEmptyAccountViews() throws Exception {
+        World nativeWorld = mock(World.class, CALLS_REAL_METHODS);
+        nativeField(World.class, nativeWorld, "accountChars", new HashMap<Integer, SortedMap<Integer, Character>>());
+        nativeField(World.class, nativeWorld, "accountCharsLock", new ReentrantLock());
+        return nativeWorld;
+    }
+
+    private static void nativeField(Class<?> declaringClass, Object target, String name, Object value) throws Exception {
+        Field field = declaringClass.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 
     private AccountsDO account() {
