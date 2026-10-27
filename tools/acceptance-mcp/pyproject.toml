@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "solomapling-acceptance-mcp"
+version = "0.1.0"
+description = "Read-only MCP tools for the SoloMapling BeiDou acceptance bridge"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+dependencies = [
+  "httpx==0.28.1",
+  "mcp==2.3.0",
+]
+
+[project.scripts]
+solo-acceptance-mcp = "solo_acceptance_mcp.server:main"
+solo-acceptance-smoke = "solo_acceptance_mcp.smoke:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/solo_acceptance_mcp"]
+
