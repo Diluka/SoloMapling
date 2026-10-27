@@ -86,6 +86,8 @@ SELF 的“完整”同时要求原窗口完整与 `completeReception()` 为真�
 
 ## MCP 与 Bot 薄适配
 
+MCP 的统一宿主/控制模块接入见 [#139 MCP 模块说明](../mcp-acceptance/runtime-module.md)。本节说明底层原生来源、取证与 JSON 投影，不表示 Session/helper 继续私有持有 lane、scope 或原生角色资源。
+
 MCP 的 `NativeActorBackend.prepareChat(handle, lane, permit, work, action)` 保留普通账号资格并捕获固定 SceneRef，再交公共服务准备；`submitChat(actionHandle)` 只转发同一提交，旧同步 `chat` 入口不再形成另一条派发路径。NPC/login 仍保留原私有 dispatch/withClient，不因本轮扩大为任意原生动作入口。
 
 包内适配 [AcceptanceChatEvidence](../../beidou-integration/src/main/java/org/gms/soloacceptance/actor/AcceptanceChatEvidence.java) 只提供 `SELF_NATIVE_CHAT_PACKET`，核原已受理命令的精确 Handle/Client/Character、账号 lease 及在线 Client 归属。派发后的证据读取不借旧 Map 或 active epoch 检查抹掉此前已经发生的广播；新动作仍在派发前严格校验上下文。

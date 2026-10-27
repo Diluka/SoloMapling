@@ -71,11 +71,11 @@ MCP 停服先关闭受理并处理所有 session，再使用同一停止票据�
 
 ## MCP 接入与验收边界
 
-`AcceptanceActorExecution` 为每个 MCP session 维护 scope 和唯一角色 lane；OPEN、ACTION、CLOSE 使用同一执行顺序。OPEN 尚未拿到角色时只用一次性 `AdmissionPermit`，不具有普通角色命令权。实际 Handle 在首次当前性校验前先附着到原 OPEN 的资源登记，校验失败沿原执行体内联回滚，避免把清理排到自己后面并等待。
+#139 的实际 MCP 接入改由统一 `CharacterRuntime` 管理根角色资源、作用域和唯一 lane，MCP 控制模块消费宿主管理的模块上下文；Session/helper 只保接线与外部映射，不再自行构造一套 scope/Grant/lane。OPEN、ACTION、CLOSE 使用同一宿主的执行顺序，接入与回归边界见 [MCP 模块说明](../mcp-acceptance/runtime-module.md)。根 OPEN 尚未拿到角色时使用专用初始化许可，不具有普通角色命令权。实际 Handle 在首次当前性校验前先附着到原 OPEN 的资源登记，校验失败沿原执行体内联回滚，避免把清理排到自己后面并等待。
 
-正常 ACTION 使用已绑定的角色上下文和控制许可，仍由 MCP 在受理及实际执行前检查 owner/session、场景与原生规则。首次 CLOSE 的执行与历史预留、7 个 ACTION/8 个队列槽/256 条历史均是 MCP 策略，公共 scope/lane 的容量由调用方配置。ACTION 额度在精确 work 的实际结算完成后归还，取消或操作终态不能提前退款。
+正常 ACTION 由 MCP 模块消费宿主提供的角色上下文和受控入口，仍由 MCP 在受理及实际执行前检查 owner/session、场景与原生规则。首次 CLOSE 的执行与历史预留、7 个 ACTION/8 个队列槽/256 条历史均是 MCP 策略，公共 scope/lane 的容量由调用方配置。ACTION 额度在精确 work 的实际结算完成后归还，取消或操作终态不能提前退款。
 
-关闭以对应登记的 `DrainPermit` 调用原生后端；原生注销、对话清理和存档回读均核实后才确认资源释放。相同未结束 cleanup work 继续复用，结算后才允许有限重验，不能因回调先清标记而把重复提交悬挂在 `QUEUED`。
+根角色关闭以对应登记的 `DrainPermit` 调用原生后端；原生注销、对话清理和存档回读均核实后才确认资源释放。相同未结束 cleanup work 继续复用，结算后才允许有限重验，不能因回调先清标记而把重复提交悬挂在 `QUEUED`。
 
 测试入口见[执行测试目录](../../beidou-integration/src/test/java/soloMapling/game/execution/)、[MCP 薄适配测试](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/AcceptanceActorExecutionTest.java)和[服务回归](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/ActorControlServiceTest.java)。其中 Bot、EventBus 和定时器合同使用真实原生资源及受控宿主路由替身；它们与实际普通角色的游戏后端证据分开记录，不代表完整 V2/PQ 已运行。
 

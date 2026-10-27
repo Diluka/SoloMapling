@@ -13,6 +13,7 @@ import soloMapling.game.action.NativeActionService;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.runtime.CharacterRuntime;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -343,10 +344,24 @@ public final class ActorControlService {
                         throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
                     }
                 } else {
-                    CharacterCommandLane.Submission submission = session.execution.submitAction(accepted.work,
-                            () -> runAction(acceptedSession, accepted, acceptedHandle, text, dialogueVersion,
-                                    replyKind, selection, context), () -> workSettled(acceptedSession, accepted));
-                    requireSubmitted(submission, accepted);
+                    try {
+                        CharacterCommandLane.Submission submission = session.execution.submitAction(accepted.work,
+                                () -> runAction(acceptedSession, accepted, acceptedHandle, text, dialogueVersion,
+                                        replyKind, selection, context), () -> workSettled(acceptedSession, accepted));
+                        requireSubmitted(submission, accepted);
+                    } catch (Throwable failure) {
+                        if (!actualWork.snapshot().carrierClaimed()) {
+                            synchronized (monitor) {
+                                if (actionCancelled(session, accepted)) cancelledBeforeAction(accepted);
+                                else {
+                                    accepted.error = Map.of("reason", safeReason(failure, "actor_command_rejected"));
+                                    finish(accepted, "FAILED", "actor_command_rejected");
+                                }
+                            }
+                            actualWork.reject();
+                        }
+                        if (failure instanceof ObservationException known) throw known;
+                    }
                 }
                 synchronized (monitor) { return response(accepted, 0, 100); }
             }
@@ -415,7 +430,8 @@ public final class ActorControlService {
         try {
             current = backend.isCurrent(handle);
             if (current) {
-                actor = actorSnapshot(handle);
+                actor = actorSnapshot(session, handle);
+                actor.put("runtime", session.execution.diagnostics());
                 current = Boolean.TRUE.equals(actor.get("logged_in_world"));
                 if (current) {
                     synchronized (monitor) {
@@ -527,12 +543,12 @@ public final class ActorControlService {
             handle = backend.open(session.profile, request.world(), request.channel(), () -> cancelled(session, operation), ownership);
             if (session.execution.adoptedHandle() != handle) throw error(HttpStatus.CONFLICT, "native_actor_cleanup_unverified");
             synchronized (monitor) { session.handle = handle; }
-            Map<String, Object> snapshot = actorSnapshot(handle);
-            if (!backend.isCurrent(handle) || !Boolean.TRUE.equals(snapshot.get("logged_in_world"))) {
-                throw error(HttpStatus.CONFLICT, "native_actor_not_online");
-            }
             if (!cancelled(session, operation)) {
                 session.execution.bindActor(handle);
+                Map<String, Object> snapshot = actorSnapshot(session, handle);
+                if (!backend.isCurrent(handle) || !Boolean.TRUE.equals(snapshot.get("logged_in_world"))) {
+                    throw error(HttpStatus.CONFLICT, "native_actor_not_online");
+                }
                 AtomicBoolean published = new AtomicBoolean();
                 session.execution.publishOpen(operation.work, () -> {
                     synchronized (monitor) {
@@ -649,6 +665,19 @@ public final class ActorControlService {
 
     private void chatCompleted(Operation operation, NativeActionService.ActionHandle source,
                                NativeActionResult result, Throwable failure) {
+        CharacterRuntime.ModuleContext acceptedContext;
+        ExecutionScope.WorkHandle acceptedWork;
+        synchronized (monitor) {
+            if (operation.chatAction != source || terminal(operation.status)) return;
+            acceptedContext = operation.moduleContext;
+            acceptedWork = operation.work;
+        }
+        if (failure == null && result != null && acceptedContext != null && acceptedWork != null) {
+            try { acceptedContext.recordResult(acceptedWork, result); }
+            catch (RuntimeException diagnosticFailure) {
+                // Recording a late fact must not erase the native result or restore control authority.
+            }
+        }
         synchronized (monitor) {
             if (operation.chatAction != source || terminal(operation.status)) return;
             if (failure == null && result != null) finishChat(operation, result);
@@ -914,14 +943,16 @@ public final class ActorControlService {
         try {
             Map<String, Object> cleanup = session.execution.cleanup(attempt, exactHandle);
             synchronized (monitor) {
-                session.cleanupScheduled = false;
-                release(session, "CLOSED");
+                session.closeEvidence = copy(cleanup);
+                session.releaseRequested = true;
+                session.releaseState = "CLOSED";
                 if (operation != null) {
                     Map<String, Object> result = copy(cleanup);
                     result.put("observed_outcome", "native_actor_closed");
                     result.put("cancel_too_late", operation.cancelRequested);
                     operation.result = result;
-                    finish(operation, "SUCCEEDED", "native_actor_closed");
+                    operation.step = "native_actor_close_waiting_settlement";
+                    event(operation, operation.step);
                 }
                 monitor.notifyAll();
             }
@@ -951,10 +982,16 @@ public final class ActorControlService {
         }
         Map<String, Object> snapshot = null;
         try {
-            if (backend.isCurrent(handle)) snapshot = actorSnapshot(handle);
+            if (backend.isCurrent(handle)) snapshot = actorSnapshot(session, handle);
         } catch (ObservationException failure) {
+            synchronized (monitor) {
+                if (session.handle != handle || !"OPEN".equals(session.state)) return;
+            }
             throw failure;
         } catch (RuntimeException ignored) {
+            synchronized (monitor) {
+                if (session.handle != handle || !"OPEN".equals(session.state)) return;
+            }
             // A failed read is neither identity loss nor permission to publish the old projection.
             throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
         }
@@ -981,8 +1018,8 @@ public final class ActorControlService {
         }
     }
 
-    private Map<String, Object> actorSnapshot(NativeActorHandle handle) {
-        Map<String, Object> result = copy(backend.snapshot(handle));
+    private Map<String, Object> actorSnapshot(Session session, NativeActorHandle handle) {
+        Map<String, Object> result = copy(session.execution.observeOrigin());
         if (observations != null) result.put("scene", observations.contextForActor(handle.characterRef()));
         return result;
     }
@@ -991,7 +1028,8 @@ public final class ActorControlService {
         session.state = state;
         session.lastActor = null;
         session.handle = null;
-        profiles.remove(session.profile, session);
+        session.releaseRequested = true;
+        session.releaseState = state;
         monitor.notifyAll();
     }
 
@@ -1004,7 +1042,14 @@ public final class ActorControlService {
     private Operation operation(String kind, Session session) {
         Operation operation = new Operation("op-" + UUID.randomUUID(), kind, session);
         if (!"CLOSE".equals(kind)) {
-            try { operation.work = session.execution.acceptWork(); }
+            try {
+                operation.work = "OPEN".equals(kind) ? session.execution.acceptOpeningWork() : session.execution.acceptWork();
+                if ("ACTION".equals(kind)) operation.moduleContext = session.execution.moduleContext();
+                if ("OPEN".equals(kind)) {
+                    ExecutionScope.WorkHandle exact = operation.work;
+                    exact.completion().whenComplete((fact, failure) -> rootCompleted(session));
+                }
+            }
             catch (ExecutionScope.Invalid failure) {
                 WorldEpoch.State current = WorldEpoch.snapshot();
                 if ("scope_not_active".equals(failure.reason()) && (!current.active()
@@ -1026,6 +1071,7 @@ public final class ActorControlService {
                 session.cleanupWork = attempt.work();
                 if (operation != null) operation.work = attempt.work();
             }
+            attempt.work().completion().whenComplete((fact, failure) -> closeCompleted(session, operation, attempt.work()));
             CharacterCommandLane.Submission submission = session.execution.submitCleanup(attempt,
                     () -> runClose(session, operation, exactHandle, attempt),
                     () -> cleanupSettled(session, operation, attempt.work()));
@@ -1074,16 +1120,13 @@ public final class ActorControlService {
     private void cleanupSettled(Session session, Operation operation, ExecutionScope.WorkHandle work) {
         boolean released;
         synchronized (monitor) {
-            if (work.snapshot().rejected() || operation != null && !terminal(operation.status)
-                    || operation == null && session.cleanupScheduled) {
+            boolean nativeVerified = session.closeEvidence != null && session.execution.resourceReleased();
+            if (work.snapshot().rejected() || !nativeVerified && (operation != null && !terminal(operation.status)
+                    || operation == null && session.cleanupScheduled)) {
                 cleanupSubmissionFailed(session, operation, "actor_close_cleanup_unverified_scope");
             }
-            if (operation != null) operation.work = null;
-            released = !profiles.containsValue(session) && session.execution.resourceReleased();
-            if (released && session.cleanupWork == work) {
-                session.cleanupScheduled = false;
-                session.cleanupWork = null;
-            }
+            if (operation != null && !nativeVerified && terminal(operation.status)) operation.work = null;
+            released = session.releaseRequested && session.execution.resourceReleased();
             monitor.notifyAll();
         }
         if (released) closeReleasedLane(session);
@@ -1116,7 +1159,7 @@ public final class ActorControlService {
                 }
             }
             if (!"ACTION".equals(operation.kind)) operation.work = null;
-            released = !profiles.containsValue(session) && session.execution.resourceReleased();
+            released = session.releaseRequested && session.execution.resourceReleased();
             monitor.notifyAll();
         }
         if (released) closeReleasedLane(session);
@@ -1132,6 +1175,7 @@ public final class ActorControlService {
             releaseActionSlot(operation);
             operation.work = null;
             operation.chatAction = null;
+            operation.moduleContext = null;
             monitor.notifyAll();
         }
     }
@@ -1141,9 +1185,53 @@ public final class ActorControlService {
         session.execution.closeLane();
     }
 
+    private void rootCompleted(Session session) {
+        boolean closed = session.execution.finalized();
+        synchronized (monitor) {
+            if (closed && session.releaseRequested) releaseFinalized(session);
+        }
+    }
+
+    private void closeCompleted(Session session, Operation operation, ExecutionScope.WorkHandle exactWork) {
+        boolean closed = session.execution.finalized();
+        synchronized (monitor) {
+            if (session.cleanupWork != exactWork) return;
+            if (closed && session.closeEvidence != null) {
+                if (operation != null && !terminal(operation.status)) {
+                    Map<String, Object> result = copy(session.closeEvidence);
+                    result.put("observed_outcome", "native_actor_closed");
+                    result.put("cancel_too_late", operation.cancelRequested);
+                    operation.result = result;
+                    operation.error = null;
+                    finish(operation, "SUCCEEDED", "native_actor_closed");
+                }
+                releaseFinalized(session);
+            } else if (session.closeEvidence != null && operation != null && !terminal(operation.status)) {
+                cleanupSubmissionFailed(session, operation, "native_actor_cleanup_unverified");
+            }
+            if (operation != null && operation.work == exactWork) operation.work = null;
+            if (session.cleanupWork == exactWork && exactWork.isSettled()) {
+                session.cleanupScheduled = false;
+                session.cleanupWork = null;
+            }
+            monitor.notifyAll();
+        }
+    }
+
+    private void releaseFinalized(Session session) {
+        session.state = session.releaseState;
+        session.lastActor = null;
+        session.handle = null;
+        profiles.remove(session.profile, session);
+        session.cleanupScheduled = false;
+        monitor.notifyAll();
+    }
+
     /** A terminal operation is not permission to reuse a cleanup whose carrier is still settling. */
     private static boolean cleanupInFlight(Session session) {
         if (session.cleanupScheduled && session.cleanupWork != null && session.cleanupWork.isSettled()) {
+            // A verified close is finalized by its exact completion callback; do not steal that reference in a stop race.
+            if (session.closeEvidence != null && session.releaseRequested) return true;
             session.cleanupScheduled = false;
             session.cleanupWork = null;
         }
@@ -1191,6 +1279,7 @@ public final class ActorControlService {
         sessionData.put("runtime_generation", session.runtimeGeneration);
         sessionData.put("actor_current", "OPEN".equals(session.state));
         sessionData.put("actor", session.lastActor);
+        sessionData.put("runtime", session.execution.diagnostics());
         long oldest = operation.events.isEmpty() ? operation.sequence + 1 : (long) operation.events.getFirst().get("seq");
         List<Map<String, Object>> items = operation.events.stream()
                 .filter(item -> (long) item.get("seq") > sinceCursor).limit(limit).toList();
@@ -1333,6 +1422,9 @@ public final class ActorControlService {
         NativeActorHandle handle;
         Map<String, Object> lastActor;
         boolean cleanupScheduled;
+        boolean releaseRequested;
+        String releaseState;
+        Map<String, Object> closeEvidence;
         ExecutionScope.WorkHandle cleanupWork;
         ExecutionScope.WorldStopTicket stopRetryTicket;
         boolean firstCloseReserved = true;
@@ -1344,7 +1436,7 @@ public final class ActorControlService {
             this.owner = owner;
             this.profile = profile;
             this.runtimeGeneration = runtimeGeneration;
-            this.execution = new AcceptanceActorExecution(backend, this, admittedEpoch, executor);
+            this.execution = new AcceptanceActorExecution(backend, id, admittedEpoch, executor);
         }
     }
     private static final class Operation {
@@ -1359,6 +1451,7 @@ public final class ActorControlService {
         boolean actionSlotHeld;
         ExecutionScope.WorkHandle work;
         NativeActionService.ActionHandle chatAction;
+        CharacterRuntime.ModuleContext moduleContext;
         String chatEntryFailure;
         String action;
         long sequence;

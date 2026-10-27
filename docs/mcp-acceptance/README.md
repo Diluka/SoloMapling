@@ -41,9 +41,15 @@ solomapling:
 
 [#118作用域/排空](https://github.com/Diluka/SoloMapling/issues/118) 和 [#119原生动作/证据](https://github.com/Diluka/SoloMapling/issues/119) 的实现与各层验收分别记录。
 
-#119 将普通聊天接入一份公共 Java 执行链；MCP 外层保留 request_id/操作历史、原有错误与 JSON 语义，真正 handler 派发检查点与操作开始执行分别记录。聊天只向原 session lane 提交一次，结果事实与 work 真实结算分开，七工具四动作不增加。证据 source/completeness 和 Bot 无收包的未知语义见[共享动作参考](../shared-game-foundation/native-actions.md)。
+#119 将普通聊天接入一份公共 Java 执行链；MCP 外层保留 request_id/操作历史、原有错误与 JSON 语义，真正 handler 派发检查点与操作开始执行分别记录。聊天只向同一宿主的 lane 提交一次，结果事实与 work 真实结算分开，七工具四动作不增加。证据 source/completeness 和 Bot 无收包的未知语义见[共享动作参考](../shared-game-foundation/native-actions.md)。
 
 后续 [#120按需事实/事件](https://github.com/Diluka/SoloMapling/issues/120)、[#121原生NPC会话](https://github.com/Diluka/SoloMapling/issues/121) 及 #122～#129 各动作保持待实现，逐叶范围见共享说明。MCP #110 已验收不等于公共 #121 交付，#119 普通聊天也不包含 NPC 来源/版本/路由；现有NPC来源/路径/offer策略的提炼债务仍留#121。#112礼包、#113出行暂后排，任务树和里程碑保留，公共切片、MCP玩法、V2组合与PQ通关分别留证。
+
+## 统一宿主内的 MCP 控制模块
+
+[#139 首环](https://github.com/Diluka/SoloMapling/issues/139) 将现有 actor 接入同一个 `CharacterRuntime`：根宿主持有原生角色资源与唯一 lane，MCP 控制模块消费宿主动作/观察上下文，外层保留 JWT/profile/owner/request_id、历史和额度。具体接入及回归/部署约定见 [MCP 模块说明](runtime-module.md)，交付状态和各层证据以对应 Issue 为准，不把代码存在或合并当实际部署。
+
+`runtime_generation` 仍是 WorldEpoch 的世界代次，不改为宿主或模块 ID。模块暂停/卸载默认停止输入并排空命令，保留根 Client 的既有 CM；显式 `npc_cancel` 或 root `actor_close` 沿正常规则处理。完整暂停/卸载重挂及复杂关闭由 [#140](https://github.com/Diluka/SoloMapling/issues/140) 分别验收，本轮不公告生产自治、巡逻或刷怪能力。
 
 ## 目标与定位
 
@@ -57,18 +63,23 @@ solomapling:
 flowchart LR
   A[操作者] --> M[本地MCP stdio服务]
   M --> H[正常鉴权的Solo验收桥]
-  H --> Q[每角色串行执行与操作记录]
-  Q --> P[专用AcceptanceClient与原生角色]
+  H --> R[统一CharacterRuntime根宿主]
+  R --> C[MCP控制模块]
+  C --> Q[宿主唯一角色lane]
+  Q --> P[根AcceptanceClient与原生角色]
+  R -. 原生来源与根资源 .-> P
   P --> N[原生handler / NPC / 门户 / 背包 / 任务后端]
   N --> E[实际状态快照与客户端回复事件]
-  E --> M
+  E --> R
+  R --> H
+  H --> M
 ```
 
 - MCP进程负责工具协议、参数和结果呈现，不承担游戏状态的权威副本，也不直接连接MySQL。
 - Solo验收桥沿当前管理端JWT和管理员权限鉴权，默认不开启，开关与 profile 维护在本地配置。当前角色并发上限固定为4，实际额度由 capabilities 返回。全部新增代码维护在Solo，北斗submodule保持原样。
 - 独立`AcceptanceClient extends Client`捕获`sendPacket`，在专用actor注册表中登记。不要继承`BotClient`或把验收玩家放入环境`BotRegistry`：聊天观察和入图脚本会按bot分支处理。
 - 开放的能力由`game_capabilities`实际返回。接口契约可先设计齐，未实现或未验证的动作保持不可用；不创建空工具来宣称已支持。
-- 先用进程内队列和有界事件缓冲即可，无需分布式消息总线、通用远程代码执行器或每角色一个LLM。
+- 命令使用同一宿主的既有有界 lane，角色观察来自根来源；外部 operation 是请求与结果历史。Session 或模块不再各建队列/物理工作账本，也不引入分布式消息总线、任意代码执行器或每角色一个 LLM。
 
 ## 身份与生命周期
 
@@ -84,7 +95,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 - 同一个原生账号/profile 只能被一个有效控制 session 占用。Solo 的账号所有权守卫覆盖登录状态查询、在线登记及迟到清理，防止并发客户端互相接管；不踢掉原先在线的真人。同一个打开请求重试不重复登录或生成第二个角色。
 - R2a 每个 profile 串行执行生命周期操作，最多同时占用 4 个 session；不同鉴权主体不能查询、取消或关闭彼此的操作。已开放的原生 handler 调用保留 `validateState` 和原生上下文；后续游戏动作也必须经过串行队列与相应状态检查。
-- 多角色可以并行，分别有队列。服务器停止/重启后session代次全部失效；重新打开时不复用旧世界、地图、EIM或OID。
+- 多角色可以并行，各自由宿主管理唯一 lane。服务器停止/重启后session代次全部失效；重新打开时不复用旧世界、地图、EIM或OID。
 - 释放角色先取消/排空本actor操作，再沿原生对话、队伍、事件注销、存档与离线流程清理；不复用明确跳过EIM/MatchChecker的环境bot离队捷径。默认保留持久fixture数据，清理只针对本次控制会话和本次创建的隔离资源。
 - profile、客户端、地图及原生登记需要完整初始化与失败回滚；没有Netty socket时的Client会话依赖必须逐项测试，不以强改loggedIn或反射地图集合跳过正常生命周期。
 
@@ -163,7 +174,7 @@ actor 必须带 session ID 和1～Long.MAX_VALUE 的 `expected_generation`，不
 
 actor 请求使用只读 `POST /solo/acceptance/v1/actor/observe`，沿正常 JWT/ROLE_ADMIN 和 owner 隔离，信封 data 为 `session_id/expected_generation/since_cursor/limit`。SDK 为信封生成的 `requestId` 不是写操作去重键；查询不创建 operation、不占历史或首次关闭名额，也不进入游戏动作队列。
 
-返回包含 `schema_version/captured_at/scope/runtime_generation/session_id/session_generation/profile_id/actor/events`。顶层快照是 `server_diagnostic`、`best_effort`；已解码消息逐条标记 `information_level=player_visible`。`actor.scene` 是读取时的实际当前场景，不冒充每条历史消息发生的场景；观察不加载地图或创建实例。
+返回包含 `schema_version/captured_at/scope/runtime_generation/session_id/session_generation/profile_id/actor/events`；#139 在 `actor.runtime` 投影只读宿主/模块诊断，字段与独立游标边界见 [MCP 模块说明](runtime-module.md#只读-runtime-诊断)，不能作为任意 runtime/CID 控制入口。顶层快照是 `server_diagnostic`、`best_effort`；已解码消息逐条标记 `information_level=player_visible`。`actor.scene` 是读取时的实际当前场景，不冒充每条历史消息发生的场景；观察不加载地图或创建实例。
 
 仅有效 OPEN session 可观察。未鉴权或跨 owner 分别拒绝；未知 session 为404，错误代次、已关闭/取消/丢失/隔离或旧世界的已知 session 为410，OPENING/CLOSING 为409，世界停止为503，读取中状态或代次变化为409。进程重启后旧 ID 也可能成为404；不能通过操作历史查询绕过失效 session 读取正文。
 
@@ -217,7 +228,7 @@ game_act(session_id="实际session_id", expected_generation=实际代次,
 
 ### 排队、幂等与取消
 
-ACTION 复用该 session 的单线程执行器，与 OPEN/CLOSE 保持顺序，不在 HTTP 线程直接写游戏状态。执行队列容量固定8，每 session 最多7个尚未结束的 ACTION（包括运行中的操作），为首次 close 保留物理队列槽。尚未出队的取消任务仍占额度，实际结束后才归还；容量不足返回429。
+ACTION 经 MCP 模块消费该角色宿主的唯一 lane，与根 OPEN/CLOSE 保持顺序，不在 HTTP 线程直接写游戏状态。执行队列容量固定8，每 session 最多7个尚未结束的 ACTION（包括运行中的操作），为首次 close 保留物理队列槽。尚未出队的取消任务仍占额度，实际结束后才归还；容量不足返回429。
 
 新增 ACTION 同时遵守进程内256条操作/去重历史，并保留所有存活 session 的首次关闭名额。去重键为 ACTION＋owner＋session＋request_id；同键相同正文、动作、代次和完整 context 返回原操作，不再次广播，不同参数冲突。去重指纹保存正文 SHA256；operation、生命周期事件和终态历史不保存聊天正文，只保存固定原因、匹配布尔值和包序号等证据。正文只通过当前有效 session 的有界包窗口观察，关闭后拒绝策略不变。
 

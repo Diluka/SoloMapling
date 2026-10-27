@@ -53,17 +53,19 @@ python3 beidou-integration/scripts/build.py --help
 - 现有NativeActionService自己提交一次lane；宿主`prepareNative`只准备，不先外排再内排。MCP投影同一个结果与真实work结算，不另建动作状态。运行体事件、原生包、operation和对话游标分别使用；窗口只保存安全事实，不存正文或原生对象。协议说明见`docs/robot-runtime/README.md`，源码/机制测试与MCP接线/实际部署分别留证。
 
 - 共享入口为 #116：开始相关MCP切片前核对 #117上下文、#118作用域/时序、#119原生动作证据、#120按需事实/事件、#121NPC及 #122～#129各动作；现有任务树和里程碑不重挂。优先从已验实现小范围提炼一份中立Java后端，MCP和V2分别薄适配，不能各复制一份或让V2经Python/HTTP/MCP动作。
-- MCP保留JWT/admin、owner/profile、外部request_id、幂等历史及原生账号登录/存档；V2保留模块/预设/优先级/资源仲裁。公共层只验证调用方已授控制权和原生规则，不搬整个ActorControlService、不决定V2优先级，也不放宽MCP排除环境bot的身份保护。
+- MCP 外层保留 JWT/admin、owner/profile、外部 request_id、幂等历史与额度；原生账号创建/登录/存档由可信来源适配执行，角色资源与最终关闭归统一宿主根。V2 保留模块/预设/优先级/资源仲裁。公共层只验证调用方已授控制权和原生规则，不搬整个ActorControlService、不决定V2优先级，也不放宽MCP排除环境bot的身份保护。
 - 世界代次、MCPsession、V2runtime/模块代次、执行句柄、包序号、对话版本分别建模；同一内部执行句柄防重复派发，新的合法重复动作允许，不把攻击tick全部登记为外部operation。公共层不依赖acceptance开关、管理JWT或全世界扫描，不强制所有bot保留256包正文历史。
+- #139 当前接入目标是统一角色壳与首个真实 MCP 控制模块：OPEN 前已确定同一 root host/原接纳 epoch/唯一 lane，根来源登记与绑定原生角色，再挂模块；聊天与 actor 观察消费同一宿主，外层不得复制独立执行实例。外部 session、角色宿主与模块代次分别建模，`runtime_generation` 继续投影 WorldEpoch，不能改成 host/module ID。接入、回归及部署边界见 `docs/mcp-acceptance/runtime-module.md`，交付以 Issue 证据为准。
+- 原生 CM/QM 与包缓冲属于根 Client/角色来源。MCP 模块暂停/卸载默认停止输入、撤控制并排空自己的工作，保留现有 CM，不隐式 dispose/登出；显式 npc_cancel 或根 actor_close 沿正常规则处理。完整暂停/恢复、卸载重挂及复杂关闭由 #140 验收，不从 #139 聊天首环推导完成；生产自治、巡逻、刷怪不在本轮。
 - 共享上下文位于 `soloMapling.game.context`：`WorldEpoch` 是唯一世界时钟，旧验收runtime仅投影委托；`CharacterRef` 固定角色/Client/World/Channel与捕获epoch，`SceneRef` 另外固定Map及成员/地图EIM。重验不能刷新旧epoch或按同ID替代对象；正常跨图不自动使角色绑定失效，场景资格另核。当前角色观察定点登记MCP不透明scene_ref，不借全目录刷新作为控制资格。
 - 公共检查只核对象结构，不核普通登录或授予控制权。MCP薄适配保留账号/lease/GM0/普通登录/排bot，Bot薄适配核精确BotRegistry对象与BotClient；V1模板通过非频道加载，Character.loggedIn可为false，不能为复用而改其存档/登录标记。getter故障是读取不可用，不能把活会话标LOST；角色资格和场景冲突分别处理。
-- #118 公共执行位于 `soloMapling.game.execution`：`ExecutionScope` 记录固定 epoch/runtime/module 身份与实际工作，`ScopeResources` 记录精确资源及一次握手，`CharacterCommandLane` 串行执行单个实际角色的短命令。MCP 经 `AcceptanceActorExecution` 薄接入，同一 session 不另建第二队列；公共容量由调用方配置，不硬编码 MCP 7/8/256 策略。Scope 的普通工作与清理工作分别使用显式有界额度；允许持有资源时至少保留一个清理工作名额，不能只预留 lane 物理槽而让工作账本阻塞清理。
+- #118 公共执行位于 `soloMapling.game.execution`：`ExecutionScope` 记录固定 epoch/runtime/module 身份与实际工作，`ScopeResources` 记录精确资源及一次握手，`CharacterCommandLane` 串行执行单个实际角色的短命令。MCP 控制模块经统一 `CharacterRuntime` 消费这些机制；Session/helper 不再自建 scope、Grant、角色资源或第二队列，外部额度只投影宿主原工作的真实结算；公共容量由调用方配置，不硬编码 MCP 7/8/256 策略。Scope 的普通工作与清理工作分别使用显式有界额度；允许持有资源时至少保留一个清理工作名额，不能只预留 lane 物理槽而让工作账本阻塞清理。
 - CharacterCommandLane 允许调用方已授予的多个合法 Grant 并存，只做 FIFO 与原生资格复核；V2 自己决定资源冲突和交接。revoke 只撤对应 Grant，不自动排空整个 scope；释放等待只跟踪相关工作，不能让其他模块或后继 Grant 的持续命令拖住旧授权。撤销前已受理 carrier 仍须真实结算；撤销后新递交旧 Grant 立即锁外拒绝并结算，不入 FIFO 占用其他模块容量或续旧债务。
 - 取消请求、body 退出、队列承载/结算完成、资源释放与卸载完成分开核验。`Future.cancel/isDone` 或 operation 终态不能提前归还物理槽；MCP ACTION 仅在精确 work 实际结算后归还额度。自回调排空返回 `SELF_WAIT`，未知创建/释放保留债务，不能假报 CLOSED。
 - 停服经 `ExecutionScope.tryBeginWorldStop()` 原子取得对应 active→stopped 的 `WorldStopTicket`；同次停止复用票据，未知 inactive 不造权。只给来源 epoch 一致的 scope 加入专用清理窗口，下一世界启动后旧原生入口与轮询拒绝；旧 quarantine 不借新票据续权。清理使用原登记精确对象的 `DrainPermit`，已合法完成的释放事实可晚到入账；不给公共 API 增加 ignoreEpoch，也不借清理执行新动作或创建新资源。
 - #119 共享普通聊天位于 `soloMapling.game.action`，MCP/Bot 通过各自身份和取证薄适配调用同一 Java 实现，只向已有角色 lane 提交一次；不在 lane body 内再 submit/join/get 等自己。JWT/profile/request_id/历史仍在 MCP，Grant/模块仲裁仍在 V2；不开放任意 handler、ByteBuf、脚本或反射动作入口。
 - 区分受理、实际 handler 派发、证据与终态：派发检查点在 validateState 通过后、handlePacket 调用前，ThreadLocal Client 恢复原值，临时包恰好释放一次。成功需真实新匹配包并标来源/完整性；Bot 默认不收包且无正证据为未知，不能用无异常或换证据标签补成功。派发后取消不撤回，已发生正证据不被后续异常抹掉，未知副作用不重放。终态不长期持有原生对象、probe、聊天正文或异常正文；事实结果完成仍不等于真实排空，模块结果应用另走 scope/代次检查。
-- 共享切片用真实原生场景和第二类薄上下文适配器独立验收，不等完整V2成品；MCP工具开放、V2组合和PQ通关仍在原任务分别验收。若公共提炼扩大当前切片风险，先收口已授权小切片，并在共享叶子写清适配债务与下一步，不能把“以后复用”当已完成。#117 已完成共享上下文交付；#118 的交付/验收状态及证据以对应 Issue 为准，不能用合并或定向测试代替实际部署；#119 的实现与各层证据也按对应 Issue 核对，再按 #120/#121 实际依赖继续推进，随后做礼包/出行。
+- 共享切片用真实原生场景和第二类薄上下文适配器独立验收，不等完整V2成品；MCP工具开放、V2组合和PQ通关仍在原任务分别验收。若公共提炼扩大当前切片风险，先收口已授权小切片，并在共享叶子写清适配债务与下一步，不能把“以后复用”当已完成。#117 已完成共享上下文交付；#118 的交付/验收状态及证据以对应 Issue 为准，不能用合并或定向测试代替实际部署；#119 的实现与各层证据也按对应 Issue 核对。当前优先 #139 同壳 MCP 首环，再推进 #140 及 #120/#121 的实际依赖，礼包/出行后排。
 - 总任务用于串联进度，开发 Issue 按可独立实现和验收的功能切片组织。例如原生角色生命周期、普通聊天与机器人回复、NPC 多页对话分别交付；不要把一个空接口或局部测试通过标成整轮完成。
 - 使用 GitHub 原生 parent/sub-issue 关系组织树形拆分；正文清单用于说明和验收，不代替实际关联。新增子项时检查父节点，完成后同步父任务状态，避免重复建单或错挂到不相关任务。
 - 每个切片在实现前明确范围和验收结果。实现、对应测试、隔离/实际 MCP 验收通过后及时关闭该 Issue，并同步总任务；仍缺证据的项目保持开放，具体写明未验部分。
