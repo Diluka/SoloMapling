@@ -177,6 +177,7 @@ public class EnvironmentManager {
         // Server.init() alongside the other WZ-derived data - guaranteed ready
         // before any player can trigger this.
         long startupStart = System.currentTimeMillis();
+        int botsBeforeStartup = BotGeneration.getBotsCreatedCount();
 
         // Wake bots instantly (movement + macro brain) whenever a real player shares their map, in both
         // directions - a player entering a populated map, or a bot returning to the player's map.
@@ -363,7 +364,7 @@ public class EnvironmentManager {
         double totalSeconds = (System.currentTimeMillis() - startupStart) / 1000.0;
         System.out.println(String.format(
                 "[EnvironmentManager] === All bots initialized: %d bots in %.1fs ===",
-                BotGeneration.getBotsCreatedCount(), totalSeconds));
+                BotGeneration.getBotsCreatedCount() - botsBeforeStartup, totalSeconds));
     }
 
     // Spawn one town's training-bot cohort: n job-coherent roaming grinders at the town's spawn
