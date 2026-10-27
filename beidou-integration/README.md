@@ -86,9 +86,11 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 #75 保持七工具，只增加固定脚本中心首屏与取消两动作、type4 NPC解码和当前对话版本，
 不开放菜单选择、礼包或传送；隔离与实际部署 SDK 验收已通过，PR #77 交付。
 `implementation_round` 保留 `R2a`，以顶层 `enabled_tools/actions` 和观察能力字段判别。
-#110 候选保持七工具，仅在 game_act 增加无收益 npc_reply/select、decline，并扩展已审子菜单的正常取消；
+#110 保持七工具，仅在 game_act 增加无收益 npc_reply/select、decline，并扩展已审子菜单的正常取消；
 以实际完整offer、已审路径与最新version限制派发，截断城镇菜单禁止选择目的地。
-本项已过隔离 SDK 验收，实际部署另留证；accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
+本项已完成隔离及实际部署 SDK 验收，PR #115 交付；accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
+
+后续先按 [共享基础 #116](https://github.com/Diluka/SoloMapling/issues/116) 提炼一份中立Java后端，MCP/V2/PQ各自薄适配；优先#117及真实依赖，不扩展平行实现，已有MCP交付不冒充共享层完成。
 
 ## 验证边界
 
