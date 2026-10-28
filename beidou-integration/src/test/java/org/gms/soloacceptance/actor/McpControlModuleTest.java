@@ -99,7 +99,7 @@ class McpControlModuleTest {
                 (lane, permit, work, character) -> new Prepared(lane, permit, work, character));
         assertSame(chatWork, prepared.work());
         assertSame(role.character, prepared.character());
-        assertEquals(1L, executor.getTaskCount()); // Only the preceding root OPEN has been submitted.
+        assertFalse(chatWork.snapshot().carrierClaimed()); // Preparing never attaches a physical carrier.
         assertEquals(0, runtime.snapshot().lane().pending());
         assertEquals(0, preflights.get());
         assertFalse(chatWork.isSettled());
@@ -115,7 +115,7 @@ class McpControlModuleTest {
         assertEquals(CharacterCommandLane.Status.ENQUEUED, prepared.lane().submit(prepared.work(), prepared.permit(),
                 bodies::incrementAndGet, settlements::incrementAndGet).status());
         await(chatWork);
-        // The executor may need a tail handoff while a settled carrier is still returning.
+        // ThreadPoolExecutor task counts are approximate while a worker finalizes its task.
         // Native command identity and body/settlement counts prove single execution below.
         assertTrue(chatWork.isSettled());
         assertTrue(interaction.isSettled());
