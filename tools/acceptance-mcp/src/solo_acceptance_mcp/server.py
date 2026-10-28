@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .bridge import (
-    BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, MAX_INT,
+    BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT,
     SCRIPT_MAX_SOURCE_UNITS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
     validate_script_help, validate_script_run,
 )
@@ -30,6 +30,9 @@ Limit = Annotated[int, Field(ge=1, le=500, strict=True)]
 ScriptFunctionName = Annotated[
     str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$", strict=True),
 ]
+InventorySlot = Annotated[int, Field(ge=1, le=127, strict=True)]
+EquippedSlot = Literal[*EQUIPMENT_SLOTS]
+ObjectId = Annotated[int, Field(ge=1, le=MAX_INT, strict=True)]
 
 
 class ChatParameters(BaseModel):
@@ -62,8 +65,52 @@ class NpcDeclineParameters(BaseModel):
 class InventoryMoveParameters(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     inventory_type: Literal["EQUIP", "USE", "SETUP", "ETC", "CASH"]
-    source_slot: Annotated[int, Field(ge=1, le=127, strict=True)]
-    target_slot: Annotated[int, Field(ge=1, le=127, strict=True)]
+    source_slot: InventorySlot
+    target_slot: InventorySlot
+
+
+class MoveParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    direction: Literal["LEFT", "RIGHT"]
+    duration_ms: Annotated[int, Field(ge=100, le=3000, strict=True)]
+
+
+class StopParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class AttackParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target_oid: ObjectId
+
+
+class PickupParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    object_id: ObjectId
+
+
+class DropParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    inventory_type: Literal["EQUIP", "USE", "SETUP", "ETC", "CASH"]
+    source_slot: InventorySlot
+    quantity: Annotated[int, Field(ge=1, le=32767, strict=True)]
+
+
+class UseItemParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_slot: InventorySlot
+
+
+class EquipParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_slot: InventorySlot
+    target_slot: EquippedSlot
+
+
+class UnequipParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_slot: EquippedSlot
+    target_slot: InventorySlot
 
 
 class ExpectedContext(BaseModel):
@@ -91,7 +138,11 @@ class AcceptanceMCPServer(MCPServer):
                                     "parameters": {"$ref": "#/$defs/" + model}}}
                     for action, model in [("chat", "ChatParameters"), ("npc_center_open", "CenterOpenParameters"),
                                           ("npc_cancel", "NpcCancelParameters"),
-                                          ("inventory_move", "InventoryMoveParameters")]
+                                          ("inventory_move", "InventoryMoveParameters"),
+                                          ("move", "MoveParameters"), ("stop", "StopParameters"),
+                                          ("attack", "AttackParameters"), ("pickup", "PickupParameters"),
+                                          ("drop", "DropParameters"), ("use_item", "UseItemParameters"),
+                                          ("equip", "EquipParameters"), ("unequip", "UnequipParameters")]
                 ] + [{"properties": {"action": {"const": "npc_reply"}, "parameters": {"oneOf": [
                     {"$ref": "#/$defs/NpcSelectParameters"}, {"$ref": "#/$defs/NpcDeclineParameters"},
                 ]}}}]}]}
@@ -146,9 +197,10 @@ def build_server(config: BridgeConfig) -> MCPServer:
         version=__version__,
         instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
-                      "取消操作不等于结束NPC对话。game_act 保留已开放动作。"
+                      "取消操作不等于结束NPC对话。game_act 支持普通聊天、已审NPC回复、背包移位，以及受控移动/停止、单次近战普通攻击、库存物品拾取/丢弃、普通HP/MP药剂使用和装备穿脱；实际能力以桥公告为准。"
+                      "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
                       "script_run 在同一角色运行体中执行有期限的纯 JavaScript，script_help 返回真实函数目录；"
-                      "当前尚无游戏脚本函数，参数使用 parameters，输出使用 console/print，结果为最后表达式。实际能力以桥公告为准。"),
+                      "当前尚无游戏脚本函数，参数使用 parameters，输出使用 console/print，结果为最后表达式。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -162,7 +214,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
     open_annotations = ToolAnnotations(
         read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True,
     )
-    cleanup_annotations = ToolAnnotations(
+    destructive_annotations = ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True,
     )
 
@@ -203,7 +255,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
-    @server.tool(annotations=cleanup_annotations)
+    @server.tool(annotations=destructive_annotations)
     async def actor_close(
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
     ) -> CallToolResult:
@@ -213,14 +265,18 @@ def build_server(config: BridgeConfig) -> MCPServer:
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
-    @server.tool(annotations=open_annotations)
+    @server.tool(annotations=destructive_annotations)
     async def game_act(
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
-        action: Literal["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"],
-        parameters: ChatParameters | CenterOpenParameters | NpcCancelParameters | NpcSelectParameters | NpcDeclineParameters | InventoryMoveParameters,
+        action: Literal["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
+                        "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip"],
+        parameters: (ChatParameters | CenterOpenParameters | NpcCancelParameters | NpcSelectParameters
+                     | NpcDeclineParameters | InventoryMoveParameters | MoveParameters | StopParameters
+                     | AttackParameters | PickupParameters | DropParameters | UseItemParameters
+                     | EquipParameters | UnequipParameters),
         expected_context: ExpectedContext,
     ) -> CallToolResult:
-        """在实际 actor 场景排队 chat、中心首屏、最新版本取消、npc_reply 的有限 select/decline 或 inventory_move。移位仅接受同一背包中不同的正槽位，沿原生合并/交换规则，不穿脱、丢弃或自动整理；NPC 回复须来自当前真实完整 offer 及已审路径。实际开放能力以 game_capabilities 为准。"""
+        """在实际actor场景排队受控动作，实际开放项及限制以game_capabilities为准。move仅在连续可行走foothold有界步行，stop停止当前移动；attack按basic_melee_v1由运行体计算单目标近战普攻，不接damage/skill。pickup/drop沿原生库存规则，use_item仅普通单角色HP/MP药剂，equip/unequip仅普通装备位；inventory_move只在同一背包正槽位间移位。NPC回复须来自当前完整offer及已审路径。超时查询原operation，不盲目重发。"""
         try:
             return result(await bridge.act(
                 session_id, expected_generation, request_id=request_id, action=action,
@@ -267,7 +323,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
-    @server.tool(annotations=cleanup_annotations)
+    @server.tool(annotations=destructive_annotations)
     async def operation_cancel(operation_id: Identifier, request_id: RequestId) -> CallToolResult:
         """请求取消排队或进行中的操作；之后查询状态，原生清理完成前不把请求当作已停止。"""
         try:

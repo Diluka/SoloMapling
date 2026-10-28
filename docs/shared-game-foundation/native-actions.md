@@ -122,3 +122,7 @@ Bot 门面 [BotNativeActions](../../beidou-integration/src/main/java/soloMapling
 ## 背包移位增量
 
 普通聊天的 `NativeActionResult` 继续保留专用 `ChatEvidence`；背包使用独立 `InventoryMoveResult`。二者只通过 `NativeActionFact` 向宿主投影安全结果摘要，详细证据留在各动作类型中。新增 `NativeInventoryActions` 复用原 lane 与提交回执，不增加执行器或通用原始封包入口。协议与验证见[背包移位](inventory-move.md)。本文前述四动作范围是 #119 当轮边界，后续实际能力以对应交付与 capabilities 为准。
+
+## #200 基本操作增量
+
+[角色基本操作](basic-control.md) 的有限typed入口共用包内短命令runner与纯JSON事实结果，普通聊天和背包移位保持原专型结果。持续移动单独登记编排work和调度资源，所有原生帧仍在同一lane，不把中途取消套成聊天撤回。详见该文档的政策与验收边界。

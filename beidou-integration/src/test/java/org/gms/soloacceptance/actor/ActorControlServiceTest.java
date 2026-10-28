@@ -15,6 +15,8 @@ import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.action.NativeInventoryActions;
 import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.action.InventoryMoveResult;
+import soloMapling.game.action.NativeBasicActions;
+import soloMapling.game.action.NativeBasicResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -638,7 +640,8 @@ class ActorControlServiceTest {
                 assertEquals(8, service.publicCapabilities().get("operation_history_size"));
                 var closing = service.close("admin", "close-before-action-tail", closeRequest(opened));
                 assertEquals("CLOSING", session(closing).get("state"));
-                assertEquals(7, executors.getFirst().queue.size());
+                assertEquals(6, executors.getFirst().queue.size());
+                assertCleanupReservedBehindModules(service, closing);
             }
         } finally {
             release.countDown();
@@ -1318,7 +1321,8 @@ class ActorControlServiceTest {
         verify(chatDispatch, times(2)).execute(any(), any());
         assertEquals(7, service.publicCapabilities().get("maximum_pending_actions_per_session"));
         assertEquals(8, service.publicCapabilities().get("actor_executor_queue_capacity"));
-        assertEquals(List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"), service.publicCapabilities().get("actions"));
+        assertEquals(List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
+                "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip"), service.publicCapabilities().get("actions"));
     }
 
     @Test
@@ -1609,7 +1613,8 @@ class ActorControlServiceTest {
                     () -> service.act("admin", "chat-eighth", chatRequest(opened, "不能挤占关闭槽"))).reason());
             assertEquals(6, executor.getQueue().size());
             var closing = service.close("admin", "close-with-full-actions", closeRequest(opened));
-            assertEquals(7, executor.getQueue().size());
+            assertEquals(6, executor.getQueue().size());
+            assertCleanupReservedBehindModules(service, closing);
             assertEquals("actor_not_actable", assertThrows(ObservationException.class,
                     () -> service.act("admin", "chat-after-close", chatRequest(opened, "关闭后不能排队"))).reason());
             complete.countDown();
@@ -1826,7 +1831,8 @@ class ActorControlServiceTest {
         assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
                 () -> service.act("admin", "eighth-after-failure", chatRequest(opened, "八条不能受理"))).reason());
         var closing = service.close("admin", "close-after-failure", closeRequest(opened));
-        assertEquals(8, executors.getFirst().queue.size());
+        assertEquals(7, executors.getFirst().queue.size());
+        assertCleanupReservedBehindModules(service, closing);
         executors.getFirst().drain();
         assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
         verify(chatDispatch, never()).execute(any(), any());
@@ -2568,6 +2574,350 @@ class ActorControlServiceTest {
         }
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
         verify(backend, never()).prepareInventoryMove(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void basicActionParametersBindEveryNewFingerprintFieldAndUseOneHostWork() throws Exception {
+        ActorControlService service = service(4, 128, 64);
+        prepareBasic(service, null);
+        var opened = open(service, "basic-fingerprint-open");
+        executors.getFirst().runNext();
+        var requests = List.of(
+                basicRequest(opened, "move", Map.of("direction", "LEFT", "duration_ms", 300)),
+                basicRequest(opened, "attack", Map.of("target_oid", 11)),
+                basicRequest(opened, "pickup", Map.of("object_id", 21)),
+                basicRequest(opened, "drop", Map.of("inventory_type", "ETC", "source_slot", 1, "quantity", 1)),
+                basicRequest(opened, "use_item", Map.of("source_slot", 1)),
+                basicRequest(opened, "equip", Map.of("source_slot", 1, "target_slot", -11)),
+                basicRequest(opened, "unequip", Map.of("source_slot", -11, "target_slot", 1)),
+                basicRequest(opened, "stop", Map.of()));
+        int index = 0;
+        for (var request : requests) {
+            String requestId = "basic-id-" + index++;
+            var accepted = service.act("admin", requestId, request);
+            assertEquals(id(accepted), id(service.act("admin", requestId, request)));
+            if (operationWork(service, accepted) != null) {
+                assertSame(execution(service, opened).moduleScope(), operationWork(service, accepted).scope());
+                assertEquals(runtimeView(opened).get("id"), runtimeView(accepted).get("id"));
+            }
+            for (String field : switch (request.action()) {
+                case "move" -> List.of("direction", "duration_ms");
+                case "attack" -> List.of("target_oid");
+                case "pickup" -> List.of("object_id");
+                case "drop" -> List.of("inventory_type", "source_slot", "quantity");
+                case "use_item" -> List.of("source_slot");
+                case "equip", "unequip" -> List.of("source_slot", "target_slot");
+                default -> List.<String>of();
+            }) {
+                Map<String, Object> changed = basicParameterFields(request.parameters());
+                Object old = changed.get(field);
+                changed.put(field, old instanceof String value ? "direction".equals(field) ? "RIGHT" : "USE"
+                        : "source_slot".equals(field) && "unequip".equals(request.action()) ? -7
+                        : "target_slot".equals(field) && "equip".equals(request.action()) ? -7 : (Integer) old + 1);
+                assertEquals("request_id_conflict", assertThrows(ObservationException.class,
+                        () -> service.act("admin", requestId, basicRequest(opened, request.action(), changed))).reason());
+            }
+            executors.getFirst().drain();
+            var finished = service.get("admin", id(accepted), 0, 100);
+            assertEquals("SUCCEEDED", finished.get("status"));
+            assertEquals("native_" + request.action() + "_observed", result(finished).get("observed_outcome"));
+            assertNull(operationWork(service, finished));
+        }
+    }
+
+    @Test
+    void aSecondMoveReturnsItsPreciseBusyOperationWithoutCancellingTheOriginalMove() throws Exception {
+        ActorControlService service = service(4, 64, 64);
+        AtomicReference<HeldBasic> active = new AtomicReference<>();
+        prepareBasic(service, active);
+        var opened = open(service, "open-busy-movement");
+        executors.getFirst().runNext();
+        var request = basicRequest(opened, "move", Map.of("direction", "RIGHT", "duration_ms", 3000));
+        var first = service.act("admin", "busy-first", request);
+        HeldBasic firstNative = active.get();
+        var firstWork = operationWork(service, first);
+        assertEquals("RUNNING", first.get("status"));
+
+        var busy = assertDoesNotThrow(() -> service.act("admin", "busy-second", request));
+        assertEquals("FAILED", busy.get("status"));
+        assertEquals("movement_busy", ((Map<?, ?>) busy.get("error")).get("reason"));
+        assertEquals(false, result(busy).get("native_dispatch_started"));
+        assertEquals(id(busy), id(service.act("admin", "busy-second", request)));
+        assertSame(firstNative, active.get());
+        assertFalse(firstWork.cancelRequested());
+        assertFalse(firstWork.isSettled());
+        assertEquals("RUNNING", service.get("admin", id(first), 0, 100).get("status"));
+        verify(backend, times(2)).prepareMovement(any(), any(), any(), any(), eq("move"), any(), any());
+
+        firstNative.complete(false);
+        assertTrue(firstWork.isSettled());
+        assertEquals("SUCCEEDED", service.get("admin", id(first), 0, 100).get("status"));
+    }
+
+    @Test
+    void basicCapacityRejectionStays429AndItsOriginalIdRemainsRecoverableWithoutEarlyRefund() throws Exception {
+        ActorControlService service = service(4, 64, 64);
+        AtomicReference<HeldBasic> rejected = new AtomicReference<>();
+        prepareBasic(service, null, rejected);
+        var opened = open(service, "open-basic-capacity");
+        executors.getFirst().runNext();
+        var request = basicRequest(opened, "pickup", Map.of("object_id", 7));
+        var failure = assertThrows(ObservationException.class, () -> service.act("admin", "basic-capacity", request));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, failure.status());
+        assertEquals("actor_queue_full", failure.reason());
+        HeldBasic nativeWork = rejected.get();
+        try {
+            var recovered = service.act("admin", "basic-capacity", request);
+            assertEquals("QUEUED", recovered.get("status"));
+            assertSame(nativeWork.work, operationWork(service, recovered));
+            var ordinary = basicRequest(opened, "drop", Map.of("inventory_type", "ETC", "source_slot", 1, "quantity", 1));
+            for (int i = 0; i < 6; i++) service.act("admin", "capacity-ordinary-" + i, ordinary);
+            nativeWork.failResult("native_action_queue_rejected");
+            assertEquals("FAILED", service.get("admin", id(recovered), 0, 100).get("status"));
+            assertFalse(nativeWork.work.isSettled());
+            assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "capacity-before-settlement", ordinary)).reason());
+            nativeWork.work.carrierSettled();
+            service.act("admin", "capacity-after-settlement", ordinary);
+            var repeated = service.act("admin", "basic-capacity", request);
+            assertEquals(id(recovered), id(repeated));
+            assertEquals("FAILED", repeated.get("status"));
+            verify(backend, times(1)).prepareBasic(any(), any(), any(), any(), eq("pickup"), any());
+            verify(backend, times(1)).submitBasic(eq(nativeWork.handle), any());
+            executors.getFirst().drain();
+        } finally {
+            if (!nativeWork.result.isDone()) nativeWork.failResult("native_action_queue_rejected");
+            nativeWork.work.carrierSettled();
+        }
+    }
+
+    @Test
+    void queuedBasicCancellationKeepsTheQuotaUntilTheOriginalCarrierSettles() {
+        ActorControlService service = service(4, 64, 64);
+        prepareBasic(service, null);
+        var opened = open(service, "basic-queue-open");
+        executors.getFirst().runNext();
+        var request = basicRequest(opened, "drop", Map.of("inventory_type", "ETC", "source_slot", 1, "quantity", 1));
+        List<Map<String, Object>> accepted = new ArrayList<>();
+        for (int i = 0; i < 7; i++) accepted.add(service.act("admin", "basic-queue-" + i, request));
+        service.cancel("admin", "basic-cancel", id(accepted.getFirst()));
+        assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "basic-eight", request)).reason());
+        executors.getFirst().runNext();
+        assertEquals("CANCELLED", service.get("admin", id(accepted.getFirst()), 0, 100).get("status"));
+        service.act("admin", "basic-after-real-settlement", request);
+        var close = service.close("admin", "basic-full-close", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(close), 0, 100).get("status"));
+        verify(backend, times(1)).close(eq(handle), any());
+    }
+
+    @Test
+    void cancellingDispatchedMovementPreservesItsPositionFactsAndWaitsForActualParentSettlement() throws Exception {
+        ActorControlService service = service(4, 64, 64);
+        AtomicReference<HeldBasic> held = new AtomicReference<>();
+        prepareBasic(service, held);
+        var opened = open(service, "basic-held-open");
+        executors.getFirst().runNext();
+        var moving = service.act("admin", "basic-held-move", basicRequest(opened, "move", Map.of("direction", "RIGHT", "duration_ms", 3000)));
+        assertEquals("RUNNING", moving.get("status"));
+        var parent = operationWork(service, moving);
+        assertFalse(parent.isSettled());
+        service.cancel("admin", "cancel-held", id(moving));
+        for (int i = 0; i < 6; i++) service.act("admin", "basic-after-held-" + i,
+                basicRequest(opened, "pickup", Map.of("object_id", 20 + i)));
+        assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "before-parent-settled", basicRequest(opened, "pickup", Map.of("object_id", 40)))).reason());
+        held.get().complete(true);
+        assertTrue(parent.isSettled());
+        var stopped = service.get("admin", id(moving), 0, 100);
+        assertEquals("CANCELLED", stopped.get("status"));
+        assertEquals(true, result(stopped).get("native_dispatch_started"));
+        assertEquals(true, result(stopped).get("movement_stopped"));
+        assertEquals(false, result(stopped).get("cancel_too_late"));
+        assertEquals(Map.of("x", 10, "y", 0), result(stopped).get("after"));
+        service.act("admin", "after-parent-settled", basicRequest(opened, "pickup", Map.of("object_id", 40)));
+        executors.getFirst().drain();
+    }
+
+    @Test
+    void rootCloseWaitsForTheInFlightMovementCarrierBeforeEnteringNativeLogout() throws Exception {
+        ActorControlService service = service(4, 64, 64);
+        AtomicReference<HeldBasic> held = new AtomicReference<>();
+        prepareBasic(service, held);
+        var opened = open(service, "basic-close-held-open");
+        executors.getFirst().runNext();
+        var moving = service.act("admin", "basic-close-held-move", basicRequest(opened, "move", Map.of("direction", "RIGHT", "duration_ms", 3000)));
+        var work = operationWork(service, moving);
+        var closing = service.close("admin", "close-while-moving", closeRequest(opened));
+        assertEquals("CLOSING", session(closing).get("state"));
+        assertFalse(work.isSettled());
+        assertTrue(work.cancelRequested());
+        assertTrue(executors.getFirst().queue.isEmpty());
+        assertFalse(execution(service, opened).runtime().whenModulesDrained().toCompletableFuture().isDone());
+        verify(backend, never()).close(any(), any());
+        held.get().complete(true);
+        assertTrue(work.isSettled());
+        assertTrue(execution(service, opened).runtime().whenModulesDrained().toCompletableFuture().isDone());
+        assertEquals(1, executors.getFirst().queue.size());
+        verify(backend, never()).close(any(), any());
+        executors.getFirst().drain();
+        var closed = service.get("admin", id(closing), 0, 100);
+        assertEquals("SUCCEEDED", closed.get("status"));
+        assertEquals("CLOSED", session(closed).get("state"));
+        assertEquals(CharacterRuntime.State.CLOSED, execution(service, opened).runtime().snapshot().state());
+        verify(backend, times(1)).close(eq(handle), any());
+    }
+
+    @Test
+    void basicActionsRejectMissingOrCrossActionFieldsBeforeAllocatingHistory() {
+        ActorControlService service = service(4, 64, 64);
+        prepareBasic(service, null);
+        var opened = open(service, "basic-invalid-open");
+        executors.getFirst().runNext();
+        for (var request : List.of(basicRequest(opened, "move", Map.of("direction", "RIGHT")),
+                basicRequest(opened, "stop", Map.of("direction", "RIGHT")),
+                basicRequest(opened, "attack", Map.of("target_oid", 0)),
+                basicRequest(opened, "pickup", Map.of("object_id", 1, "quantity", 1)),
+                basicRequest(opened, "drop", Map.of("inventory_type", "EQUIPPED", "source_slot", -11, "quantity", 1)),
+                basicRequest(opened, "equip", Map.of("source_slot", 1, "target_slot", -14)),
+                basicRequest(opened, "unequip", Map.of("source_slot", -101, "target_slot", 1)))) {
+            assertEquals("invalid_basic_action_parameters", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "invalid-basic", request)).reason());
+        }
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        verify(backend, never()).prepareBasic(any(), any(), any(), any(), anyString(), any());
+        verify(backend, never()).prepareMovement(any(), any(), any(), any(), anyString(), any(), any());
+    }
+
+    /** Native behavior is an explicit seam; host scopes, lane carriers, cancellation and drain stay real. */
+    private void prepareBasic(ActorControlService service, AtomicReference<HeldBasic> holdMovement) {
+        prepareBasic(service, holdMovement, null);
+    }
+
+    private void prepareBasic(ActorControlService service, AtomicReference<HeldBasic> holdMovement,
+                               AtomicReference<HeldBasic> capacityRejection) {
+        AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
+        when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-current",
+                "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
+        service.setObservations(observations);
+        Map<NativeBasicActions.Handle, java.util.function.Supplier<NativeActionService.SubmissionReceipt>> prepared = new IdentityHashMap<>();
+        doAnswer(invocation -> {
+            NativeActorHandle actor = invocation.getArgument(0);
+            CharacterCommandLane lane = invocation.getArgument(1);
+            CharacterCommandLane.ControlPermit permit = invocation.getArgument(2);
+            ExecutionScope.WorkHandle work = invocation.getArgument(3);
+            String action = invocation.getArgument(4);
+            NativeBasicActions.CommandHandle command = mock(NativeBasicActions.CommandHandle.class);
+            HeldBasic state = new HeldBasic(command, actor, work, action);
+            if (capacityRejection != null && "pickup".equals(action)) {
+                capacityRejection.set(state);
+                when(state.receipt.status()).thenReturn(NativeActionService.SubmissionStatus.REJECTED);
+                when(state.receipt.rejection()).thenReturn(NativeActionService.SubmissionRejection.CAPACITY);
+                prepared.put(command, () -> {
+                    assertTrue(work.claimCarrier());
+                    work.scope().runTracked(work, () -> { });
+                    return state.receipt;
+                });
+                return command;
+            }
+            prepared.put(command, () -> {
+                lane.submit(work, permit, () -> { state.dispatched.set(true); state.completeResult(false); },
+                        () -> { if (!state.result.isDone()) state.completeResult(true); });
+                return state.receipt;
+            });
+            return command;
+        }).when(backend).prepareBasic(any(), any(), any(), any(), anyString(), any());
+        doAnswer(invocation -> {
+            NativeActorHandle actor = invocation.getArgument(0);
+            CharacterRuntime.ModuleContext context = invocation.getArgument(2);
+            ExecutionScope.WorkHandle work = invocation.getArgument(3);
+            String action = invocation.getArgument(4);
+            Runnable preflight = invocation.getArgument(6);
+            assertSame(context.scope(), work.scope());
+            NativeBasicActions.Handle command = mock(NativeBasicActions.Handle.class);
+            HeldBasic state = new HeldBasic(command, actor, work, action);
+            prepared.put(command, () -> {
+                assertTrue(work.claimCarrier());
+                work.scope().runTracked(work, preflight);
+                if (holdMovement != null && "move".equals(action) && holdMovement.get() != null) {
+                    when(state.receipt.status()).thenReturn(NativeActionService.SubmissionStatus.REJECTED);
+                    when(state.receipt.rejection()).thenReturn(NativeActionService.SubmissionRejection.PERMIT);
+                    state.failResult("movement_busy");
+                    work.carrierSettled();
+                    return state.receipt;
+                }
+                state.dispatched.set(true);
+                if (holdMovement != null && "move".equals(action)) holdMovement.set(state);
+                else state.complete(false);
+                return state.receipt;
+            });
+            return command;
+        }).when(backend).prepareMovement(any(), any(), any(), any(), anyString(), any(), any());
+        doAnswer(invocation -> prepared.get(invocation.getArgument(0)).get()).when(backend).submitBasic(any(), any());
+    }
+
+    private static void assertCleanupReservedBehindModules(ActorControlService service, Map<String, Object> closing) throws Exception {
+        var cleanup = operationWork(service, closing);
+        assertNotNull(cleanup);
+        assertTrue(cleanup.isCleanup());
+        assertFalse(cleanup.snapshot().carrierClaimed());
+        assertFalse(cleanup.isSettled());
+        assertFalse(execution(service, closing).runtime().whenModulesDrained().toCompletableFuture().isDone());
+    }
+
+    private static final class HeldBasic {
+        final NativeBasicActions.Handle handle;
+        final NativeActorHandle actor;
+        final ExecutionScope.WorkHandle work;
+        final String action;
+        final CompletableFuture<NativeBasicResult> result = new CompletableFuture<>();
+        final AtomicBoolean dispatched = new AtomicBoolean();
+        final NativeActionService.SubmissionReceipt receipt = mock(NativeActionService.SubmissionReceipt.class);
+        HeldBasic(NativeBasicActions.Handle handle, NativeActorHandle actor, ExecutionScope.WorkHandle work, String action) {
+            this.handle = handle; this.actor = actor; this.work = work; this.action = action;
+            when(handle.result()).thenReturn(result.minimalCompletionStage());
+            when(handle.dispatchStarted()).thenAnswer(ignored -> dispatched.get());
+            when(handle.receipt()).thenReturn(receipt);
+            when(receipt.status()).thenReturn(NativeActionService.SubmissionStatus.ENQUEUED);
+        }
+        void complete(boolean cancelled) { completeResult(cancelled); work.carrierSettled(); }
+        void failResult(String reason) {
+            result.complete(new NativeBasicResult(action, NativeActionResult.Outcome.FAILED, NativeActionResult.Dispatch.NOT_STARTED,
+                    actor.characterRef().character().getId(), work.acceptedEpoch().value(), work.cancelRequested(), false, reason, Map.of()));
+        }
+        void completeResult(boolean cancelled) {
+            Map<String, Object> fields = !dispatched.get() ? Map.of() : "move".equals(action) && cancelled
+                    ? Map.of("effect_observed", true, "evidence_source", "NATIVE_TEST_MOVEMENT",
+                    "movement_stopped", true, "completed_duration", false,
+                    "before", Map.of("x", 0, "y", 0), "after", Map.of("x", 10, "y", 0))
+                    : Map.of("effect_observed", true, "evidence_source", "NATIVE_TEST_BOUNDARY");
+            result.complete(new NativeBasicResult(action, cancelled ? NativeActionResult.Outcome.CANCELLED : NativeActionResult.Outcome.SUCCEEDED,
+                    dispatched.get() ? NativeActionResult.Dispatch.STARTED : NativeActionResult.Dispatch.NOT_STARTED,
+                    actor.characterRef().character().getId(), work.acceptedEpoch().value(), work.cancelRequested(), false,
+                    cancelled ? "movement_cancelled" : null, fields));
+        }
+    }
+
+    private static ActorActRequest basicRequest(Map<String, Object> opened, String action, Map<String, Object> fields) {
+        return new ActorActRequest(sessionId(opened), generation(opened), action, new ActorActRequest.Parameters(null, null, null, null,
+                (String) fields.get("inventory_type"), (Integer) fields.get("source_slot"), (Integer) fields.get("target_slot"),
+                (String) fields.get("direction"), (Integer) fields.get("duration_ms"), (Integer) fields.get("target_oid"),
+                (Integer) fields.get("object_id"), (Integer) fields.get("quantity")),
+                new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
+    }
+
+    private static Map<String, Object> basicParameterFields(ActorActRequest.Parameters p) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        if (p.inventoryType() != null) result.put("inventory_type", p.inventoryType());
+        if (p.sourceSlot() != null) result.put("source_slot", p.sourceSlot());
+        if (p.targetSlot() != null) result.put("target_slot", p.targetSlot());
+        if (p.direction() != null) result.put("direction", p.direction());
+        if (p.durationMs() != null) result.put("duration_ms", p.durationMs());
+        if (p.targetOid() != null) result.put("target_oid", p.targetOid());
+        if (p.objectId() != null) result.put("object_id", p.objectId());
+        if (p.quantity() != null) result.put("quantity", p.quantity());
+        return result;
     }
 
     private void prepareInventoryMove(ActorControlService service) {

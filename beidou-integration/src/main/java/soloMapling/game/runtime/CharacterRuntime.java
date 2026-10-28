@@ -22,6 +22,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 /** One exact native role, one carrier lane, and replaceable compiled modules. Internal ABI v0.1. */
 public final class CharacterRuntime {
@@ -34,6 +36,7 @@ public final class CharacterRuntime {
     private final ExecutorService ownedExecutor;
     private final ExecutionScope rootScope;
     private final RuntimeEvents events;
+    private final CompletableFuture<Void> modulesDrained = new CompletableFuture<>();
     private final Map<String, ModuleEntry> modules = new LinkedHashMap<>();
     private final Map<String, ModuleContext> controlOwners = new LinkedHashMap<>();
     private final ScriptRegistry scriptFunctions = new ScriptRegistry();
@@ -102,6 +105,22 @@ public final class CharacterRuntime {
     public WorldEpoch.Token acceptedEpoch() { return epoch; }
     public ExecutionScope lifecycleScope() { return rootScope; }
     public RuntimeEvents.Window events(long since, int limit) { return events.read(since, limit); }
+
+    /** Closing barrier for asynchronous module resources; completion never grants root cleanup authority. */
+    public CompletionStage<Void> whenModulesDrained() {
+        signalModulesDrained();
+        return modulesDrained.minimalCompletionStage();
+    }
+
+    private void signalModulesDrained() {
+        boolean ready;
+        synchronized (monitor) {
+            ready = (state == State.CLOSING || state == State.CLOSED) && modules.isEmpty()
+                    && rootScope.snapshot().state() != ExecutionScope.State.ACTIVE;
+        }
+        // Cleanup subscribers may submit to the same lane. Never invoke them under the host monitor.
+        if (ready) modulesDrained.complete(null);
+    }
 
     public ExecutionScope.WorkHandle acceptOpeningWork() {
         synchronized (monitor) {
@@ -593,6 +612,7 @@ public final class CharacterRuntime {
     }
 
     public boolean tryFinalizeClose() {
+        signalModulesDrained();
         CharacterCommandLane finished;
         synchronized (monitor) {
             if (state == State.CLOSED) return true;

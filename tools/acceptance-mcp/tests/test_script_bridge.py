@@ -226,4 +226,3 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.client._http = httpx.AsyncClient(base_url=self.stub.base_url, transport=httpx.MockTransport(inspect_transport))
         await self.run_script(timeout_ms=5000)
         self.assertEqual(10, timeouts[0]["read"])
-

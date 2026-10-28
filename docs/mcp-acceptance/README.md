@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**已部署基线：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已完成隔离及实际部署验收。** `game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply/inventory_move`，NPC 回复仅开放已审查的 select/decline。本轮候选新增 `script_run`、`script_help`，客户端共九工具，首片只执行纯脚本与返回空函数目录。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准；脚本切片的源码测试、CI、隔离及实际部署结果按 [#199](https://github.com/Diluka/SoloMapling/issues/199) 分别记录。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行、SocialBot 回复及其他基本动作继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。本轮候选新增 `script_run`、`script_help`，客户端共九工具，首片只执行纯脚本与返回空函数目录。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准；脚本切片的源码测试、CI、隔离及实际部署结果按 [#199](https://github.com/Diluka/SoloMapling/issues/199) 分别记录。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -101,7 +101,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 当前工具接口
 
-下表列出当前客户端的九工具，脚本两工具为本轮候选基础切片；实际部署以能力公告和 Issue 证据为准。`game_act` 保持五种动作，npc_reply 仅支持已审查的 select/decline，inventory_move 仅支持普通背包正槽位移位。角色、动作和脚本接口须开启双开关。
+下表列出当前客户端的九工具，脚本两工具为本轮候选基础切片；实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -111,7 +111,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `actor_close` | session_id、expected_generation、request_id | 排队正常离线，查询清理及持久化核验结果，保留 fixture | R2a |
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
-| `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | chat/中心首屏/取消/npc_reply/inventory_move 已交付，reply 仅 select/decline |
+| `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
 | `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 本轮候选：纯 JavaScript，无游戏函数 |
 | `script_help` | session_id、expected_generation、可选 names | 查询同源函数描述，未注册时 functions 为空 | 本轮候选：只读，不分配脚本工作 |
 
@@ -371,7 +371,7 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 
 ## 基本操作与脚本基础
 
-一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱，按各自切片开放。当前背包移位已交付，其余基本动作仍待实现或验收。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。
+一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱。背包移位由 #164 交付，其余八动作由 PR #208 实现，各层验收与实际开放范围分别核对对应证据。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。本轮脚本基础保留这十三动作，不把它们注册为脚本函数。
 
 [#199](https://github.com/Diluka/SoloMapling/issues/199) 的本轮基础切片直接提供 `script_run` 和 `script_help`，不等待 #200 全部完成；[#204](https://github.com/Diluka/SoloMapling/issues/204) 只补本片需要的运行体支撑。Agent 使用已有专用角色提交纯 JavaScript，通过 `parameters` 读取 JSON 参数，以 `console`/`print` 输出，以最后表达式返回可序列化结果。解析错误、运行错误和期限结束随本次调用返回，帮助与实际绑定共用一份注册描述。
 
@@ -462,3 +462,7 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 ## #200 基本操作：背包移位
 
 #164 已通过 PR #202 交付 `game_act/inventory_move`，严格参数为 `inventory_type`、`source_slot`、`target_slot`；它直接消费运行体共享 Java 能力和唯一 lane，不把基本动作实现留在 MCP。actor 实时库存观察与正常退出后同 CID 重开用于核实际状态和存档。规则及分层验收见[背包移位](../shared-game-foundation/inventory-move.md)，实际已开放能力以 `game_capabilities.actions` 为准。其余 #200 动作继续逐片交付。
+
+## #200 其余基本操作
+
+PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，本轮再增加两个脚本工具后共九工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。本轮不增减这些直接动作，也没有对应游戏脚本函数。

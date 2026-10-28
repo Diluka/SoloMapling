@@ -13,7 +13,7 @@ from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, req
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests.test_actor_events_smoke import PACKET_CAPABILITIES
-from tests.test_chat_protocol import ACTOR_TOOLS, ACT_PATH, MAX_LONG, OBSERVATION_TOOLS, TOOLS, capabilities
+from tests.test_chat_protocol import REGISTERED_ACTIONS, ACTOR_TOOLS, ACT_PATH, MAX_LONG, OBSERVATION_TOOLS, TOOLS, capabilities
 from tests.test_npc_protocol import ACTIONS as CENTER_ACTIONS, NpcProtocolStub, npc_capabilities
 
 
@@ -69,17 +69,17 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(REGISTERED_TOOLS, set(tools))
         tool = tools["game_act"]
         self.assertFalse(tool.annotations.read_only_hint)
-        self.assertFalse(tool.annotations.destructive_hint)
+        self.assertTrue(tool.annotations.destructive_hint)
         self.assertTrue(tool.annotations.idempotent_hint)
         self.assertTrue(tool.annotations.open_world_hint)
         schema = tool.input_schema
         self.assertIs(False, schema.get("additionalProperties"))
-        self.assertEqual(ACTIONS + ["inventory_move"], schema["properties"]["action"]["enum"])
+        self.assertEqual(REGISTERED_ACTIONS, schema["properties"]["action"]["enum"])
         self.assertEqual(set(self.args), set(schema["required"]))
         tagged = schema["allOf"][0]["oneOf"]
-        self.assertEqual(5, len(tagged))
+        self.assertEqual(13, len(tagged))
         by_action = {branch["properties"]["action"]["const"]: branch["properties"]["parameters"] for branch in tagged}
-        self.assertEqual(set(ACTIONS) | {"inventory_move"}, set(by_action))
+        self.assertEqual(set(REGISTERED_ACTIONS), set(by_action))
 
         def resolve(value: dict) -> dict:
             return schema["$defs"][value["$ref"].split("/")[-1]] if "$ref" in value else value
