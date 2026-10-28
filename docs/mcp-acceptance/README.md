@@ -2,7 +2,7 @@
 
 新增 #207 独立管理指令入口的配置、参数和恢复规则见[管理指令说明](commands.md)。该入口直接复用原生服务，与角色运行体解耦；实际启用和部署状态以 `debug_commands` 能力公告及 #207 验收记录为准。
 
-**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。`script_run`、`script_help` 与 #207 两项独立管理工具合计十一工具；纯脚本基础之外，[#216](https://github.com/Diluka/SoloMapling/issues/216) 在同一脚本工具上接入北斗原生环境。实际开放项始终以 `game_capabilities` 和 `script_help` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。`script_run`、`script_help` 与 #207 两项独立管理工具合计十一工具；当前脚本工具只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗原脚本及真实上下文，已删除独立纯JS模式和environment参数。实际开放项始终以 `game_capabilities` 和 `script_help` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -55,7 +55,7 @@ solomapling:
 
 ## 目标与定位
 
-MCP 用于机器人开发调试：让 Agent 进入游戏，与待测机器人交互，再从真实观察和回复核对其行为是否符合设计。验收角色由操作者控制；公会核心队员和自动 PQ bot 是它的交互对象，也可在多角色场景中作为协作队员。它们共享正常游戏动作能力，身份、调度归属和验收职责分开。次要游戏操作以后按需进入脚本环境，脚本基础先用纯运算、参数和语言输出贯通，不逐项扩大 MCP 直接动作。
+MCP 用于机器人开发调试：让 Agent 进入游戏，与待测机器人交互，再从真实观察和回复核对其行为是否符合设计。验收角色由操作者控制；公会核心队员和自动 PQ bot 是它的交互对象，也可在多角色场景中作为协作队员。它们共享正常游戏动作能力，身份、调度归属和验收职责分开。次要游戏操作以后按需通过北斗脚本及现有原生API接入，不逐项扩大MCP直接动作。
 
 这里的角色是**服务器端玩家替身**：用于验证服务器业务链、机器人行为、NPC/门户/物品/组队与副本结果。真实客户端的网络握手、封包加解密、渲染、输入和玩家操控体验仍有独立验收。
 
@@ -81,7 +81,7 @@ flowchart LR
 - Solo验收桥沿当前管理端JWT和管理员权限鉴权，默认不开启，开关与 profile 维护在本地配置。当前角色并发上限固定为4，实际额度由 capabilities 返回。全部新增代码维护在Solo，北斗submodule保持原样。
 - 独立`AcceptanceClient extends Client`捕获`sendPacket`，在专用actor注册表中登记。不要继承`BotClient`或把验收玩家放入环境`BotRegistry`：聊天观察和入图脚本会按bot分支处理。
 - 开放的能力由`game_capabilities`实际返回。接口契约可先设计齐，未实现或未验证的动作保持不可用；不创建空工具来宣称已支持。
-- 短原生命令使用同一宿主的既有有界 lane，角色观察来自根来源；纯脚本使用运行体管理的执行载体与原模块 work，保持 lane 可用。外部 operation 是请求与结果历史，Session 或模块不再各建角色宿主、动作队列或物理工作账本。
+- 短原生命令使用同一宿主的既有有界 lane，角色观察来自根来源；北斗脚本使用运行体管理的执行载体与原模块work，保持lane可用。外部 operation 是请求与结果历史，Session 或模块不再各建角色宿主、动作队列或物理工作账本。
 
 ## 身份与生命周期
 
@@ -114,8 +114,8 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
 | `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
-| `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms/environment | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 无 environment 为纯 JS；原生环境按真实入口绑定 cm/qm/pi/rm/em |
-| `script_help` | session_id、expected_generation、可选 names | 同源函数描述、实际 native_environments 与本模块 contexts | 只读，不分配脚本工作；functions 可为空 |
+| `script_run` | session_id、expected_generation、request_id、kind、operation；按操作传context_id/options/entry/args，可带source/parameters/timeout_ms | 同步返回SCRIPT结果、输出或错误及真实收尾 | 只执行北斗脚本，按真实入口绑定cm/qm/pi/rm/em |
+| `script_help` | session_id、expected_generation | 同源native_environments、本模块contexts与容量 | 只读，不分配脚本工作或operation |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。
 
@@ -375,11 +375,11 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 
 一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱。背包移位由 #164 交付，其余八动作由 PR #208 实现，各层验收与实际开放范围分别核对对应证据。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。本轮脚本基础保留这十三动作，不把它们注册为脚本函数。
 
-[#199](https://github.com/Diluka/SoloMapling/issues/199) 的本轮基础切片直接提供 `script_run` 和 `script_help`，不等待 #200 全部完成；[#204](https://github.com/Diluka/SoloMapling/issues/204) 只补本片需要的运行体支撑。Agent 使用已有专用角色提交纯 JavaScript，通过 `parameters` 读取 JSON 参数，以 `console`/`print` 输出，以最后表达式返回可序列化结果。解析错误、运行错误和期限结束随本次调用返回，帮助与实际绑定共用一份注册描述。
+`script_run` 和 `script_help` 只服务于北斗脚本执行。调用方直接传 `kind/operation` 和相应上下文选择，加载现有原文件并沿真实对象执行；非空source片段在同一北斗引擎运行，使用parameters读取JSON，以console/print输出并返回可序列化结果。独立纯JS模式及旧environment字段已删除，缺少kind/operation不会回退。
 
-纯函数目录未注册时，`script_help()` 正常返回 `functions=[]`；指定未知名称会列入 `unavailable`。[#216 北斗环境](../robot-runtime/beidou-script-environment.md) 另通过 `native_environments/contexts` 说明原生对象、入口和实际会话，不为每个原有 Java 方法重写同义函数。现有 `game_act` 和管理工具保留；行为模块、共享事实/事件大全与直接动作迁移仍在各自任务推进。
+`script_help(session_id, expected_generation)` 返回实际 `native_environments/contexts/maximum_contexts_per_module`，不维护names或纯函数目录，也不为每个既有Java方法重造同义函数。现有game_act和管理工具保留，完整行为模块、共享事实/事件及直接动作迁移仍在各自任务推进。
 
-脚本使用 `CharacterRuntime` 当前模块代次和原 scope/work，在管理载体执行；短原生命令仍沿唯一 lane。纯模式每次关闭 Context；原生模式可在本次调用真实结算后保留 OPEN Context，最终关闭与调度资源释放另行核验，不以 Future 或请求提前返回替代。调用例子和恢复规则见[脚本工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，内部协议见[纯脚本设施](../robot-runtime/script-execution.md)和[北斗环境](../robot-runtime/beidou-script-environment.md)。源码、CI、隔离和实际部署验收分别留证。
+脚本沿CharacterRuntime当前模块代次和原scope/work执行，不占角色短lane。本次调用真实结算后可以保留OPEN Context，最终关闭及原生调度资源释放另核，不以Future或请求返回替代。调用流程见[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，公共约定见[脚本执行参考](../robot-runtime/script-execution.md)，真实来源见[北斗脚本上下文](../robot-runtime/beidou-script-environment.md)。各层验收按对应Issue分别留证。
 
 ## 螺旋迭代计划
 
@@ -392,7 +392,7 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 | R2b 普通聊天与回复 | #70/#72/#74 已完成隔离/部署验收并关闭，SocialBot 往返仍待后续 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
 | R2c NPC 对话 | #75 已部署验收；#110无收益select/decline已完成隔离及实际部署验收，accept/完整菜单出行由#112/#113推进 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
 | 一期基本操作 #200 | 移动与停止、普通攻击、拾取丢弃、物品使用、背包移位和穿脱逐片交付 | 固定场景分别核验指令、真实结果、停止或取消及必要存档，复用同一宿主与原生规则 |
-| 脚本基础 #199/#204 | 不等待 #200，先贯通纯脚本的 script_run/script_help；游戏函数及动作迁移后续按需推进 | 同步返回参数运算、输出与可序列化结果或错误，空目录真实反映绑定；无限循环中断后引擎退出、Context 关闭及原 work 结算可核验 |
+| 北斗脚本 #216 | script_run执行原脚本与真实上下文，script_help同源说明；独立纯JS模式已移除 | 参数/输出/结果、连续回调、期限/取消及本次工作结算与最终Context/调度资源释放分别核验 |
 | R5 组队协作验收 | 多actor分工、真人保留角色、单个PQ阶段和逐步扩展 | 一真人与合法bot编制逐阶段验证；双队/双频道隔离、同时站位、掉线补位与失败恢复；每种PQ独立留证 |
 
 组队协作依赖[组队任务计划 #13](https://github.com/Diluka/SoloMapling/issues/13)及[团队协作内核 #14](https://github.com/Diluka/SoloMapling/issues/14)，按对应任务与实际阶段独立验收。基本操作通过、脚本调用成功与 PQ 通关分别记录，不能互相替代。

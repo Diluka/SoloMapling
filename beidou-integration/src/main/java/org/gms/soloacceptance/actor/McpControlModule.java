@@ -5,8 +5,6 @@ import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
-import soloMapling.game.script.ScriptExecution;
-import soloMapling.game.script.ScriptRequest;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -50,11 +48,7 @@ public final class McpControlModule implements RuntimeModule {
     public ExecutionScope.WorkHandle acceptWork() { return context().acceptWork(); }
     NativeMovementActions movement() { return movement; }
 
-    public ScriptExecution runScript(ExecutionScope.WorkHandle work, ScriptRequest request) {
-        return context().runScript(work, request);
-    }
-
-    public Map<String, Object> scriptHelp(List<String> names) { return context().scriptHelp(names); }
+    public Map<String, Object> scriptHelp() { return context().nativeScriptHelp(); }
 
     public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                   NativeScriptAdapter adapter) {

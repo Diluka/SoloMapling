@@ -5,8 +5,9 @@ import java.util.Map;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Collections;
+import java.nio.charset.StandardCharsets;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import soloMapling.game.script.ScriptExecution;
+import soloMapling.game.script.ScriptValues;
 
 /** One invocation of a role-owned native script environment. */
 public record NativeScriptRequest(String kind, String operation, String contextId, Map<String, Object> options,
@@ -21,11 +22,16 @@ public record NativeScriptRequest(String kind, String operation, String contextI
         parameters = parameters == null ? Map.of() : parameters;
         try {
             ObjectMapper json = new ObjectMapper();
-            String snapshot = ScriptExecution.json(java.util.Arrays.asList(options, args, parameters));
-            List<?> detached = json.readValue(snapshot, List.class);
-            options = Collections.unmodifiableMap((Map<String, Object>) detached.get(0));
-            args = Collections.unmodifiableList((List<Object>) detached.get(1));
-            parameters = Collections.unmodifiableMap((Map<String, Object>) detached.get(2));
+            String optionsJson = ScriptValues.json(options);
+            String argsJson = ScriptValues.json(args);
+            String parametersJson = ScriptValues.json(parameters);
+            int bytes = optionsJson.getBytes(StandardCharsets.UTF_8).length
+                    + argsJson.getBytes(StandardCharsets.UTF_8).length
+                    + parametersJson.getBytes(StandardCharsets.UTF_8).length;
+            if (bytes > 16_384) throw new IllegalArgumentException("native_script_json_limit");
+            options = Collections.unmodifiableMap(json.readValue(optionsJson, Map.class));
+            args = Collections.unmodifiableList(json.readValue(argsJson, List.class));
+            parameters = Collections.unmodifiableMap(json.readValue(parametersJson, Map.class));
         } catch (Exception invalid) { throw new IllegalArgumentException("invalid_native_script_json"); }
         source = source == null ? "" : source;
         if (source.length() > 65_536 || ("start".equals(operation) ? contextId != null : contextId == null)) {

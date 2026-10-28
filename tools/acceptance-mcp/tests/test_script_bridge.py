@@ -18,20 +18,30 @@ HELP_PATH = "/solo/acceptance/v1/script/help"
 CANCEL_PATH = "/solo/acceptance/v1/script/cancel"
 SCRIPT_ARGS = {
     "session_id": "session-script-fixture", "expected_generation": 7,
-    "request_id": "script:fixture-1", "source": "console.log(parameters.label); ({sum: parameters.a + parameters.b})",
-    "parameters": {"label": "脚本协议桩", "a": 3, "b": 4}, "timeout_ms": 1000,
+    "request_id": "script:fixture-1", "kind": "npc", "operation": "start",
+    "context_id": None, "options": {"npc_id": 1032110}, "entry": None, "args": [],
+    "source": "console.log(parameters.label); ({sum: parameters.a + parameters.b})",
+    "parameters": {"label": "原生脚本协议桩", "a": 3, "b": 4}, "timeout_ms": 1000,
+}
+SCRIPT_HELP = {
+    "schema_version": 1, "language": "javascript", "maximum_contexts_per_module": 1,
+    "native_environments": [{"kind": "npc", "globals": ["cm"], "host_object": "NPCConversationManager"}],
+    "contexts": [{"context_id": "native-context-fixture-1", "kind": "npc", "context_state": "OPEN"}],
 }
 
 
-def script_operation(request_id: str, *, status: str = "SUCCEEDED", error: dict | None = None) -> dict:
-    """Only protocol fixture data; no script engine or game result is simulated."""
+def script_operation(request_id: str, *, status: str = "SUCCEEDED", error: dict | None = None,
+                     closed: bool = False) -> dict:
+    """Protocol receipt only; this fixture does not execute a game script or prove engine cleanup."""
     return {
         "schema_version": 1, "operation_id": "operation-script-fixture", "kind": "SCRIPT",
         "request_id": request_id, "session_id": SCRIPT_ARGS["session_id"], "session_generation": 7,
         "runtime_generation": "generation-script-fixture", "status": status,
-        "result": {"value": {"sum": 7, "array": [None, True, "中文"]},
-                   "output": [{"stream": "stdout", "text": "脚本协议桩\n"}],
-                   "engine_exited": True, "context_closed": True, "work_settled": True},
+        "result": {"result": {"sum": 7, "array": [None, True, "中文"]},
+                   "stdout": "原生脚本协议桩\n", "stderr": "", "output_truncated": False,
+                   "context_id": "native-context-fixture-1", "context_state": "CLOSED" if closed else "OPEN",
+                   "engine_exited": True, "context_closed": closed,
+                   "invocation_settled": True, "work_settled": True},
         "error": error,
     }
 
@@ -44,19 +54,19 @@ class ScriptStub(BridgeStub):
 
     def default_response(self, request: dict) -> tuple[int, object]:
         if request["path"] == RUN_PATH:
-            return 200, envelope(script_operation(request["body"]["requestId"],
-                                                  status=self.script_status, error=self.script_error))
+            return 200, envelope(script_operation(request["body"]["requestId"], status=self.script_status,
+                                                  error=self.script_error,
+                                                  closed=request["body"]["data"]["operation"] == "close"))
         if request["path"] == HELP_PATH:
-            names = request["body"]["data"]["names"]
-            return 200, envelope({"schema_version": 1, "language": "javascript", "functions": [],
-                                  "unavailable": list(names)})
+            return 200, envelope(deepcopy(SCRIPT_HELP))
         if request["path"] == CANCEL_PATH:
-            return 200, envelope(script_operation(request["body"]["requestId"], status="CANCELLED"))
+            return 200, envelope(script_operation(request["body"]["data"]["target_request_id"],
+                                                  status="CANCELLED", closed=True))
         return super().default_response(request)
 
 
 class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
-    """HTTP protocol boundary only; real engine termination belongs to isolated acceptance."""
+    """HTTP boundary only; native engine termination is checked separately in isolated acceptance."""
 
     async def asyncSetUp(self) -> None:
         self.stub = ScriptStub().start()
@@ -72,31 +82,32 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
     def requests(self, path: str) -> list[dict]:
         return [request for request in self.stub.requests if request["path"] == path]
 
-    async def test_run_and_empty_help_use_real_authenticated_envelopes_without_local_execution(self) -> None:
+    async def test_native_run_and_help_use_authenticated_flat_envelopes_without_local_execution(self) -> None:
         response = await self.run_script()
         help_result = await self.client.script_help(SCRIPT_ARGS["session_id"], 7)
         self.assertEqual(script_operation(SCRIPT_ARGS["request_id"]), response)
-        self.assertEqual({"schema_version": 1, "language": "javascript", "functions": [], "unavailable": []}, help_result)
+        self.assertEqual(SCRIPT_HELP, help_result)
         request = self.requests(RUN_PATH)[0]
         self.assertEqual({"requestId": SCRIPT_ARGS["request_id"],
                           "data": {key: value for key, value in SCRIPT_ARGS.items() if key != "request_id"}}, request["body"])
+        self.assertNotIn("environment", request["body"]["data"])
         self.assertEqual("Bearer " + TOKEN + "-1", request["headers"]["authorization"])
-        self.assertEqual({"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7, "names": []},
+        self.assertEqual({"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7},
                          self.requests(HELP_PATH)[0]["body"]["data"])
         UUID(self.requests(HELP_PATH)[0]["body"]["requestId"])
         self.assertEqual(1, self.stub.login_count)
         self.assertNotIn(PASSWORD, json.dumps(response))
         self.assertNotIn(TOKEN, json.dumps(response))
 
-    async def test_parameters_and_deadline_defaults_are_explicit_and_help_preserves_unknown_names(self) -> None:
-        await self.client.script_run(SCRIPT_ARGS["session_id"], 7, request_id="script:defaults", source="1 + 2")
+    async def test_source_and_native_request_defaults_are_explicit(self) -> None:
+        await self.client.script_run(SCRIPT_ARGS["session_id"], 7, request_id="script:defaults",
+                                     kind="npc", operation="start")
         self.assertEqual({"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7,
-                          "source": "1 + 2", "parameters": {}, "timeout_ms": 1000}, self.requests(RUN_PATH)[0]["body"]["data"])
-        help_result = await self.client.script_help(SCRIPT_ARGS["session_id"], 7, names=["missing", "module_fn"])
-        self.assertEqual([], help_result["functions"])
-        self.assertEqual(["missing", "module_fn"], help_result["unavailable"])
+                          "kind": "npc", "operation": "start", "context_id": None, "options": {},
+                          "entry": None, "args": [], "source": "", "parameters": {}, "timeout_ms": 1000},
+                         self.requests(RUN_PATH)[0]["body"]["data"])
 
-    async def test_script_errors_and_settlement_flags_are_backend_facts_and_are_forwarded(self) -> None:
+    async def test_script_errors_and_settlement_flags_are_forwarded_as_backend_facts(self) -> None:
         for status, error in [("FAILED", {"kind": "PARSE_ERROR", "line": 2, "column": 3}),
                               ("FAILED", {"kind": "RUNTIME_ERROR", "line": 1, "column": 5}),
                               ("CANCELLED", {"kind": "TIMEOUT"}), ("INDETERMINATE", {"kind": "CLEANUP_UNVERIFIED"})]:
@@ -108,7 +119,7 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_script_data_is_rejected_before_auth_without_echoing_private_values(self) -> None:
         private = PASSWORD + TOKEN + "private-script-input"
-        cases = [{"source": value} for value in [None, False, 1, [], {}, "", "x" * 65537, "\ud800"]]
+        cases = [{"source": value} for value in [None, False, 1, [], {}, "x" * 65537, "\ud800"]]
         cases.extend({"timeout_ms": value} for value in [None, False, 0, 5001, 1.0, "1000", private])
         cases.extend({"parameters": value} for value in [False, 3, [], "string", {"nan": float("nan")},
                                                                {"inf": float("inf")}, {"text": "x" * 65537}])
@@ -120,57 +131,52 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(private, json.dumps(caught.exception.public_data()))
         self.assertEqual([], self.stub.requests)
 
-    async def test_help_names_are_strictly_bounded_before_authentication(self) -> None:
-        for names in [False, "missing", {}, [None], [True], ["bad/name"], [""], ["f"] * 65,
-                      ["module.fn"], ["$function"], ["0function"], ["a" * 65]]:
-            with self.subTest(names=names), self.assertRaises(BridgeError) as caught:
-                await self.client.script_help(SCRIPT_ARGS["session_id"], 7, names=names)
+    async def test_help_validates_only_the_role_target_before_authentication(self) -> None:
+        for session_id, generation in [("bad/session", 7), (None, 7), (SCRIPT_ARGS["session_id"], True),
+                                       (SCRIPT_ARGS["session_id"], 0)]:
+            with self.subTest(session_id=session_id, generation=generation), self.assertRaises(BridgeError) as caught:
+                await self.client.script_help(session_id, generation)
             self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
         self.assertEqual([], self.stub.requests)
 
-    async def test_help_names_accept_exactly_the_runtime_identifier_boundaries(self) -> None:
-        names = ["f", "_", "_function42", "a" * 64]
-        result = await self.client.script_help(SCRIPT_ARGS["session_id"], 7, names=names)
-        self.assertEqual(names, result["unavailable"])
-        self.assertEqual(names, self.requests(HELP_PATH)[0]["body"]["data"]["names"])
-
-    async def test_parameters_accept_16k_utf8_and_depth_16_without_altering_json(self) -> None:
-        unicode_boundary = {"x": "汉" * 5458 + "aa"}
-        ascii_boundary = {"x": "a" * 16376}
+    async def test_shared_native_json_budget_accepts_exact_utf8_and_depth_boundaries(self) -> None:
+        # Empty options and args consume two UTF-8 bytes each in the shared budget.
+        unicode_boundary = {"x": "汉" * 5457 + "a"}
+        ascii_boundary = {"x": "a" * (16384 - len('{"x":""}') - len('{}') - len('[]'))}
         depth_boundary = None
         for _ in range(16):
             depth_boundary = {"nested": depth_boundary}
         for parameters in [unicode_boundary, ascii_boundary, depth_boundary]:
             with self.subTest(kind="depth" if parameters == depth_boundary else "size"):
                 if parameters != depth_boundary:
-                    self.assertEqual(16384, len(json.dumps(parameters, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
-                await self.run_script(parameters=parameters)
+                    self.assertEqual(16384, len(json.dumps(parameters, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 4)
+                await self.run_script(parameters=parameters, options={})
                 self.assertEqual(parameters, self.requests(RUN_PATH)[-1]["body"]["data"]["parameters"])
         self.assertEqual(3, len(self.requests(RUN_PATH)))
 
-    async def test_parameters_over_16k_or_depth_16_are_rejected_before_authentication(self) -> None:
+    async def test_parameters_over_shared_16k_or_depth_16_are_rejected_before_authentication(self) -> None:
         too_deep = None
         for _ in range(17):
             too_deep = {"nested": too_deep}
-        invalid = [{"x": "a" * 16377}, {"x": "汉" * 5458 + "aaa"}, too_deep]
+        invalid = [{"x": "a" * (16384 - len('{"x":""}') - 4 + 1)},
+                   {"x": "汉" * 5457 + "aa"}, too_deep]
         for parameters in invalid:
             with self.subTest(kind="depth" if parameters == too_deep else "size"), self.assertRaises(BridgeError) as caught:
-                await self.run_script(parameters=parameters)
+                await self.run_script(parameters=parameters, options={})
             self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
         self.assertEqual([], self.stub.requests)
 
-    async def test_client_cancellation_waits_for_cancel_response_and_preserves_original_fingerprint(self) -> None:
+    async def test_client_cancellation_waits_for_cleanup_and_preserves_flat_fingerprint(self) -> None:
         run_started, cancel_started, cleanup_complete = Event(), Event(), Event()
 
         def respond(request: dict):
             if request["path"] == RUN_PATH:
                 run_started.set()
                 cleanup_complete.wait(3)
-                return 200, envelope(script_operation(SCRIPT_ARGS["request_id"], status="CANCELLED"))
+                return 200, envelope(script_operation(SCRIPT_ARGS["request_id"], status="CANCELLED", closed=True))
             if request["path"] == CANCEL_PATH:
                 cancel_started.set()
                 cleanup_complete.wait(3)
-                return self.stub.default_response(request)
             return self.stub.default_response(request)
 
         self.stub.responder = respond
@@ -191,7 +197,7 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await asyncio.wait_for(task, 3)
 
-    async def test_transport_failure_does_not_replay_run_and_cleanup_failure_stays_unknown(self) -> None:
+    async def test_transport_failure_does_not_replay_and_cleanup_failure_stays_unknown(self) -> None:
         await self.client.capabilities()
         await self.client._http.aclose()
         attempts: list[httpx.Request] = []
@@ -212,7 +218,7 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PASSWORD, json.dumps(public))
         self.assertNotIn(TOKEN, json.dumps(public))
 
-    async def test_script_http_deadline_includes_execution_and_cleanup_budget(self) -> None:
+    async def test_script_http_budget_includes_execution_and_cleanup(self) -> None:
         await self.client.close()
         self.client = BridgeClient(self.stub.config(timeout=30))
         await self.client.capabilities()

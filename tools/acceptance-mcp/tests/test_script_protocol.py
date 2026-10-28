@@ -8,11 +8,11 @@ import unittest
 
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
-from tests.test_script_bridge import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_ARGS, ScriptStub, script_operation
+from tests.test_script_bridge import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_ARGS, SCRIPT_HELP, ScriptStub, script_operation
 
 
 class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
-    """Official SDK stdio calls against an isolated HTTP protocol fixture."""
+    """Official SDK stdio against an isolated HTTP fixture, with no script engine or game DB."""
 
     stdio_client = chat_protocol.ChatProtocolTests.stdio_client
 
@@ -22,33 +22,38 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
 
-    async def test_stdio_registers_implemented_tools_with_strict_script_schema_and_annotations(self) -> None:
+    async def test_stdio_schema_has_native_fields_only_and_preserves_tool_annotations(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         self.assertEqual(chat_protocol.REGISTERED_TOOLS, set(tools))
         self.assertFalse(tools["script_run"].annotations.read_only_hint)
         self.assertTrue(tools["script_run"].annotations.idempotent_hint)
         self.assertTrue(tools["script_help"].annotations.read_only_hint)
-        run_schema = tools["script_run"].input_schema
-        self.assertIs(False, run_schema["additionalProperties"])
-        self.assertEqual(set(SCRIPT_ARGS) | {"environment"}, set(run_schema["properties"]))
-        self.assertEqual({"session_id", "expected_generation", "request_id", "source"}, set(run_schema["required"]))
-        self.assertEqual((1, 5000), (run_schema["properties"]["timeout_ms"]["minimum"],
-                                    run_schema["properties"]["timeout_ms"]["maximum"]))
+        schema = tools["script_run"].input_schema
+        self.assertIs(False, schema["additionalProperties"])
+        self.assertEqual(set(SCRIPT_ARGS), set(schema["properties"]))
+        self.assertEqual({"session_id", "expected_generation", "request_id", "kind", "operation"}, set(schema["required"]))
+        self.assertEqual("", schema["properties"]["source"]["default"])
+        self.assertNotIn("environment", schema["properties"])
+        self.assertEqual((1, 5000), (schema["properties"]["timeout_ms"]["minimum"],
+                                    schema["properties"]["timeout_ms"]["maximum"]))
         help_schema = tools["script_help"].input_schema
         self.assertIs(False, help_schema["additionalProperties"])
-        self.assertEqual({"session_id", "expected_generation", "names"}, set(help_schema["properties"]))
+        self.assertEqual({"session_id", "expected_generation"}, set(help_schema["properties"]))
         self.assertEqual([], self.stub.requests)
 
-    async def test_real_stdio_calls_return_empty_help_and_serializable_output_without_inventing_functions(self) -> None:
+    async def test_real_stdio_native_output_and_help_are_backend_facts(self) -> None:
         async with self.stdio_client() as client:
             help_result = await client.call_tool("script_help", {"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7})
             run_result = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS))
         self.assertFalse(help_result.is_error)
-        self.assertEqual([], help_result.structured_content["functions"])
-        self.assertEqual([], help_result.structured_content["unavailable"])
+        self.assertEqual(SCRIPT_HELP, help_result.structured_content)
+        self.assertNotIn("functions", help_result.structured_content)
+        self.assertNotIn("unavailable", help_result.structured_content)
         self.assertFalse(run_result.is_error)
         self.assertEqual(script_operation(SCRIPT_ARGS["request_id"]), run_result.structured_content)
+        self.assertFalse(run_result.structured_content["result"]["context_closed"])
+        self.assertTrue(run_result.structured_content["result"]["invocation_settled"])
         self.assertEqual(run_result.structured_content, json.loads(run_result.content[0].text))
         resources = [request for request in self.stub.requests if request["path"] in {HELP_PATH, RUN_PATH}]
         self.assertEqual(2, len(resources))
@@ -72,8 +77,8 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stdio_preserves_emoji_and_safely_replaced_result_error_text(self) -> None:
         operation = script_operation(SCRIPT_ARGS["request_id"])
-        operation["result"]["value"] = {"emoji": "😀🚀", "nested": ["中文🙂"]}
-        operation["result"]["output"] = [{"stream": "stdout", "text": "计算完成 😀\n"}]
+        operation["result"]["result"] = {"emoji": "😀🚀", "nested": ["中文🙂"]}
+        operation["result"]["stdout"] = "计算完成 😀\n"
 
         def respond(request: dict):
             if request["path"] == RUN_PATH:
@@ -87,7 +92,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(operation, response.structured_content)
             self.assertEqual(operation, json.loads(response.content[0].text))
             operation["status"] = "FAILED"
-            operation["result"]["value"] = None
+            operation["result"]["result"] = None
             operation["error"] = {"kind": "RESULT_ERROR", "message": "结果含不可序列化字符 �；原输出 😀 已保留"}
             response = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS))
             self.assertTrue(response.is_error)
@@ -96,22 +101,22 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PASSWORD, response.model_dump_json())
         self.assertNotIn(TOKEN, response.model_dump_json())
 
-    async def test_stdio_rejects_backend_surrogates_safely_and_keeps_cancel_available(self) -> None:
+    async def test_malformed_backend_unicode_or_nonfinite_json_is_safe_and_keeps_cancel_available(self) -> None:
         private = PASSWORD + TOKEN + "private-invalid-backend"
         malformed = []
         for location in ["value", "key", "stdout", "error", "nonfinite"]:
             operation = script_operation(SCRIPT_ARGS["request_id"])
             if location == "value":
-                operation["result"]["value"] = {"text": private + "\ud800"}
+                operation["result"]["result"] = {"text": private + "\ud800"}
             elif location == "key":
-                operation["result"]["value"] = {private + "\udfff": "value"}
+                operation["result"]["result"] = {private + "\udfff": "value"}
             elif location == "stdout":
-                operation["result"]["output"] = [{"stream": "stdout", "text": private + "\ud800"}]
+                operation["result"]["stdout"] = private + "\ud800"
             elif location == "error":
                 operation["status"] = "FAILED"
                 operation["error"] = {"kind": "RESULT_ERROR", "message": private + "\udfff"}
             else:
-                operation["result"]["value"] = {"number": float("nan")}
+                operation["result"]["result"] = {"number": float("nan")}
             malformed.append(operation)
         current = malformed[0]
 
@@ -140,31 +145,27 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(malformed), len(cancels))
         self.assertTrue(all(request["body"]["data"]["target_request_id"] == SCRIPT_ARGS["request_id"] for request in cancels))
 
-    async def test_unknown_help_names_remain_unavailable_without_fabricating_a_binding(self) -> None:
-        async with self.stdio_client() as client:
-            response = await client.call_tool("script_help", {"session_id": SCRIPT_ARGS["session_id"],
-                                                              "expected_generation": 7, "names": ["move", "attack"]})
-        self.assertFalse(response.is_error)
-        self.assertEqual([], response.structured_content["functions"])
-        self.assertEqual(["move", "attack"], response.structured_content["unavailable"])
-
-    async def test_invalid_raw_script_arguments_fail_before_auth_without_exposing_source(self) -> None:
+    async def test_pure_calls_old_environment_and_invalid_raw_native_arguments_fail_before_auth(self) -> None:
         private = PASSWORD + TOKEN + "private-script-input"
         cases = [
             {**SCRIPT_ARGS, "unexpected": private},
-            {**SCRIPT_ARGS, "character_id": private},
+            {**SCRIPT_ARGS, "environment": None},
+            {**SCRIPT_ARGS, "environment": {"kind": "npc", "operation": "start", "private": private}},
+            {"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7, "request_id": "old-pure", "source": "1+2"},
             {**SCRIPT_ARGS, "source": {"private": private}},
-            {**SCRIPT_ARGS, "source": ""},
+            {**SCRIPT_ARGS, "source": None},
             {**SCRIPT_ARGS, "source": "x" * 65537},
             {**SCRIPT_ARGS, "timeout_ms": True},
             {**SCRIPT_ARGS, "timeout_ms": 0},
             {**SCRIPT_ARGS, "timeout_ms": 5001},
             {**SCRIPT_ARGS, "timeout_ms": "1000"},
             {**SCRIPT_ARGS, "parameters": [private]},
+            {**SCRIPT_ARGS, "options": None},
+            {**SCRIPT_ARGS, "args": None},
             {**SCRIPT_ARGS, "expected_generation": False},
         ]
         cases.extend({key: value for key, value in SCRIPT_ARGS.items() if key != missing}
-                     for missing in ["session_id", "expected_generation", "request_id", "source"])
+                     for missing in ["session_id", "expected_generation", "request_id", "kind", "operation"])
         async with self.stdio_client() as client:
             for index, arguments in enumerate(cases):
                 with self.subTest(case=index):
@@ -174,14 +175,12 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(private, response.model_dump_json())
         self.assertEqual([], self.stub.requests)
 
-    async def test_invalid_help_raw_arguments_do_not_reach_the_backend_or_echo_private_values(self) -> None:
+    async def test_help_rejects_retired_names_and_extra_fields_before_auth(self) -> None:
         private = PASSWORD + TOKEN
         base = {"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7}
-        cases = [{**base, "unexpected": private}, {**base, "names": private},
-                 {**base, "names": ["bad/name"]}, {**base, "names": [False]},
-                 {**base, "names": ["missing"] * 65}, {**base, "expected_generation": True},
-                 {**base, "names": ["module.fn"]}, {**base, "names": ["$function"]},
-                 {**base, "names": ["0function"]}, {**base, "names": ["a" * 65]}]
+        cases = [{**base, "unexpected": private}, {**base, "names": []}, {**base, "names": private},
+                 {**base, "names": ["move"]}, {**base, "expected_generation": True},
+                 {"session_id": SCRIPT_ARGS["session_id"]}]
         async with self.stdio_client() as client:
             for index, arguments in enumerate(cases):
                 with self.subTest(case=index):
@@ -191,8 +190,8 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(private, response.model_dump_json())
         self.assertEqual([], self.stub.requests)
 
-    async def test_stdio_parameters_respect_16k_utf8_and_depth_16_at_the_protocol_boundary(self) -> None:
-        boundary = {"text": "a" * (16384 - len('{"text":""}'))}
+    async def test_stdio_json_budget_includes_options_and_args_without_extra_depth(self) -> None:
+        boundary = {"text": "a" * (16384 - len('{"text":""}') - len('{}') - len('[]'))}
         too_large = {"text": boundary["text"] + "a"}
         depth_boundary = None
         for _ in range(16):
@@ -200,22 +199,22 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         too_deep = {"nested": depth_boundary}
         async with self.stdio_client() as client:
             for parameters in [boundary, depth_boundary]:
-                response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": parameters})
+                response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": parameters, "options": {}})
                 self.assertFalse(response.is_error)
             for parameters in [too_large, too_deep]:
-                response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": parameters})
+                response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": parameters, "options": {}})
                 self.assertTrue(response.is_error)
                 self.assertEqual("INVALID_ARGUMENTS", response.structured_content["error"]["code"])
         self.assertEqual(2, len([request for request in self.stub.requests if request["path"] == RUN_PATH]))
 
-    async def test_official_sdk_cancellation_reaches_an_independent_http_cancel_request(self) -> None:
+    async def test_official_sdk_cancel_reaches_independent_http_cancel(self) -> None:
         run_started, cancel_started, cleanup_complete = Event(), Event(), Event()
 
         def respond(request: dict):
             if request["path"] == RUN_PATH:
                 run_started.set()
                 cleanup_complete.wait(3)
-                return 200, envelope(script_operation(SCRIPT_ARGS["request_id"], status="CANCELLED"))
+                return 200, envelope(script_operation(SCRIPT_ARGS["request_id"], status="CANCELLED", closed=True))
             if request["path"] == CANCEL_PATH:
                 cancel_started.set()
                 cleanup_complete.wait(3)
@@ -229,7 +228,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
-                self.assertTrue(await asyncio.to_thread(cancel_started.wait, 2), "SDK取消必须贯通到后端，而非仅取消本地等待。")
+                self.assertTrue(await asyncio.to_thread(cancel_started.wait, 2), "SDK取消必须贯通后端，不能仅取消本地等待。")
                 cancel_requests = [request for request in self.stub.requests if request["path"] == CANCEL_PATH]
                 self.assertEqual(1, len(cancel_requests))
                 self.assertEqual(SCRIPT_ARGS["request_id"], cancel_requests[0]["body"]["data"]["target_request_id"])

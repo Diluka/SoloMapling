@@ -25,8 +25,6 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
-import soloMapling.game.script.ScriptExecution;
-import soloMapling.game.script.ScriptRequest;
 import soloMapling.game.script.ScriptResult;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -444,10 +442,6 @@ public final class ActorControlService {
         validateOwner(owner);
         if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
         validateScriptSession(request.sessionId(), request.expectedGeneration());
-        if (request.names().size() > 64 || request.names().stream()
-                .anyMatch(name -> name == null || !name.matches("[A-Za-z_][A-Za-z0-9_]{0,63}"))) {
-            throw error(HttpStatus.BAD_REQUEST, "invalid_script_function_names");
-        }
         Session session;
         NativeActorHandle handle;
         synchronized (monitor) {
@@ -457,10 +451,11 @@ public final class ActorControlService {
             handle = session.handle;
         }
         if (!backend.isCurrent(handle)) throw error(HttpStatus.GONE, "stale_actor_session");
-        Map<String, Object> help = session.execution.scriptHelp(request.names());
+        Map<String, Object> help = session.execution.scriptHelp();
         synchronized (monitor) { requireActionSession(session, handle); }
         Map<String, Object> result = new LinkedHashMap<>(help);
         result.put("schema_version", 1);
+        result.put("language", "javascript");
         result.put("native_environments", backend.nativeScriptEnvironments());
         result.put("contexts", session.execution.nativeScriptContexts());
         return result;
@@ -471,10 +466,10 @@ public final class ActorControlService {
                                                   boolean cancel) {
         validateOwner(owner);
         validateRequestId(requestId);
-        ValidatedScript script = validatedScript(request);
+        NativeScriptRequest script = validatedScript(request);
         ScriptFingerprint fingerprint = new ScriptFingerprint(request.expectedGeneration(),
                 textDigest(script.source()), scriptParameterDigest(script.parameters()), script.timeoutMs(),
-                script.environmentDigest());
+                scriptInvocationDigest(script));
         RequestKey key = new RequestKey("SCRIPT", owner, request.sessionId(), requestId);
         Operation prior;
         Session session;
@@ -485,19 +480,12 @@ public final class ActorControlService {
         if (prior == null) {
             synchronized (session.submissionMonitor) {
                 if (!cancel) {
-                    if (script.nativeRequest() == null && !session.execution.nativeScriptContexts().isEmpty()) {
-                        synchronized (monitor) {
-                            prior = duplicate(key, fingerprint);
-                            if (prior == null) throw error(HttpStatus.CONFLICT, "native_script_context_active");
-                        }
-                    } else if (script.nativeRequest() != null) {
-                        synchronized (monitor) {
-                            prior = duplicate(key, fingerprint);
-                            if (prior == null && operations.values().stream().anyMatch(operation -> operation.session == session
-                                    && ("ACTION".equals(operation.kind) || "SCRIPT".equals(operation.kind))
-                                    && operation.work != null && !operation.work.isSettled())) {
-                                throw error(HttpStatus.CONFLICT, "actor_work_in_flight");
-                            }
+                    synchronized (monitor) {
+                        prior = duplicate(key, fingerprint);
+                        if (prior == null && operations.values().stream().anyMatch(operation -> operation.session == session
+                                && ("ACTION".equals(operation.kind) || "SCRIPT".equals(operation.kind))
+                                && operation.work != null && !operation.work.isSettled())) {
+                            throw error(HttpStatus.CONFLICT, "actor_work_in_flight");
                         }
                     }
                 }
@@ -505,9 +493,6 @@ public final class ActorControlService {
                 synchronized (monitor) {
                     prior = duplicate(key, fingerprint);
                     if (prior == null) {
-                        if (!cancel && script.nativeRequest() == null && nativeScriptInFlight(session)) {
-                            throw error(HttpStatus.CONFLICT, "native_script_context_active");
-                        }
                         requireAccepting();
                         requireActionSession(session, null);
                         if (operations.size() + reservedFirstCloses() + 1 > maxHistory
@@ -515,8 +500,7 @@ public final class ActorControlService {
                             throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
                         }
                         accepted = operation("SCRIPT", session);
-                        accepted.nativeScriptInvocation = script.nativeRequest() != null;
-                        accepted.nativeScriptOperation = script.nativeRequest() == null ? null : script.nativeRequest().operation();
+                        accepted.nativeScriptOperation = script.operation();
                         requests.put(key, new RequestRecord(fingerprint, accepted.id));
                         if (cancel) requestCancellation(accepted);
                     } else accepted = null;
@@ -527,9 +511,7 @@ public final class ActorControlService {
                         // There was no carrier and no Context. A later run sees this exact checkpoint.
                         accepted.work.reject();
                         scriptNotStarted(accepted, "CANCELLED", null);
-                    } else if (script.nativeRequest() == null) {
-                        startScript(accepted, new ScriptRequest(script.source(), script.parameters(), script.timeoutMs()));
-                    } else startNativeScript(accepted, script.nativeRequest());
+                    } else startNativeScript(accepted, script);
                 }
             }
         }
@@ -543,65 +525,8 @@ public final class ActorControlService {
 
     /** Reads the existing operation/work association; this is no second execution ledger. */
     private boolean nativeScriptInFlight(Session session) {
-        return operations.values().stream().anyMatch(operation -> operation.session == session && operation.nativeScriptInvocation
+        return operations.values().stream().anyMatch(operation -> operation.session == session && "SCRIPT".equals(operation.kind)
                 && operation.work != null && !operation.work.isSettled());
-    }
-
-    private void startScript(Operation operation, ScriptRequest request) {
-        ExecutionScope.WorkHandle exact = operation.work;
-        try {
-            ScriptExecution execution = operation.session.execution.runScript(exact, request);
-            synchronized (monitor) {
-                operation.scriptExecution = execution;
-                if (operation.cancelRequested) execution.cancel();
-                else running(operation, "script_execution_started");
-            }
-            execution.completion().whenComplete((result, failure) -> scriptCompleted(operation, result, failure));
-        } catch (Throwable failure) {
-            if (!exact.snapshot().carrierClaimed()) {
-                exact.reject();
-                scriptNotStarted(operation, exact.cancelRequested() ? "CANCELLED" : "RUNTIME_ERROR",
-                        exact.cancelRequested() ? null : safeReason(failure, "script_execution_rejected"));
-            } else {
-                // A claimed carrier is real debt even if submission could not return its handle.
-                synchronized (monitor) {
-                    requestCancellation(operation);
-                    operation.error = Map.of("reason", "script_cleanup_unverified");
-                    finish(operation, "INDETERMINATE", "script_cleanup_unverified");
-                }
-            }
-        }
-    }
-
-    private void scriptCompleted(Operation operation, ScriptResult script, Throwable failure) {
-        operation.session.execution.refresh();
-        synchronized (monitor) {
-            if (failure != null || script == null) {
-                operation.error = Map.of("reason", "script_cleanup_unverified");
-                finish(operation, "INDETERMINATE", "script_cleanup_unverified");
-                return;
-            }
-            operation.result = script.toMap();
-            boolean verified = script.engineExited() && script.contextClosed() && script.workSettled();
-            String status = script.status().name();
-            if (!"SUCCEEDED".equals(status)) {
-                Map<String, Object> problem = new LinkedHashMap<>();
-                problem.put("reason", "script_" + status.toLowerCase(java.util.Locale.ROOT));
-                if (script.error() != null) {
-                    problem.put("message", script.error().message());
-                    problem.put("line", script.error().line());
-                    problem.put("column", script.error().column());
-                }
-                operation.error = java.util.Collections.unmodifiableMap(problem);
-            }
-            if (verified) {
-                operation.scriptExecution = null;
-                operation.moduleContext = null;
-                operation.work = null;
-            }
-            finish(operation, !verified ? "INDETERMINATE" : "SUCCEEDED".equals(status) ? "SUCCEEDED"
-                    : "CANCELLED".equals(status) ? "CANCELLED" : "FAILED", "script_" + status.toLowerCase(java.util.Locale.ROOT));
-        }
     }
 
     private void startNativeScript(Operation operation, NativeScriptRequest request) {
@@ -671,10 +596,8 @@ public final class ActorControlService {
         result.put("error", reason == null ? null : Map.of("message", reason));
         result.put("engine_started", false); result.put("engine_exited", true);
         result.put("context_closed", true); result.put("work_settled", operation.work.isSettled());
-        if (operation.nativeScriptInvocation) {
-            result.put("invocation_settled", operation.work.isSettled());
-            result.put("context_state", "NOT_STARTED");
-        }
+        result.put("invocation_settled", operation.work.isSettled());
+        result.put("context_state", "NOT_STARTED");
         operation.session.execution.refresh();
         synchronized (monitor) {
             operation.result = java.util.Collections.unmodifiableMap(result);
@@ -710,51 +633,50 @@ public final class ActorControlService {
         synchronized (monitor) { return response(operation, 0, 100); }
     }
 
-    private static ValidatedScript validatedScript(ActorScriptRequest request) {
+    private static NativeScriptRequest validatedScript(ActorScriptRequest request) {
         if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
         validateScriptSession(request.sessionId(), request.expectedGeneration());
-        boolean nativeRequest = request.environment() != null;
-        String source = request.source() == null && nativeRequest ? "" : request.source();
-        if (source == null || !nativeRequest && source.isBlank() || source.length() > 65536
-                || request.timeoutMs() < 1 || request.timeoutMs() > 5000) {
+        String source = request.source();
+        if (source == null || source.length() > 65536 || request.timeoutMs() < 1 || request.timeoutMs() > 5000
+                || !validScriptUnicode(source)) {
             throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
         }
-        if (!validScriptUnicode(source)) throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
-        ActorScriptEnvironment environment = request.environment();
+        if (request.kind() == null || !List.of("npc", "quest", "portal", "reactor", "event").contains(request.kind())
+                || request.operation() == null || !List.of("start", "invoke", "close").contains(request.operation())) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_request");
+        }
         try {
             String parametersJson = scriptJson(request.parameters());
-            @SuppressWarnings("unchecked")
-            Map<String, Object> detachedParameters = SCRIPT_JSON.readValue(parametersJson, Map.class);
-            if (!nativeRequest) return new ValidatedScript(source, detachedParameters, request.timeoutMs(), null, null);
-            if (environment.kind() == null || !List.of("npc", "quest", "portal", "reactor", "event").contains(environment.kind())
-                    || environment.operation() == null || !List.of("start", "invoke", "close").contains(environment.operation())) {
-                throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_request");
-            }
-            String optionsJson = scriptJson(environment.options());
-            String argsJson = scriptJson(environment.args());
+            String optionsJson = scriptJson(request.options());
+            String argsJson = scriptJson(request.args());
             if (parametersJson.getBytes(StandardCharsets.UTF_8).length + optionsJson.getBytes(StandardCharsets.UTF_8).length
                     + argsJson.getBytes(StandardCharsets.UTF_8).length > 16384) {
                 throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
             }
             @SuppressWarnings("unchecked")
+            Map<String, Object> detachedParameters = SCRIPT_JSON.readValue(parametersJson, Map.class);
+            @SuppressWarnings("unchecked")
             Map<String, Object> detachedOptions = SCRIPT_JSON.readValue(optionsJson, Map.class);
             @SuppressWarnings("unchecked")
             List<Object> detachedArgs = SCRIPT_JSON.readValue(argsJson, List.class);
-            NativeScriptRequest nativeScript = new NativeScriptRequest(environment.kind(), environment.operation(),
-                    environment.contextId(), detachedOptions, environment.entry(), detachedArgs, source,
-                    detachedParameters, request.timeoutMs());
-            if (environment.contextId() != null && !environment.contextId().matches("[A-Za-z0-9_.-]{1,128}")) {
+            if (request.contextId() != null && !request.contextId().matches("[A-Za-z0-9_.-]{1,128}")) {
                 throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_context");
             }
-            Map<String, Object> fingerprint = new LinkedHashMap<>();
-            fingerprint.put("kind", environment.kind()); fingerprint.put("operation", environment.operation());
-            fingerprint.put("context_id", environment.contextId()); fingerprint.put("options", detachedOptions);
-            fingerprint.put("entry", environment.entry()); fingerprint.put("args", detachedArgs);
-            return new ValidatedScript(source, detachedParameters, request.timeoutMs(), nativeScript,
-                    textDigest(SCRIPT_JSON.writeValueAsString(fingerprint)));
+            return new NativeScriptRequest(request.kind(), request.operation(), request.contextId(),
+                    detachedOptions, request.entry(), detachedArgs, source, detachedParameters, request.timeoutMs());
         } catch (JsonProcessingException | IllegalArgumentException invalid) {
             throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_request");
         }
+    }
+
+    /** Hash only detached invocation data; the operation history never retains script bodies or native objects. */
+    private static String scriptInvocationDigest(NativeScriptRequest script) {
+        Map<String, Object> invocation = new LinkedHashMap<>();
+        invocation.put("kind", script.kind()); invocation.put("operation", script.operation());
+        invocation.put("context_id", script.contextId()); invocation.put("options", script.options());
+        invocation.put("entry", script.entry()); invocation.put("args", script.args());
+        try { return textDigest(SCRIPT_JSON.writeValueAsString(invocation)); }
+        catch (JsonProcessingException invalid) { throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_request"); }
     }
 
     private static void validateScriptSession(String sessionId, Long generation) {
@@ -956,7 +878,7 @@ public final class ActorControlService {
                     "script_run", "script_help"));
             result.put("script_execution", Map.of("language", "javascript", "minimum_timeout_ms", 1,
                     "maximum_timeout_ms", 5000, "default_timeout_ms", 1000, "maximum_source_characters", 65536,
-                    "maximum_parameters_bytes", 16384, "game_functions", List.of(), "execution_owner", "character_runtime"));
+                    "maximum_parameters_bytes", 16384, "execution_owner", "character_runtime"));
             result.put("native_environments", backend.nativeScriptEnvironments());
             result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
                     "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip"));
@@ -1937,7 +1859,6 @@ public final class ActorControlService {
 
     private void requestCancellation(Operation operation) {
         operation.session.execution.cancel(operation.work);
-        if (operation.scriptExecution != null) operation.scriptExecution.cancel();
         if (operation.nativeScriptExecution != null) operation.nativeScriptExecution.cancel();
         operation.cancelRequested = true;
         operation.status = "CANCEL_REQUESTED";
@@ -2112,9 +2033,7 @@ public final class ActorControlService {
     private record RequestKey(String kind, String owner, String target, String requestId) { }
     private record RequestRecord(Object fingerprint, String operationId) { }
     private record ScriptFingerprint(long generation, String sourceDigest, String parametersDigest, long timeoutMs,
-                                     String environmentDigest) { }
-    private record ValidatedScript(String source, Map<String, Object> parameters, long timeoutMs,
-                                   NativeScriptRequest nativeRequest, String environmentDigest) { }
+                                     String invocationDigest) { }
     private record ActionFingerprint(long generation, String action, String textHash, Long dialogueVersion,
                                      String replyKind, Integer selection, String inventoryType, Integer sourceSlot,
                                      Integer targetSlot, String direction, Integer durationMs, Integer targetOid,
@@ -2162,9 +2081,7 @@ public final class ActorControlService {
         ExecutionScope.WorkHandle work;
         NativeActionService.ActionHandle chatAction;
         NativeInventoryActions.MoveHandle inventoryAction;
-        ScriptExecution scriptExecution;
         NativeScriptExecution nativeScriptExecution;
-        boolean nativeScriptInvocation;
         String nativeScriptOperation;
         NativeBasicActions.Handle basicAction;
         CharacterRuntime.ModuleContext moduleContext;

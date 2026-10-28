@@ -15,8 +15,6 @@ import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeEvents;
-import soloMapling.game.script.ScriptExecution;
-import soloMapling.game.script.ScriptRequest;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
 
@@ -144,13 +142,8 @@ final class AcceptanceActorExecution {
         requireModule().recordResult(work, result);
     }
 
-    ScriptExecution runScript(ExecutionScope.WorkHandle work, ScriptRequest request) {
-        try { return requireModule().runScript(work, request); }
-        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
-    }
-
-    Map<String, Object> scriptHelp(List<String> names) {
-        try { return requireModule().scriptHelp(names); }
+    Map<String, Object> scriptHelp() {
+        try { return requireModule().scriptHelp(); }
         catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
     }
 

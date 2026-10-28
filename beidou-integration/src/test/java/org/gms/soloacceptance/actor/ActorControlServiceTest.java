@@ -3141,76 +3141,24 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void scriptsReturnDetachedValuesAndOutputAndReuseTheOriginalIdWithoutNewWork() throws Exception {
-        ActorControlService service = service(4, 20, 64);
-        var opened = open(service, "script-open");
-        executors.getFirst().runNext();
-        var request = new ActorScriptRequest(sessionId(opened), generation(opened),
-                "console.log('计算', parameters.left); ({sum: parameters.left + parameters.right})",
-                Map.of("left", 17, "right", 25), 5000L);
-        var first = service.scriptRun("admin", "script-value", request);
-        assertEquals("SCRIPT", first.get("kind"));
-        assertEquals("SUCCEEDED", first.get("status"));
-        assertEquals(42, ((Number) ((Map<?, ?>) result(first).get("result")).get("sum")).intValue());
-        assertTrue(((String) result(first).get("stdout")).contains("计算 17"));
-        assertTrue((Boolean) result(first).get("engine_exited"));
-        assertTrue((Boolean) result(first).get("context_closed"));
-        assertTrue((Boolean) result(first).get("work_settled"));
-        assertNull(operationWork(service, first));
-        assertEquals(0, execution(service, opened).runtime().snapshot().lane().pending());
-        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
-        int history = ((Number) service.publicCapabilities().get("operation_history_size")).intValue();
-        var repeated = service.scriptRun("admin", "script-value", request);
-        assertEquals(id(first), id(repeated));
-        assertEquals(result(first), result(repeated));
-        assertEquals(history, service.publicCapabilities().get("operation_history_size"));
-        ObservationException changed = assertThrows(ObservationException.class, () -> service.scriptRun("admin", "script-value",
-                new ActorScriptRequest(sessionId(opened), generation(opened), request.source(),
-                        Map.of("left", 18, "right", 25), 5000L)));
-        assertEquals(HttpStatus.CONFLICT, changed.status());
-        assertEquals("request_id_conflict", changed.reason());
-    }
-
-    @Test
-    void scriptHelpUsesAnEmptyActualRegistryAndRequiresTheOwnedCurrentRole() {
+    void scriptHelpOnlyDescribesTheActualNativeBindingsAndRequiresTheOwnedCurrentRole() {
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "script-help-open");
         executors.getFirst().runNext();
-        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of()));
+        var descriptors = List.<Map<String, Object>>of(Map.of("kind", "npc", "globals", List.of("cm")));
+        when(backend.nativeScriptEnvironments()).thenReturn(descriptors);
+        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened)));
         assertEquals("javascript", help.get("language"));
-        assertEquals(List.of(), help.get("functions"));
-        assertEquals(List.of(), help.get("unavailable"));
-        assertEquals(List.of("move"), service.scriptHelp("admin",
-                new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of("move"))).get("unavailable"));
+        assertEquals(descriptors, help.get("native_environments"));
+        assertEquals(List.of(), help.get("contexts"));
+        assertEquals(1, help.get("maximum_contexts_per_module"));
+        assertFalse(help.containsKey("functions"));
+        assertFalse(help.containsKey("unavailable"));
         assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class, () -> service.scriptHelp("other-admin",
-                new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of()))).status());
+                new ActorScriptHelpRequest(sessionId(opened), generation(opened)))).status());
         assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class, () -> service.scriptHelp("admin",
-                new ActorScriptHelpRequest(sessionId(opened), generation(opened) + 1, List.of()))).status());
+                new ActorScriptHelpRequest(sessionId(opened), generation(opened) + 1))).status());
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
-    }
-
-    @Test
-    void aCancellationReceivedBeforeRunCreatesOneSettledCheckpointAndNeverEvaluatesTheSource() throws Exception {
-        ActorControlService service = service(4, 20, 64);
-        var opened = open(service, "script-early-cancel-open");
-        executors.getFirst().runNext();
-        String source = "throw new Error('this source must never execute')";
-        var cancel = new ActorScriptCancelRequest(sessionId(opened), generation(opened), "script-late-run",
-                source, Map.of("marker", 4), 5000L);
-        var cancelled = service.scriptCancel("admin", "early-cancel", cancel);
-        assertEquals("CANCELLED", cancelled.get("status"));
-        assertEquals(false, result(cancelled).get("engine_started"));
-        assertEquals(true, result(cancelled).get("work_settled"));
-        assertNull(operationWork(service, cancelled));
-        var late = service.scriptRun("admin", "script-late-run",
-                new ActorScriptRequest(sessionId(opened), generation(opened), source, Map.of("marker", 4), 5000L));
-        assertEquals(id(cancelled), id(late));
-        assertEquals("CANCELLED", late.get("status"));
-        assertEquals("", result(late).get("stdout"));
-        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
-        assertEquals(HttpStatus.CONFLICT, assertThrows(ObservationException.class,
-                () -> service.scriptRun("admin", "script-late-run",
-                        new ActorScriptRequest(sessionId(opened), generation(opened), "123", Map.of("marker", 4), 5000L))).status());
     }
 
     @Test
@@ -3225,14 +3173,15 @@ class ActorControlServiceTest {
                 Map.of("infinite", Double.POSITIVE_INFINITY), Map.of("deep", nested), cycle,
                 Map.of("native", handle), Map.of("text", "\ud800"), Map.of("\ud800", 1))) {
             assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "invalid-script",
-                    new ActorScriptRequest(sessionId(opened), generation(opened), "1", parameters, 1000L))).status());
+                    scriptRequest(sessionId(opened), generation(opened), "1", parameters, 1000L, new ScriptBinding("npc", "start", null, Map.of(), null, List.of())))).status());
         }
-        for (String source : List.of(" ", "x".repeat(65537), "\ud800", "\udc00")) {
+        for (String source : List.of("x".repeat(65537), "\ud800", "\udc00")) {
             assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "invalid-script",
-                    new ActorScriptRequest(sessionId(opened), generation(opened), source, Map.of(), 1000L))).status());
+                    scriptRequest(sessionId(opened), generation(opened), source, Map.of(), 1000L, new ScriptBinding("npc", "start", null, Map.of(), null, List.of())))).status());
         }
         assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class,
-                () -> service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of("a".repeat(65))))).status());
+                () -> service.scriptRun("admin", "standalone-source-without-native-context", new ActorScriptRequest(
+                        sessionId(opened), generation(opened), null, null, null, Map.of(), null, List.of(), "42", Map.of(), 1000L))).status());
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
         assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
     }
@@ -3242,10 +3191,11 @@ class ActorControlServiceTest {
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "script-errors-open");
         executors.getFirst().runNext();
+        prepareNativeAdapter();
         for (var sample : Map.of("parse", "const = ;", "runtime", "throw new Error('失败')", "deadline", "while (true) {}" ).entrySet()) {
             long deadline = "deadline".equals(sample.getKey()) ? 100L : 5000L;
             var outcome = service.scriptRun("admin", "script-error-" + sample.getKey(),
-                    new ActorScriptRequest(sessionId(opened), generation(opened), sample.getValue(), Map.of(), deadline));
+                    scriptRequest(sessionId(opened), generation(opened), sample.getValue(), Map.of(), deadline, new ScriptBinding("npc", "start", null, Map.of(), null, List.of())));
             assertEquals("FAILED", outcome.get("status"));
             assertEquals(switch (sample.getKey()) {
                 case "parse" -> "PARSE_ERROR";
@@ -3263,38 +3213,20 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void anInfiniteScriptLeavesTheCommandLaneFreeAndExplicitCancellationReallySettlesItsOriginalWork() throws Exception {
-        ActorControlService service = service(4, 20, 64);
-        var opened = open(service, "script-running-open");
-        executors.getFirst().runNext();
-        var request = new ActorScriptRequest(sessionId(opened), generation(opened), "while (true) {}", Map.of(), 5000L);
-        var running = CompletableFuture.supplyAsync(() -> service.scriptRun("admin", "script-running", request));
-        awaitScriptBody(execution(service, opened));
-        assertEquals(0, execution(service, opened).runtime().snapshot().lane().pending());
-        var cancelled = service.scriptCancel("admin", "script-running-cancel",
-                new ActorScriptCancelRequest(sessionId(opened), generation(opened), "script-running",
-                        request.source(), request.parameters(), request.timeoutMs()));
-        assertEquals("CANCELLED", cancelled.get("status"));
-        assertEquals(true, result(cancelled).get("engine_exited"));
-        assertEquals(true, result(cancelled).get("context_closed"));
-        assertEquals(true, result(cancelled).get("work_settled"));
-        assertEquals(id(cancelled), id(running.get(5, TimeUnit.SECONDS)));
-        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
-        assertEquals(0, execution(service, opened).moduleScope().snapshot().runningBodies());
-        assertEquals(0, execution(service, opened).moduleScope().snapshot().pendingCarriers());
-    }
-
-    @Test
-    void rootCloseWaitsForInfiniteScriptExitBeforeNativeReleaseAndKeepsItsHistoryReservation() throws Exception {
+    void rootCloseWaitsForNativeLoopExitBeforeNativeReleaseAndKeepsItsHistoryReservation() throws Exception {
         ActorControlService service = service(4, 3, 64);
         var opened = open(service, "script-closing-open");
         executors.getFirst().runNext();
         AcceptanceActorExecution execution = execution(service, opened);
+        TransportNativeAdapter adapter = prepareNativeAdapter();
         var running = CompletableFuture.supplyAsync(() -> service.scriptRun("admin", "script-closing",
-                new ActorScriptRequest(sessionId(opened), generation(opened), "while (true) {}", Map.of(), 5000L)));
+                scriptRequest(sessionId(opened), generation(opened), "entered(); while (true) {}", Map.of(), 5000L,
+                        new ScriptBinding("npc", "start", null, Map.of(), null, List.of()))));
+        assertTrue(adapter.entered.await(5, TimeUnit.SECONDS), "native_guest_loop_must_really_enter_before_root_close");
         awaitScriptBody(execution);
-        assertEquals(HttpStatus.TOO_MANY_REQUESTS, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "too-many-scripts",
-                new ActorScriptRequest(sessionId(opened), generation(opened), "1", Map.of(), 5000L))).status());
+        assertEquals("actor_work_in_flight", assertThrows(ObservationException.class, () -> service.scriptRun("admin", "too-many-scripts",
+                scriptRequest(sessionId(opened), generation(opened), "1", Map.of(), 5000L,
+                        new ScriptBinding("npc", "start", null, Map.of(), null, List.of())))).reason());
         when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
             assertEquals(0, execution.moduleScope().snapshot().acceptedWork());
             assertEquals(0, execution.moduleScope().snapshot().runningBodies());
@@ -3321,9 +3253,9 @@ class ActorControlServiceTest {
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "native-cancel-open");
         executors.getFirst().runNext();
-        var environment = new ActorScriptEnvironment("npc", "start", null, Map.of("npc_id", 9010000), null, List.of());
-        var request = new ActorScriptRequest(sessionId(opened), generation(opened), "", Map.of(), 1000L, environment);
-        var cancelled = service.scriptCancel("admin", "native-early-cancel", new ActorScriptCancelRequest(
+        var environment = new ScriptBinding("npc", "start", null, Map.of("npc_id", 9010000), null, List.of());
+        var request = scriptRequest(sessionId(opened), generation(opened), "", Map.of(), 1000L, environment);
+        var cancelled = service.scriptCancel("admin", "native-early-cancel", scriptCancelRequest(
                 sessionId(opened), generation(opened), "native-late-start", request.source(), request.parameters(),
                 request.timeoutMs(), environment));
         assertEquals("CANCELLED", cancelled.get("status"));
@@ -3335,11 +3267,11 @@ class ActorControlServiceTest {
         assertNull(operationWork(service, cancelled));
         assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
         for (var changed : List.of(
-                new ActorScriptEnvironment("quest", "start", null, environment.options(), null, List.of()),
-                new ActorScriptEnvironment("npc", "start", null, Map.of("npc_id", 9010001), null, List.of()),
-                new ActorScriptEnvironment("npc", "invoke", "context-1", Map.of(), "reply", List.of(1, 0, 2)))) {
+                new ScriptBinding("quest", "start", null, environment.options(), null, List.of()),
+                new ScriptBinding("npc", "start", null, Map.of("npc_id", 9010001), null, List.of()),
+                new ScriptBinding("npc", "invoke", "context-1", Map.of(), "reply", List.of(1, 0, 2)))) {
             assertEquals(HttpStatus.CONFLICT, assertThrows(ObservationException.class,
-                    () -> service.scriptRun("admin", "native-late-start", new ActorScriptRequest(sessionId(opened),
+                    () -> service.scriptRun("admin", "native-late-start", scriptRequest(sessionId(opened),
                             generation(opened), "", Map.of(), 1000L, changed))).status());
         }
     }
@@ -3350,29 +3282,29 @@ class ActorControlServiceTest {
         var opened = open(service, "native-validation-open");
         executors.getFirst().runNext();
         var invalid = List.of(
-                new ActorScriptEnvironment("unknown", "start", null, Map.of(), null, List.of()),
-                new ActorScriptEnvironment("npc", "unknown", null, Map.of(), null, List.of()),
-                new ActorScriptEnvironment(null, "start", null, Map.of(), null, List.of()),
-                new ActorScriptEnvironment("npc", null, null, Map.of(), null, List.of()),
-                new ActorScriptEnvironment("npc", "start", "unexpected-context", Map.of(), null, List.of()),
-                new ActorScriptEnvironment("npc", "invoke", null, Map.of(), "reply", List.of()),
-                new ActorScriptEnvironment("npc", "invoke", "bad/context", Map.of(), "reply", List.of()),
-                new ActorScriptEnvironment("npc", "invoke", "context", Map.of(), "bad.entry", List.of()),
-                new ActorScriptEnvironment("npc", "close", "context", Map.of("unexpected", true), null, List.of()),
-                new ActorScriptEnvironment("npc", "close", "context", Map.of(), "reply", List.of()),
-                new ActorScriptEnvironment("npc", "close", "context", Map.of(), null, List.of(1)));
+                new ScriptBinding("unknown", "start", null, Map.of(), null, List.of()),
+                new ScriptBinding("npc", "unknown", null, Map.of(), null, List.of()),
+                new ScriptBinding(null, "start", null, Map.of(), null, List.of()),
+                new ScriptBinding("npc", null, null, Map.of(), null, List.of()),
+                new ScriptBinding("npc", "start", "unexpected-context", Map.of(), null, List.of()),
+                new ScriptBinding("npc", "invoke", null, Map.of(), "reply", List.of()),
+                new ScriptBinding("npc", "invoke", "bad/context", Map.of(), "reply", List.of()),
+                new ScriptBinding("npc", "invoke", "context", Map.of(), "bad.entry", List.of()),
+                new ScriptBinding("npc", "close", "context", Map.of("unexpected", true), null, List.of()),
+                new ScriptBinding("npc", "close", "context", Map.of(), "reply", List.of()),
+                new ScriptBinding("npc", "close", "context", Map.of(), null, List.of(1)));
         for (var environment : invalid) {
             assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class,
-                    () -> service.scriptRun("admin", "invalid-native", new ActorScriptRequest(sessionId(opened), generation(opened),
+                    () -> service.scriptRun("admin", "invalid-native", scriptRequest(sessionId(opened), generation(opened),
                             "", Map.of(), 1000L, environment))).status());
         }
-        var invoked = new ActorScriptEnvironment("npc", "invoke", "context", Map.of(), "reply", List.of());
+        var invoked = new ScriptBinding("npc", "invoke", "context", Map.of(), "reply", List.of());
         assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class,
-                () -> service.scriptRun("admin", "invalid-native", new ActorScriptRequest(sessionId(opened), generation(opened),
+                () -> service.scriptRun("admin", "invalid-native", scriptRequest(sessionId(opened), generation(opened),
                         "1+1", Map.of(), 1000L, invoked))).status());
-        var tooLarge = new ActorScriptEnvironment("npc", "start", null, Map.of("text", "x".repeat(8200)), null, List.of());
+        var tooLarge = new ScriptBinding("npc", "start", null, Map.of("text", "x".repeat(8200)), null, List.of());
         assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class,
-                () -> service.scriptRun("admin", "invalid-native", new ActorScriptRequest(sessionId(opened), generation(opened),
+                () -> service.scriptRun("admin", "invalid-native", scriptRequest(sessionId(opened), generation(opened),
                         "", Map.of("text", "x".repeat(8200)), 1000L, tooLarge))).status());
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
         verify(backend, never()).nativeScriptAdapter(any(), anyString());
@@ -3385,8 +3317,8 @@ class ActorControlServiceTest {
         TransportNativeAdapter adapter = prepareNativeAdapter();
         List<Map<String, Object>> descriptors = List.of(Map.of("kind", "npc", "globals", Map.of("cm", "test.NativeObject")));
         when(backend.nativeScriptEnvironments()).thenReturn(descriptors);
-        var environment = new ActorScriptEnvironment("npc", "start", null, Map.of(), null, List.of());
-        var request = new ActorScriptRequest(sessionId(opened), generation(opened), "parameters.base * 2", Map.of("base", 21), 5000L, environment);
+        var environment = new ScriptBinding("npc", "start", null, Map.of(), null, List.of());
+        var request = scriptRequest(sessionId(opened), generation(opened), "parameters.base * 2", Map.of("base", 21), 5000L, environment);
         var started = service.scriptRun("admin", "native-start", request);
         assertEquals("SUCCEEDED", started.get("status"), () -> String.valueOf(started.get("result")));
         assertEquals(42, ((Number) result(started).get("result")).intValue());
@@ -3399,33 +3331,34 @@ class ActorControlServiceTest {
         assertEquals(id(started), id(service.scriptRun("admin", "native-start", request)));
         assertEquals(1, adapter.starts.get());
         String contextId = (String) result(started).get("context_id");
-        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of()));
-        assertEquals(List.of(), help.get("functions"));
+        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened)));
+        assertFalse(help.containsKey("functions"));
         assertEquals(descriptors, help.get("native_environments"));
         assertEquals(descriptors, service.publicCapabilities().get("native_environments"));
         assertEquals(1, ((List<?>) help.get("contexts")).size());
-        var invoke = new ActorScriptEnvironment("npc", "invoke", contextId, Map.of(), "next", List.of(7));
-        var reply = service.scriptRun("admin", "native-reply", new ActorScriptRequest(sessionId(opened), generation(opened),
+        var invoke = new ScriptBinding("npc", "invoke", contextId, Map.of(), "next", List.of(7));
+        var reply = service.scriptRun("admin", "native-reply", scriptRequest(sessionId(opened), generation(opened),
                 "", Map.of(), 5000L, invoke));
         assertEquals("SUCCEEDED", reply.get("status"));
         assertEquals(1, ((Number) ((Map<?, ?>) result(reply).get("result")).get("count")).intValue());
         assertEquals(contextId, result(reply).get("context_id"));
-        assertEquals("native_script_context_active", assertThrows(ObservationException.class, () -> service.scriptRun("admin", "pure-busy",
-                new ActorScriptRequest(sessionId(opened), generation(opened), "42", Map.of(), 1000L))).reason());
         prepareChat(service);
         assertEquals("native_script_context_active", assertThrows(ObservationException.class,
                 () -> service.act("admin", "chat-busy", chatRequest(opened, "context remains active"))).reason());
-        var closeEnvironment = new ActorScriptEnvironment("npc", "close", contextId, Map.of(), null, List.of());
-        var closed = service.scriptRun("admin", "native-close", new ActorScriptRequest(sessionId(opened), generation(opened),
+        var closeEnvironment = new ScriptBinding("npc", "close", contextId, Map.of(), null, List.of());
+        var closed = service.scriptRun("admin", "native-close", scriptRequest(sessionId(opened), generation(opened),
                 "", Map.of(), 5000L, closeEnvironment));
         assertEquals("SUCCEEDED", closed.get("status"));
         assertEquals("CLOSED", result(closed).get("context_state"));
         assertEquals(true, result(closed).get("context_closed"));
         assertEquals(1, adapter.closes.get());
         assertEquals(0, execution(service, opened).moduleScope().snapshot().outstandingResources());
-        assertEquals(List.of(), service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of())).get("contexts"));
-        assertEquals("SUCCEEDED", service.scriptRun("admin", "pure-after-native",
-                new ActorScriptRequest(sessionId(opened), generation(opened), "42", Map.of(), 5000L)).get("status"));
+        assertEquals(List.of(), service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened))).get("contexts"));
+        var restarted = service.scriptRun("admin", "native-after-close",
+                scriptRequest(sessionId(opened), generation(opened), "42", Map.of(), 5000L, environment));
+        assertEquals("SUCCEEDED", restarted.get("status"));
+        service.scriptRun("admin", "native-after-close-final", scriptRequest(sessionId(opened), generation(opened), "", Map.of(), 5000L,
+                new ScriptBinding("npc", "close", (String) result(restarted).get("context_id"), Map.of(), null, List.of())));
     }
 
     @Test
@@ -3433,14 +3366,14 @@ class ActorControlServiceTest {
         ActorControlService service = service(4, 24, 64);
         var opened = open(service, "native-loop-open"); executors.getFirst().runNext();
         TransportNativeAdapter adapter = prepareNativeAdapter();
-        var environment = new ActorScriptEnvironment("npc", "start", null, Map.of(), null, List.of());
-        var request = new ActorScriptRequest(sessionId(opened), generation(opened), "entered(); while (true) {}", Map.of(), 5000L, environment);
+        var environment = new ScriptBinding("npc", "start", null, Map.of(), null, List.of());
+        var request = scriptRequest(sessionId(opened), generation(opened), "entered(); while (true) {}", Map.of(), 5000L, environment);
         var running = CompletableFuture.supplyAsync(() -> service.scriptRun("admin", "native-loop", request));
         assertTrue(adapter.entered.await(5, TimeUnit.SECONDS), () -> running.isDone() ? String.valueOf(running.join()) : "native guest did not enter");
         var nativeScope = execution(service, opened).moduleScope();
         assertTrue(nativeScope.snapshot().runningBodies() > 0);
         assertEquals(0, execution(service, opened).runtime().snapshot().lane().pending());
-        var cancelled = service.scriptCancel("admin", "native-loop-cancel", new ActorScriptCancelRequest(sessionId(opened), generation(opened),
+        var cancelled = service.scriptCancel("admin", "native-loop-cancel", scriptCancelRequest(sessionId(opened), generation(opened),
                 "native-loop", request.source(), request.parameters(), request.timeoutMs(), environment));
         assertEquals("CANCELLED", cancelled.get("status"));
         assertEquals("CLOSED", result(cancelled).get("context_state"));
@@ -3461,9 +3394,9 @@ class ActorControlServiceTest {
         var opened = open(service, "native-action-race-open"); executors.getFirst().runNext();
         var queued = service.act("admin", "native-prior-chat", chatRequest(opened, "already accepted"));
         int history = ((Number) service.publicCapabilities().get("operation_history_size")).intValue();
-        var environment = new ActorScriptEnvironment("npc", "start", null, Map.of("npc_id", 9010000), null, List.of());
+        var environment = new ScriptBinding("npc", "start", null, Map.of("npc_id", 9010000), null, List.of());
         assertEquals("actor_work_in_flight", assertThrows(ObservationException.class,
-                () -> service.scriptRun("admin", "native-racing-start", new ActorScriptRequest(sessionId(opened), generation(opened),
+                () -> service.scriptRun("admin", "native-racing-start", scriptRequest(sessionId(opened), generation(opened),
                         "", Map.of(), 1000L, environment))).reason());
         assertEquals(history, service.publicCapabilities().get("operation_history_size"));
         verify(backend, never()).nativeScriptAdapter(any(), anyString());
@@ -3475,8 +3408,8 @@ class ActorControlServiceTest {
         ActorControlService service = service(4, 24, 64);
         var opened = open(service, "native-root-close-open"); executors.getFirst().runNext();
         TransportNativeAdapter adapter = prepareNativeAdapter();
-        var environment = new ActorScriptEnvironment("npc", "start", null, Map.of(), null, List.of());
-        var started = service.scriptRun("admin", "native-root-context", new ActorScriptRequest(sessionId(opened), generation(opened),
+        var environment = new ScriptBinding("npc", "start", null, Map.of(), null, List.of());
+        var started = service.scriptRun("admin", "native-root-context", scriptRequest(sessionId(opened), generation(opened),
                 "1", Map.of(), 5000L, environment));
         assertEquals("SUCCEEDED", started.get("status"), () -> String.valueOf(started.get("result")));
         var sameRoot = execution(service, opened);
@@ -3541,21 +3474,37 @@ class ActorControlServiceTest {
         Map<String, Object> nestedParameter = new java.util.LinkedHashMap<>(Map.of("value", 21));
         Map<String, Object> nestedOption = new java.util.LinkedHashMap<>(Map.of("value", 7));
         List<Object> nestedArgs = new ArrayList<>(List.of(new java.util.LinkedHashMap<>(Map.of("value", 3))));
-        var environment = new ActorScriptEnvironment("npc", "start", null, Map.of("payload", nestedOption), null, nestedArgs);
+        var environment = new ScriptBinding("npc", "start", null, Map.of("payload", nestedOption), null, nestedArgs);
         when(backend.nativeScriptAdapter(eq(handle), eq("npc"))).thenAnswer(invocation -> {
             nestedParameter.put("value", 99); nestedOption.put("value", 88);
             ((Map<String, Object>) nestedArgs.getFirst()).put("value", 77);
             return adapter;
         });
-        var result = service.scriptRun("admin", "native-snapshot", new ActorScriptRequest(sessionId(opened), generation(opened),
+        var result = service.scriptRun("admin", "native-snapshot", scriptRequest(sessionId(opened), generation(opened),
                 "parameters.payload.value", Map.of("payload", nestedParameter), 5000L, environment));
         assertEquals("SUCCEEDED", result.get("status"), () -> String.valueOf(result.get("result")));
         assertEquals(21, ((Number) result(result).get("result")).intValue());
         assertEquals(7, ((Number) ((Map<?, ?>) adapter.accepted.options().get("payload")).get("value")).intValue());
         assertEquals(3, ((Number) ((Map<?, ?>) adapter.accepted.args().getFirst()).get("value")).intValue());
         String contextId = (String) result(result).get("context_id");
-        service.scriptRun("admin", "native-snapshot-close", new ActorScriptRequest(sessionId(opened), generation(opened), "", Map.of(), 5000L,
-                new ActorScriptEnvironment("npc", "close", contextId, Map.of(), null, List.of())));
+        service.scriptRun("admin", "native-snapshot-close", scriptRequest(sessionId(opened), generation(opened), "", Map.of(), 5000L,
+                new ScriptBinding("npc", "close", contextId, Map.of(), null, List.of())));
+    }
+
+    private record ScriptBinding(String kind, String operation, String contextId, Map<String, Object> options,
+                                 String entry, List<Object> args) { }
+
+    private static ActorScriptRequest scriptRequest(String sessionId, long generation, String source,
+                                                     Map<String, Object> parameters, long timeoutMs, ScriptBinding binding) {
+        return new ActorScriptRequest(sessionId, generation, binding.kind(), binding.operation(), binding.contextId(),
+                binding.options(), binding.entry(), binding.args(), source, parameters, timeoutMs);
+    }
+
+    private static ActorScriptCancelRequest scriptCancelRequest(String sessionId, long generation, String targetRequestId,
+                                                                 String source, Map<String, Object> parameters, long timeoutMs,
+                                                                 ScriptBinding binding) {
+        return new ActorScriptCancelRequest(sessionId, generation, targetRequestId, binding.kind(), binding.operation(),
+                binding.contextId(), binding.options(), binding.entry(), binding.args(), source, parameters, timeoutMs);
     }
 
     /** Native business is replaced only here; the production runtime, engine, work and resource ledger are real. */

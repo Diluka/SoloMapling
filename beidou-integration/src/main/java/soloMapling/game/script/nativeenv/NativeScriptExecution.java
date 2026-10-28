@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 import soloMapling.game.execution.ExecutionScope;
-import soloMapling.game.script.ScriptExecution;
+import soloMapling.game.script.ScriptValues;
 import soloMapling.game.script.ScriptResult;
 
 import javax.script.ScriptException;
@@ -26,8 +26,8 @@ public final class NativeScriptExecution {
     private final AtomicReference<ScriptResult.Status> stopping = new AtomicReference<>();
     private final CompletableFuture<NativeScriptResult> completion = new CompletableFuture<>();
     private final CompletableFuture<Object> callbackResult = new CompletableFuture<>();
-    final ScriptExecution.CapturedOutput stdout = new ScriptExecution.CapturedOutput();
-    final ScriptExecution.CapturedOutput stderr = new ScriptExecution.CapturedOutput();
+    final ScriptValues.CapturedOutput stdout = new ScriptValues.CapturedOutput();
+    final ScriptValues.CapturedOutput stderr = new ScriptValues.CapturedOutput();
     private volatile ScriptResult.Status status = ScriptResult.Status.CANCELLED;
     private volatile ScriptResult.ScriptError error;
     private volatile boolean guestExited;
@@ -137,13 +137,13 @@ public final class NativeScriptExecution {
                     var context = session.engine().getPolyglotContext();
                     session.bindParameters(request.parameters());
                     Value evaluated = context.eval("js", request.source());
-                    value = ScriptExecution.detachedJson(evaluated);
+                    value = ScriptValues.detachedJson(evaluated);
                 }
             }
             if (session.recordedFailure() != null) {
                 error = session.recordedFailure(); status = session.recordedFailureStatus(); return;
             }
-            try { result = JSON.readValue(ScriptExecution.json(value), Object.class); }
+            try { result = JSON.readValue(ScriptValues.json(value), Object.class); }
             catch (IllegalArgumentException invalid) { status = ScriptResult.Status.RESULT_ERROR; error = new ScriptResult.ScriptError("native_script_result_not_json", null, null); return; }
             shouldStop();
             status = ScriptResult.Status.SUCCEEDED;
@@ -151,7 +151,7 @@ public final class NativeScriptExecution {
         } catch (PolyglotException failed) {
             session.recordFailure(failed); error = session.recordedFailure(); status = session.recordedFailureStatus();
         } catch (IllegalArgumentException invalidResult) {
-            status = ScriptResult.Status.RESULT_ERROR; error = new ScriptResult.ScriptError(ScriptExecution.errorText(invalidResult.getMessage()), null, null);
+            status = ScriptResult.Status.RESULT_ERROR; error = new ScriptResult.ScriptError(ScriptValues.errorText(invalidResult.getMessage()), null, null);
         } catch (InterruptedException stopped) {
             stopping.compareAndSet(null, ScriptResult.Status.CANCELLED);
         } catch (Throwable failed) {

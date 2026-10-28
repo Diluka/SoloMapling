@@ -6,10 +6,6 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
-import soloMapling.game.script.ScriptExecution;
-import soloMapling.game.script.ScriptFunction;
-import soloMapling.game.script.ScriptRegistry;
-import soloMapling.game.script.ScriptRequest;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -43,7 +39,6 @@ public final class CharacterRuntime {
     private final CompletableFuture<Void> modulesDrained = new CompletableFuture<>();
     private final Map<String, ModuleEntry> modules = new LinkedHashMap<>();
     private final Map<String, ModuleContext> controlOwners = new LinkedHashMap<>();
-    private final ScriptRegistry scriptFunctions = new ScriptRegistry();
     private volatile CharacterCommandLane lane;
     private volatile State state = State.OPENING;
     private volatile RoleBinding binding;
@@ -320,18 +315,6 @@ public final class CharacterRuntime {
         }
         public ModuleRef reference() { return ref; }
         public ExecutionScope scope() { return scope; }
-        /** Pure guest computation runs off the native short-command lane, owned by this exact work. */
-        public ScriptExecution runScript(ExecutionScope.WorkHandle work, ScriptRequest request) {
-            requireOwn(work); Objects.requireNonNull(request);
-            synchronized (monitor) {
-                requireActive(this, null);
-                require(nativeScript == null, "native_script_context_active");
-                return ScriptExecution.start(work, request, scriptFunctions.bindings(this), () -> {
-                    synchronized (monitor) { requireActive(this, null); }
-                    requireBinding().requireCurrent();
-                });
-            }
-        }
         /** One owned native environment per module; published before its first carrier can execute. */
         public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                       NativeScriptAdapter adapter) {
@@ -366,18 +349,6 @@ public final class CharacterRuntime {
         public Map<String, Object> nativeScriptHelp() {
             synchronized (monitor) { requireActive(this, null); }
             return Map.of("contexts", nativeScriptContexts(), "maximum_contexts_per_module", 1);
-        }
-        public Map<String, Object> scriptHelp(List<String> names) {
-            synchronized (monitor) { requireActive(this, null); return scriptFunctions.help(this, names); }
-        }
-        /** Current minimal seam accepts trusted pure synchronous Java functions only. */
-        public void registerScriptFunction(ScriptFunction definition, ScriptFunction.Body body) {
-            synchronized (monitor) {
-                requireActive(this, null);
-                scriptFunctions.register(this, () -> {
-                    synchronized (monitor) { requireActive(this, null); }
-                }, definition, body);
-            }
         }
         public ExecutionScope.WorkHandle acceptWork() {
             synchronized (monitor) {
@@ -455,7 +426,6 @@ public final class CharacterRuntime {
             entry.state = ModuleState.STOPPING;
             entry.reason = mode == StopMode.UNLOAD ? "unloading" : "paused";
             if (context != null) context.grant.revoke();
-            if (context != null) scriptFunctions.remove(context);
             if (context != null) beginHookLocked(entry);
             event(RuntimeEvents.Kind.MODULE_STOPPING, entry, null, entry.reason, null);
         }
