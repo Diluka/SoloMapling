@@ -7,7 +7,7 @@ import unittest
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from solo_acceptance_mcp.smoke import require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, require_capabilities
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests.test_chat_protocol import ACT_PATH, TOOLS, ChatProtocolStub, capabilities
@@ -61,7 +61,7 @@ class InventoryMoveProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_schema_binds_inventory_action_to_exact_typed_parameters(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(REGISTERED_TOOLS, set(tools))
         schema = tools["game_act"].input_schema
         self.assertEqual(ACTIONS, schema["properties"]["action"]["enum"])
         branch = next(branch for branch in schema["allOf"][0]["oneOf"]
@@ -185,12 +185,12 @@ class InventoryMoveProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_capability_consumer_accepts_new_inventory_and_preserves_historical_action_sets(self) -> None:
         for value in [capabilities(TOOLS), npc_capabilities(), reply_capabilities(), inventory_capabilities()]:
             with self.subTest(actions=value["actions"]):
-                self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(TOOLS), actors=True))
+                self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(REGISTERED_TOOLS), actors=True))
         invalid = inventory_capabilities()
         invalid["actions"].append("inventory_move")
         with self.assertRaises(RuntimeError):
-            require_capabilities(invalid, sorted(TOOLS))
+            require_capabilities(invalid, sorted(REGISTERED_TOOLS))
         mismatched = deepcopy(inventory_capabilities())
         mismatched["actor_control"]["actions"] = ACTIONS[:-1]
         with self.assertRaises(RuntimeError):
-            require_capabilities(mismatched, sorted(TOOLS))
+            require_capabilities(mismatched, sorted(REGISTERED_TOOLS))

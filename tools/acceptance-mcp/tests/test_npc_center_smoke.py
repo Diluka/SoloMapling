@@ -104,7 +104,7 @@ class NpcCenterStub(ChatActionStub):
                                      "native_dispatch_started": False})
             receipt = self.response(operation)
             # Cancellation has completed; only its HTTP receipt remains unknown.
-            time.sleep(0.3)
+            time.sleep(0.75)
             return 200, envelope(receipt)
         if path != "/solo/acceptance/v1/actor/act":
             return super().default_response(request)
@@ -199,8 +199,11 @@ class NpcCenterSmokeTests(unittest.IsolatedAsyncioTestCase):
             root.mkdir(exist_ok=True)
             with tempfile.TemporaryDirectory(dir=root) as directory:
                 folder = Path(directory)
-                config = stub.write_config(folder / "private.json", timeout=0.1 if mode in {
-                    "action_timeout", "close_timeout", "pending_action_cancel_timeout"} else 2)
+                # Leave healthy close/observe requests room under concurrent
+                # builds; only the deliberate cancellation receipt exceeds it.
+                http_timeout = (0.5 if mode == "pending_action_cancel_timeout" else
+                                0.1 if mode in {"action_timeout", "close_timeout"} else 2)
+                config = stub.write_config(folder / "private.json", timeout=http_timeout)
                 output = folder / "npc-center-report.json"
                 report = await run_npc_center_smoke(config, profile_id="primary", expected_base_url=stub.base_url,
                                                    output=output, operation_timeout=timeout, poll_interval=0.01)

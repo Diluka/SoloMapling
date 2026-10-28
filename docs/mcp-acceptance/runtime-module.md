@@ -26,6 +26,8 @@ MCP 的外部 session、角色宿主和控制模块承担不同责任。它们�
 | `game_act/chat` | 模块取得宿主受控动作上下文，准备现有 `NativeActionService` 后只向原 lane 提交一次；不在队列 body 内再次 submit/join/get 等自己 |
 | `game_observe(scope="actor")` | 从同一宿主的角色来源读取事实，继续核 owner/session 和包窗口权限；不维护第二份角色状态，也不从只读快照取得普通动作控制权 |
 | 现有 NPC 动作 | 保留已审来源、offer、dialogue_version 和 legacy/NextLevel 路由，使用同一宿主 lane，不借迁移扩大菜单或收益路径 |
+| `script_run` | 候选纯脚本设施消费当前模块原 work，在运行体管理载体执行，投影输出、JSON 结果与引擎/Context/work 的真实收尾；不占短命令 lane |
+| `script_help` | 候选只读查询运行体同源函数描述，生产未注册游戏函数时返回空目录；不创建 operation 或执行 work |
 | `actor_close` | 请求根宿主的正常角色关闭，经来源核原生清理、对话及声明范围存档；模块停止或卸载不能替代此操作 |
 
 MCP 的根来源由两个包内适配承接：
@@ -91,3 +93,11 @@ actor 观察结果的 `actor.runtime` 和操作响应的 `session.runtime` 投�
 ## 背包动作接入
 
 #164 为 MCP 模块增加 `inventory` 控制资源，经原 `ModuleContext.prepareNative` 准备共享 `NativeInventoryActions.MoveHandle`，直接提交原 lane 一次，保留同 work 的真实结算与外部 ACTION 配额。中立动作持有短命原生证据，运行体仅记录 `NativeActionFact` 摘要；MCP 不维护另一份库存或物品规则。具体协议与分层验收见[背包移位](../shared-game-foundation/inventory-move.md)。
+
+## 脚本基础接入
+
+#199/#204 本轮候选只贯通 `script_run/script_help` 和必要运行体支撑，不等待 #200 全部完成。`AcceptanceActorExecution` 经 MCP 模块将已接纳的原 work 交给 `ModuleContext.runScript`，脚本不再申请第二份工作，也不排入角色短命令 lane。外层沿既有 request/operation 历史保留幂等、鉴权与有界结果投影，首次 close 的历史名额仍保留。
+
+MCP 中断通过独立取消请求转发；取消先到时建立原请求的取消检查点，迟到 run 不能复活执行。正常返回须核 `engine_exited/context_closed/work_settled`，未知收尾保留原债务；角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 投影同一原作用域的工作与资源计数，不能把计数快照单独当作执行事实。
+
+帮助与绑定来自运行体的一份最小注册描述，生产目录为空。具体游戏函数、行为模块脚本、共享事实/事件目录和现有动作迁移均留待后续，本片不改变旧 `game_act`。详细契约见[运行体脚本设施](../robot-runtime/script-execution.md)与[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。

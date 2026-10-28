@@ -114,3 +114,7 @@ MCP 观察要从同一个宿主和原生来源读取，不建立另一份角色�
 ## 背包基本动作
 
 [#200](https://github.com/Diluka/SoloMapling/issues/200) 的首片 #164 通过同一 `ModuleContext.prepareNative("inventory", ...)` 消费共享 `NativeInventoryActions`，只提交原 lane 一次。具体物品规则由北斗执行，宿主只负责控制权、工作和 `NativeActionFact` 安全摘要，不持有第二份库存。参数、结果与存档验收见[背包移位](../shared-game-foundation/inventory-move.md)，各层验收及实际部署以 Issue 记录为准。
+
+## 纯脚本基础
+
+[#199/#204](script-execution.md) 的候选切片在运行体内增加受管脚本执行与最小函数描述接点，消费当前模块的原 scope/work，在短命令 lane 之外运行。MCP 新增 `script_run/script_help`；生产函数目录为空，现有动作保留。超时、取消、模块停止和根关闭均按引擎退出、Context 关闭及原 work 结算核验；具体游戏函数和完整行为模块不属于本片。

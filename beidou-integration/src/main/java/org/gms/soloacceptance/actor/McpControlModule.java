@@ -4,9 +4,13 @@ import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.script.ScriptExecution;
+import soloMapling.game.script.ScriptRequest;
 import soloMapling.game.runtime.RuntimeModule;
 
 import java.util.Objects;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** MCP controls consume a host-owned context; role lifetime and execution accounting stay with the host. */
@@ -39,6 +43,12 @@ public final class McpControlModule implements RuntimeModule {
     }
 
     public ExecutionScope.WorkHandle acceptWork() { return context().acceptWork(); }
+
+    public ScriptExecution runScript(ExecutionScope.WorkHandle work, ScriptRequest request) {
+        return context().runScript(work, request);
+    }
+
+    public Map<String, Object> scriptHelp(List<String> names) { return context().scriptHelp(names); }
 
     public CharacterCommandLane.Submission submitInteraction(ExecutionScope.WorkHandle work, Runnable preflight,
                                                               Runnable body, Runnable settled) {

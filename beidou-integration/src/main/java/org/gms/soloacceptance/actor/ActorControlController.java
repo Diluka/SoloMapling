@@ -74,6 +74,30 @@ public final class ActorControlController {
         return ResultBody.success(actors.get(AcceptanceAccess.requireAdmin(), operationId, sinceCursor, limit));
     }
 
+    @PostMapping("/script/run")
+    public ResultBody<Map<String, Object>> scriptRun(
+            @RequestBody(required = false) SubmitBody<ActorScriptRequest> request) {
+        String owner = AcceptanceAccess.requireAdmin();
+        requireData(request);
+        return ResultBody.success(request, actors.scriptRun(owner, request.getRequestId(), request.getData()));
+    }
+
+    @PostMapping("/script/help")
+    public ResultBody<Map<String, Object>> scriptHelp(
+            @RequestBody(required = false) SubmitBody<ActorScriptHelpRequest> request) {
+        String owner = AcceptanceAccess.requireAdmin();
+        requireData(request);
+        return ResultBody.success(request, actors.scriptHelp(owner, request.getData()));
+    }
+
+    @PostMapping("/script/cancel")
+    public ResultBody<Map<String, Object>> scriptCancel(
+            @RequestBody(required = false) SubmitBody<ActorScriptCancelRequest> request) {
+        String owner = AcceptanceAccess.requireAdmin();
+        requireData(request);
+        return ResultBody.success(request, actors.scriptCancel(owner, request.getRequestId(), request.getData()));
+    }
+
     @PostMapping("/operation/{id}/cancel")
     public ResultBody<Map<String, Object>> cancel(
             @PathVariable("id") String operationId,

@@ -1,5 +1,8 @@
 package org.gms.soloacceptance.actor;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.gms.soloacceptance.AcceptanceObservationRuntime;
 import org.gms.soloacceptance.AcceptanceObservationService;
 import org.gms.soloacceptance.ObservationException;
@@ -17,9 +20,13 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.script.ScriptExecution;
+import soloMapling.game.script.ScriptRequest;
+import soloMapling.game.script.ScriptResult;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
@@ -48,6 +55,9 @@ public final class ActorControlService {
     private static final int DEFAULT_MAX_EVENTS = 64;
     private static final int MAX_PENDING_ACTIONS = 7;
     private static final int EXECUTOR_QUEUE_CAPACITY = 8;
+    private static final ObjectMapper SCRIPT_JSON = new ObjectMapper()
+            .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+    private static final long SCRIPT_CLEANUP_WAIT_MS = 3000;
     private final Object monitor = new Object();
     private final NativeActorBackend backend;
     private final int maxSessions;
@@ -382,6 +392,262 @@ public final class ActorControlService {
         return refreshedResponse(prior, 0, 100);
     }
 
+    public Map<String, Object> scriptRun(String owner, String requestId, ActorScriptRequest request) {
+        return scriptInvocation(owner, requestId, request, false);
+    }
+
+    public Map<String, Object> scriptCancel(String owner, String requestId, ActorScriptCancelRequest request) {
+        validateRequestId(requestId);
+        if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
+        return scriptInvocation(owner, request.targetRequestId(), request.invocation(), true);
+    }
+
+    public Map<String, Object> scriptHelp(String owner, ActorScriptHelpRequest request) {
+        validateOwner(owner);
+        if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
+        validateScriptSession(request.sessionId(), request.expectedGeneration());
+        if (request.names().size() > 64 || request.names().stream()
+                .anyMatch(name -> name == null || !name.matches("[A-Za-z_][A-Za-z0-9_]{0,63}"))) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_script_function_names");
+        }
+        Session session;
+        NativeActorHandle handle;
+        synchronized (monitor) {
+            requireAccepting();
+            session = ownedSession(owner, request.sessionId(), request.expectedGeneration());
+            requireActionSession(session, null);
+            handle = session.handle;
+        }
+        if (!backend.isCurrent(handle)) throw error(HttpStatus.GONE, "stale_actor_session");
+        Map<String, Object> help = session.execution.scriptHelp(request.names());
+        synchronized (monitor) { requireActionSession(session, handle); }
+        Map<String, Object> result = new LinkedHashMap<>(help);
+        result.put("schema_version", 1);
+        return result;
+    }
+
+    /** Protocol history references the runtime's original work; scripts never enter the short-command lane. */
+    private Map<String, Object> scriptInvocation(String owner, String requestId, ActorScriptRequest request,
+                                                  boolean cancel) {
+        validateOwner(owner);
+        validateRequestId(requestId);
+        ScriptRequest script = validatedScript(request);
+        ScriptFingerprint fingerprint = new ScriptFingerprint(request.expectedGeneration(),
+                textDigest(script.source()), scriptParameterDigest(script.parameters()), script.timeoutMs());
+        RequestKey key = new RequestKey("SCRIPT", owner, request.sessionId(), requestId);
+        Operation prior;
+        Session session;
+        synchronized (monitor) {
+            prior = duplicate(key, fingerprint);
+            session = prior == null ? ownedSession(owner, request.sessionId(), request.expectedGeneration()) : prior.session;
+        }
+        if (prior == null) {
+            synchronized (session.submissionMonitor) {
+                Operation accepted;
+                synchronized (monitor) {
+                    prior = duplicate(key, fingerprint);
+                    if (prior == null) {
+                        requireAccepting();
+                        requireActionSession(session, null);
+                        if (operations.size() + reservedFirstCloses() + 1 > maxHistory
+                                || requests.size() + reservedFirstCloses() + 1 > maxHistory) {
+                            throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
+                        }
+                        accepted = operation("SCRIPT", session);
+                        requests.put(key, new RequestRecord(fingerprint, accepted.id));
+                        if (cancel) requestCancellation(accepted);
+                    } else accepted = null;
+                }
+                if (accepted != null) {
+                    prior = accepted;
+                    if (cancel) {
+                        // There was no carrier and no Context. A later run sees this exact checkpoint.
+                        accepted.work.reject();
+                        scriptNotStarted(accepted, "CANCELLED", null);
+                    } else startScript(accepted, script);
+                }
+            }
+        }
+        if (cancel) {
+            synchronized (monitor) {
+                if (!terminal(prior.status) && !prior.cancelRequested) requestCancellation(prior);
+            }
+        }
+        return awaitScript(prior, script.timeoutMs());
+    }
+
+    private void startScript(Operation operation, ScriptRequest request) {
+        ExecutionScope.WorkHandle exact = operation.work;
+        try {
+            ScriptExecution execution = operation.session.execution.runScript(exact, request);
+            synchronized (monitor) {
+                operation.scriptExecution = execution;
+                if (operation.cancelRequested) execution.cancel();
+                else running(operation, "script_execution_started");
+            }
+            execution.completion().whenComplete((result, failure) -> scriptCompleted(operation, result, failure));
+        } catch (Throwable failure) {
+            if (!exact.snapshot().carrierClaimed()) {
+                exact.reject();
+                scriptNotStarted(operation, exact.cancelRequested() ? "CANCELLED" : "RUNTIME_ERROR",
+                        exact.cancelRequested() ? null : safeReason(failure, "script_execution_rejected"));
+            } else {
+                // A claimed carrier is real debt even if submission could not return its handle.
+                synchronized (monitor) {
+                    requestCancellation(operation);
+                    operation.error = Map.of("reason", "script_cleanup_unverified");
+                    finish(operation, "INDETERMINATE", "script_cleanup_unverified");
+                }
+            }
+        }
+    }
+
+    private void scriptCompleted(Operation operation, ScriptResult script, Throwable failure) {
+        operation.session.execution.refresh();
+        synchronized (monitor) {
+            if (failure != null || script == null) {
+                operation.error = Map.of("reason", "script_cleanup_unverified");
+                finish(operation, "INDETERMINATE", "script_cleanup_unverified");
+                return;
+            }
+            operation.result = script.toMap();
+            boolean verified = script.engineExited() && script.contextClosed() && script.workSettled();
+            String status = script.status().name();
+            if (!"SUCCEEDED".equals(status)) {
+                Map<String, Object> problem = new LinkedHashMap<>();
+                problem.put("reason", "script_" + status.toLowerCase(java.util.Locale.ROOT));
+                if (script.error() != null) {
+                    problem.put("message", script.error().message());
+                    problem.put("line", script.error().line());
+                    problem.put("column", script.error().column());
+                }
+                operation.error = java.util.Collections.unmodifiableMap(problem);
+            }
+            if (verified) {
+                operation.scriptExecution = null;
+                operation.moduleContext = null;
+                operation.work = null;
+            }
+            finish(operation, !verified ? "INDETERMINATE" : "SUCCEEDED".equals(status) ? "SUCCEEDED"
+                    : "CANCELLED".equals(status) ? "CANCELLED" : "FAILED", "script_" + status.toLowerCase(java.util.Locale.ROOT));
+        }
+    }
+
+    private void scriptNotStarted(Operation operation, String status, String reason) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", status);
+        result.put("result", null);
+        result.put("stdout", ""); result.put("stderr", ""); result.put("output_truncated", false);
+        result.put("error", reason == null ? null : Map.of("message", reason));
+        result.put("engine_started", false); result.put("engine_exited", true);
+        result.put("context_closed", true); result.put("work_settled", operation.work.isSettled());
+        operation.session.execution.refresh();
+        synchronized (monitor) {
+            operation.result = java.util.Collections.unmodifiableMap(result);
+            if (reason != null) operation.error = Map.of("reason", reason);
+            if (operation.work.isSettled()) {
+                operation.work = null;
+                operation.moduleContext = null;
+            }
+            finish(operation, "CANCELLED".equals(status) ? "CANCELLED" : "FAILED", "script_not_started");
+        }
+    }
+
+    private Map<String, Object> awaitScript(Operation operation, long timeoutMs) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs + SCRIPT_CLEANUP_WAIT_MS);
+        boolean interrupted = false;
+        synchronized (monitor) {
+            while (operation.work != null) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                try { TimeUnit.NANOSECONDS.timedWait(monitor, remaining); }
+                catch (InterruptedException stopped) { interrupted = true; break; }
+            }
+            if (operation.work != null) {
+                if (!operation.cancelRequested) requestCancellation(operation);
+                operation.error = Map.of("reason", "script_cleanup_unverified");
+                if (operation.result.isEmpty()) operation.result = Map.of("engine_exited", false,
+                        "context_closed", false, "work_settled", false);
+                finish(operation, "INDETERMINATE", "script_cleanup_unverified");
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+        operation.session.execution.refresh();
+        synchronized (monitor) { return response(operation, 0, 100); }
+    }
+
+    private static ScriptRequest validatedScript(ActorScriptRequest request) {
+        if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
+        validateScriptSession(request.sessionId(), request.expectedGeneration());
+        if (request.source() == null || request.source().isBlank() || request.source().length() > 65536
+                || request.timeoutMs() < 1 || request.timeoutMs() > 5000) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
+        }
+        if (!validScriptUnicode(request.source())) throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
+        try { return new ScriptRequest(request.source(), request.parameters(), request.timeoutMs()); }
+        catch (IllegalArgumentException invalid) { throw error(HttpStatus.BAD_REQUEST, "invalid_script_request"); }
+    }
+
+    private static void validateScriptSession(String sessionId, Long generation) {
+        if (sessionId == null || !sessionId.matches("[A-Za-z0-9_.-]{1,128}") || generation == null || generation < 1) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
+        }
+    }
+
+    private static String scriptParameterDigest(Map<String, Object> parameters) {
+        try {
+            requireScriptJson(parameters, 0, new java.util.IdentityHashMap<>());
+            String json = SCRIPT_JSON.writeValueAsString(parameters);
+            if (json.getBytes(StandardCharsets.UTF_8).length > 16384) {
+                throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+            }
+            return textDigest(json);
+        } catch (JsonProcessingException | IllegalArgumentException invalid) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+        }
+    }
+
+    /** Match the external JSON contract before allocating operation history or runtime work. */
+    private static void requireScriptJson(Object value, int depth, java.util.IdentityHashMap<Object, Boolean> ancestors) {
+        if (depth > 16) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+        if (value == null || value instanceof Boolean) return;
+        if (value instanceof String text) {
+            if (!validScriptUnicode(text)) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+            return;
+        }
+        if (value instanceof Number number) {
+            if (!(number instanceof Byte || number instanceof Short || number instanceof Integer || number instanceof Long
+                    || number instanceof Float || number instanceof Double || number instanceof java.math.BigInteger
+                    || number instanceof java.math.BigDecimal) || !Double.isFinite(number.doubleValue())) {
+                throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+            }
+            return;
+        }
+        if (ancestors.put(value, Boolean.TRUE) != null) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+        try {
+            if (value instanceof Map<?, ?> object) {
+                for (var entry : object.entrySet()) {
+                    if (!(entry.getKey() instanceof String text) || !validScriptUnicode(text)) {
+                        throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+                    }
+                    requireScriptJson(entry.getValue(), depth + 1, ancestors);
+                }
+            } else if (value instanceof List<?> array) {
+                for (Object item : array) requireScriptJson(item, depth + 1, ancestors);
+            } else throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+        } finally { ancestors.remove(value); }
+    }
+
+    private static boolean validScriptUnicode(String text) {
+        for (int index = 0; index < text.length(); index++) {
+            char current = text.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (++index >= text.length() || !Character.isLowSurrogate(text.charAt(index))) return false;
+            } else if (Character.isLowSurrogate(current)) return false;
+        }
+        return true;
+    }
+
     public Map<String, Object> get(String owner, String operationId, long sinceCursor, int limit) {
         validateOwner(owner);
         validateWindow(sinceCursor, limit);
@@ -513,7 +779,11 @@ public final class ActorControlService {
             boolean sameRuntime = timingGeneration != null && live() && timingGeneration.equals(worldGeneration);
             if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
+            result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act",
+                    "script_run", "script_help"));
+            result.put("script_execution", Map.of("language", "javascript", "minimum_timeout_ms", 1,
+                    "maximum_timeout_ms", 5000, "default_timeout_ms", 1000, "maximum_source_characters", 65536,
+                    "maximum_parameters_bytes", 16384, "game_functions", List.of(), "execution_owner", "character_runtime"));
             result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"));
             result.put("inventory_move", Map.of("inventory_types", List.of("EQUIP", "USE", "SETUP", "ETC", "CASH"),
                     "minimum_slot", 1, "maximum_slot", 127, "native_minimum_interval_ms", 300,
@@ -1172,7 +1442,7 @@ public final class ActorControlService {
         if (!"CLOSE".equals(kind)) {
             try {
                 operation.work = "OPEN".equals(kind) ? session.execution.acceptOpeningWork() : session.execution.acceptWork();
-                if ("ACTION".equals(kind)) operation.moduleContext = session.execution.moduleContext();
+                if ("ACTION".equals(kind) || "SCRIPT".equals(kind)) operation.moduleContext = session.execution.moduleContext();
                 if ("OPEN".equals(kind)) {
                     ExecutionScope.WorkHandle exact = operation.work;
                     exact.completion().whenComplete((fact, failure) -> rootCompleted(session));
@@ -1372,6 +1642,7 @@ public final class ActorControlService {
 
     private void requestCancellation(Operation operation) {
         operation.session.execution.cancel(operation.work);
+        if (operation.scriptExecution != null) operation.scriptExecution.cancel();
         operation.cancelRequested = true;
         operation.status = "CANCEL_REQUESTED";
         operation.step = "cancellation_requested";
@@ -1539,6 +1810,7 @@ public final class ActorControlService {
 
     private record RequestKey(String kind, String owner, String target, String requestId) { }
     private record RequestRecord(Object fingerprint, String operationId) { }
+    private record ScriptFingerprint(long generation, String sourceDigest, String parametersDigest, long timeoutMs) { }
     private record ActionFingerprint(long generation, String action, String textHash, Long dialogueVersion,
                                      String replyKind, Integer selection, String inventoryType, Integer sourceSlot,
                                      Integer targetSlot, ActorActRequest.ExpectedContext context) { }
@@ -1585,6 +1857,7 @@ public final class ActorControlService {
         ExecutionScope.WorkHandle work;
         NativeActionService.ActionHandle chatAction;
         NativeInventoryActions.MoveHandle inventoryAction;
+        ScriptExecution scriptExecution;
         CharacterRuntime.ModuleContext moduleContext;
         String actionEntryFailure;
         String action;
