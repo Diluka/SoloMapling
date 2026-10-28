@@ -10,6 +10,7 @@ from mcp import Client
 
 from solo_acceptance_mcp.bridge import BridgeClient, BridgeError
 from solo_acceptance_mcp.server import build_server
+from solo_acceptance_mcp.smoke import COMMAND_TOOLS, SCRIPT_TOOLS, require_capabilities
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import BridgeStub, PASSWORD, TOKEN, envelope
 
@@ -64,7 +65,7 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_stdio_registers_two_independent_tools_with_strict_command_schema(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(chat_protocol.TOOLS, set(tools))
+        self.assertEqual(chat_protocol.REGISTERED_TOOLS, set(tools))
         help_tool = tools["game_command_help"]
         self.assertTrue(help_tool.annotations.read_only_hint)
         self.assertTrue(help_tool.annotations.idempotent_hint)
@@ -85,6 +86,23 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
                                     model["properties"]["quantity"]["maximum"]))
         self.assertNotIn("session_id", schema["properties"])
         self.assertNotIn("expected_context", schema["properties"])
+        self.assertEqual([], self.stub.requests)
+
+    def test_command_and_script_capability_groups_are_independent_and_complete(self) -> None:
+        names = sorted(chat_protocol.REGISTERED_TOOLS)
+        base = chat_protocol.TOOLS
+        accepted = [chat_protocol.OBSERVATION_TOOLS,
+                    chat_protocol.OBSERVATION_TOOLS | chat_protocol.ACTOR_TOOLS,
+                    base, base | COMMAND_TOOLS, base | SCRIPT_TOOLS, base | COMMAND_TOOLS | SCRIPT_TOOLS]
+        for enabled in accepted:
+            with self.subTest(enabled=enabled):
+                self.assertEqual(sorted(enabled), require_capabilities(chat_protocol.capabilities(enabled), names))
+        rejected = [base | {"game_command"}, base | {"script_help"},
+                    base | COMMAND_TOOLS | {"script_run"}, base | SCRIPT_TOOLS | {"game_command_help"},
+                    chat_protocol.OBSERVATION_TOOLS | SCRIPT_TOOLS]
+        for enabled in rejected:
+            with self.subTest(enabled=enabled), self.assertRaises(RuntimeError):
+                require_capabilities(chat_protocol.capabilities(enabled), names)
         self.assertEqual([], self.stub.requests)
 
     async def test_help_and_command_use_native_routes_jwt_and_original_envelope(self) -> None:

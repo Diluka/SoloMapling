@@ -3133,6 +3133,182 @@ class ActorControlServiceTest {
         });
     }
 
+    @Test
+    void scriptsReturnDetachedValuesAndOutputAndReuseTheOriginalIdWithoutNewWork() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "script-open");
+        executors.getFirst().runNext();
+        var request = new ActorScriptRequest(sessionId(opened), generation(opened),
+                "console.log('计算', parameters.left); ({sum: parameters.left + parameters.right})",
+                Map.of("left", 17, "right", 25), 5000L);
+        var first = service.scriptRun("admin", "script-value", request);
+        assertEquals("SCRIPT", first.get("kind"));
+        assertEquals("SUCCEEDED", first.get("status"));
+        assertEquals(42, ((Number) ((Map<?, ?>) result(first).get("result")).get("sum")).intValue());
+        assertTrue(((String) result(first).get("stdout")).contains("计算 17"));
+        assertTrue((Boolean) result(first).get("engine_exited"));
+        assertTrue((Boolean) result(first).get("context_closed"));
+        assertTrue((Boolean) result(first).get("work_settled"));
+        assertNull(operationWork(service, first));
+        assertEquals(0, execution(service, opened).runtime().snapshot().lane().pending());
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
+        int history = ((Number) service.publicCapabilities().get("operation_history_size")).intValue();
+        var repeated = service.scriptRun("admin", "script-value", request);
+        assertEquals(id(first), id(repeated));
+        assertEquals(result(first), result(repeated));
+        assertEquals(history, service.publicCapabilities().get("operation_history_size"));
+        ObservationException changed = assertThrows(ObservationException.class, () -> service.scriptRun("admin", "script-value",
+                new ActorScriptRequest(sessionId(opened), generation(opened), request.source(),
+                        Map.of("left", 18, "right", 25), 5000L)));
+        assertEquals(HttpStatus.CONFLICT, changed.status());
+        assertEquals("request_id_conflict", changed.reason());
+    }
+
+    @Test
+    void scriptHelpUsesAnEmptyActualRegistryAndRequiresTheOwnedCurrentRole() {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "script-help-open");
+        executors.getFirst().runNext();
+        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of()));
+        assertEquals("javascript", help.get("language"));
+        assertEquals(List.of(), help.get("functions"));
+        assertEquals(List.of(), help.get("unavailable"));
+        assertEquals(List.of("move"), service.scriptHelp("admin",
+                new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of("move"))).get("unavailable"));
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class, () -> service.scriptHelp("other-admin",
+                new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of()))).status());
+        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class, () -> service.scriptHelp("admin",
+                new ActorScriptHelpRequest(sessionId(opened), generation(opened) + 1, List.of()))).status());
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+    }
+
+    @Test
+    void aCancellationReceivedBeforeRunCreatesOneSettledCheckpointAndNeverEvaluatesTheSource() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "script-early-cancel-open");
+        executors.getFirst().runNext();
+        String source = "throw new Error('this source must never execute')";
+        var cancel = new ActorScriptCancelRequest(sessionId(opened), generation(opened), "script-late-run",
+                source, Map.of("marker", 4), 5000L);
+        var cancelled = service.scriptCancel("admin", "early-cancel", cancel);
+        assertEquals("CANCELLED", cancelled.get("status"));
+        assertEquals(false, result(cancelled).get("engine_started"));
+        assertEquals(true, result(cancelled).get("work_settled"));
+        assertNull(operationWork(service, cancelled));
+        var late = service.scriptRun("admin", "script-late-run",
+                new ActorScriptRequest(sessionId(opened), generation(opened), source, Map.of("marker", 4), 5000L));
+        assertEquals(id(cancelled), id(late));
+        assertEquals("CANCELLED", late.get("status"));
+        assertEquals("", result(late).get("stdout"));
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
+        assertEquals(HttpStatus.CONFLICT, assertThrows(ObservationException.class,
+                () -> service.scriptRun("admin", "script-late-run",
+                        new ActorScriptRequest(sessionId(opened), generation(opened), "123", Map.of("marker", 4), 5000L))).status());
+    }
+
+    @Test
+    void malformedScriptInputsAreRejectedBeforeTakingHistoryOrScopeCapacity() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "script-validation-open");
+        executors.getFirst().runNext();
+        Object nested = 1;
+        for (int index = 0; index < 17; index++) nested = Map.of("nested", nested);
+        Map<String, Object> cycle = new java.util.LinkedHashMap<>(); cycle.put("self", cycle);
+        for (Map<String, Object> parameters : List.<Map<String, Object>>of(Map.of("large", "x".repeat(16384)),
+                Map.of("infinite", Double.POSITIVE_INFINITY), Map.of("deep", nested), cycle,
+                Map.of("native", handle), Map.of("text", "\ud800"), Map.of("\ud800", 1))) {
+            assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "invalid-script",
+                    new ActorScriptRequest(sessionId(opened), generation(opened), "1", parameters, 1000L))).status());
+        }
+        for (String source : List.of(" ", "x".repeat(65537), "\ud800", "\udc00")) {
+            assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "invalid-script",
+                    new ActorScriptRequest(sessionId(opened), generation(opened), source, Map.of(), 1000L))).status());
+        }
+        assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class,
+                () -> service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened), List.of("a".repeat(65))))).status());
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
+    }
+
+    @Test
+    void scriptErrorsAndDeadlineReturnSerializableResultsOnlyAfterActualSettlement() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "script-errors-open");
+        executors.getFirst().runNext();
+        for (var sample : Map.of("parse", "const = ;", "runtime", "throw new Error('失败')", "deadline", "while (true) {}" ).entrySet()) {
+            long deadline = "deadline".equals(sample.getKey()) ? 100L : 5000L;
+            var outcome = service.scriptRun("admin", "script-error-" + sample.getKey(),
+                    new ActorScriptRequest(sessionId(opened), generation(opened), sample.getValue(), Map.of(), deadline));
+            assertEquals("FAILED", outcome.get("status"));
+            assertEquals(switch (sample.getKey()) {
+                case "parse" -> "PARSE_ERROR";
+                case "runtime" -> "RUNTIME_ERROR";
+                default -> "TIMED_OUT";
+            }, result(outcome).get("status"));
+            assertEquals(true, result(outcome).get("engine_exited"));
+            assertEquals(true, result(outcome).get("context_closed"));
+            assertEquals(true, result(outcome).get("work_settled"));
+            assertNull(operationWork(service, outcome));
+            assertDoesNotThrow(() -> new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(outcome));
+        }
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().runningBodies());
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().pendingCarriers());
+    }
+
+    @Test
+    void anInfiniteScriptLeavesTheCommandLaneFreeAndExplicitCancellationReallySettlesItsOriginalWork() throws Exception {
+        ActorControlService service = service(4, 20, 64);
+        var opened = open(service, "script-running-open");
+        executors.getFirst().runNext();
+        var request = new ActorScriptRequest(sessionId(opened), generation(opened), "while (true) {}", Map.of(), 5000L);
+        var running = CompletableFuture.supplyAsync(() -> service.scriptRun("admin", "script-running", request));
+        awaitScriptBody(execution(service, opened));
+        assertEquals(0, execution(service, opened).runtime().snapshot().lane().pending());
+        var cancelled = service.scriptCancel("admin", "script-running-cancel",
+                new ActorScriptCancelRequest(sessionId(opened), generation(opened), "script-running",
+                        request.source(), request.parameters(), request.timeoutMs()));
+        assertEquals("CANCELLED", cancelled.get("status"));
+        assertEquals(true, result(cancelled).get("engine_exited"));
+        assertEquals(true, result(cancelled).get("context_closed"));
+        assertEquals(true, result(cancelled).get("work_settled"));
+        assertEquals(id(cancelled), id(running.get(5, TimeUnit.SECONDS)));
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().acceptedWork());
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().runningBodies());
+        assertEquals(0, execution(service, opened).moduleScope().snapshot().pendingCarriers());
+    }
+
+    @Test
+    void rootCloseWaitsForInfiniteScriptExitBeforeNativeReleaseAndKeepsItsHistoryReservation() throws Exception {
+        ActorControlService service = service(4, 3, 64);
+        var opened = open(service, "script-closing-open");
+        executors.getFirst().runNext();
+        AcceptanceActorExecution execution = execution(service, opened);
+        var running = CompletableFuture.supplyAsync(() -> service.scriptRun("admin", "script-closing",
+                new ActorScriptRequest(sessionId(opened), generation(opened), "while (true) {}", Map.of(), 5000L)));
+        awaitScriptBody(execution);
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "too-many-scripts",
+                new ActorScriptRequest(sessionId(opened), generation(opened), "1", Map.of(), 5000L))).status());
+        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenAnswer(invocation -> {
+            assertEquals(0, execution.moduleScope().snapshot().acceptedWork());
+            assertEquals(0, execution.moduleScope().snapshot().runningBodies());
+            assertEquals(0, execution.moduleScope().snapshot().pendingCarriers());
+            return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
+        });
+        var close = service.close("admin", "script-closing-close", closeRequest(opened));
+        var stopped = running.get(5, TimeUnit.SECONDS);
+        assertEquals("CANCELLED", stopped.get("status"));
+        assertEquals(true, result(stopped).get("work_settled"));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(close), 0, 100).get("status"));
+        assertEquals("CLOSED", service.get("admin", id(close), 0, 100).get("session") instanceof Map<?, ?> state ? state.get("state") : null);
+    }
+
+    private static void awaitScriptBody(AcceptanceActorExecution execution) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (execution.moduleScope().snapshot().runningBodies() == 0 && System.nanoTime() < deadline) Thread.sleep(5);
+        assertTrue(execution.moduleScope().snapshot().runningBodies() > 0, "script entered its original module scope");
+    }
+
     private ActorControlService service(int sessionLimit, int historyLimit, int eventLimit) {
         ActorControlService service = new ActorControlService(backend, sessionLimit, historyLimit, eventLimit,
                 profile -> {

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
+import anyio
 
 
 class ConfigurationError(ValueError):
@@ -161,6 +162,11 @@ EQUIPMENT_SLOTS = (*range(-1, -14, -1), *range(-15, -20, -1), -49, -50)
 IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+SCRIPT_FUNCTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+SCRIPT_MAX_SOURCE_UNITS = 65_536
+SCRIPT_MAX_PARAMETERS_BYTES = 16_384
+SCRIPT_MAX_TIMEOUT_MS = 5_000
+SCRIPT_CLEANUP_SECONDS = 5.0
 
 
 def validate_identifier(value: str, label: str, pattern: re.Pattern[str] = IDENTIFIER) -> None:
@@ -171,6 +177,59 @@ def validate_identifier(value: str, label: str, pattern: re.Pattern[str] = IDENT
 def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None:
     if type(value) is not int or not minimum <= value <= maximum:
         raise BridgeError("INVALID_ARGUMENTS", label + " 必须是允许范围内的整数。")
+
+
+def validate_script_target(session_id: str, expected_generation: int) -> None:
+    validate_identifier(session_id, "session_id")
+    validate_integer(expected_generation, "expected_generation", 1, MAX_LONG)
+
+
+def validate_script_run(
+    session_id: str, expected_generation: int, request_id: str, source: str,
+    parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+) -> None:
+    validate_script_target(session_id, expected_generation)
+    validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+    if (not isinstance(source, str) or not source.strip()
+            or sum(2 if ord(char) > 0xFFFF else 1 for char in source) > SCRIPT_MAX_SOURCE_UNITS
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in source)):
+        raise BridgeError("INVALID_ARGUMENTS", "source 必须是有界的非空 Unicode 脚本。")
+    validate_integer(timeout_ms, "timeout_ms", 1, SCRIPT_MAX_TIMEOUT_MS)
+    if parameters is None:
+        parameters = {}
+    if not isinstance(parameters, dict):
+        raise BridgeError("INVALID_ARGUMENTS", "parameters 必须是 JSON 对象。")
+    pending = [(parameters, 0)]
+    visited = 0
+    while pending:
+        value, depth = pending.pop()
+        visited += 1
+        if depth > 16 or visited > SCRIPT_MAX_PARAMETERS_BYTES:
+            raise BridgeError("INVALID_ARGUMENTS", "parameters 超过允许的 JSON 大小或嵌套深度。")
+        if isinstance(value, dict):
+            if any(not isinstance(key, str) for key in value):
+                raise BridgeError("INVALID_ARGUMENTS", "parameters 对象的键必须是字符串。")
+            pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, list):
+            pending.extend((child, depth + 1) for child in value)
+        elif value is not None and type(value) not in {str, int, float, bool}:
+            raise BridgeError("INVALID_ARGUMENTS", "parameters 只能包含 JSON 值。")
+    try:
+        encoded = json.dumps(parameters, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise BridgeError("INVALID_ARGUMENTS", "parameters 必须是可序列化的有限 JSON 值。") from None
+    if len(encoded) > SCRIPT_MAX_PARAMETERS_BYTES:
+        raise BridgeError("INVALID_ARGUMENTS", "parameters 超过允许的 JSON 大小。")
+
+
+def validate_script_help(session_id: str, expected_generation: int, names: list[str] | None = None) -> None:
+    validate_script_target(session_id, expected_generation)
+    if names is None:
+        names = []
+    if (not isinstance(names, list) or len(names) > 64
+            or any(not isinstance(name, str)
+                   or SCRIPT_FUNCTION_NAME.fullmatch(name) is None for name in names)):
+        raise BridgeError("INVALID_ARGUMENTS", "names 必须是最多64项的有效函数名列表。")
 
 
 def validate_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
@@ -401,6 +460,84 @@ class BridgeClient:
             "parameters": dict(parameters), "expected_context": dict(expected_context),
         }, request_id)
 
+    async def script_run(
+        self, session_id: str, expected_generation: int, *, request_id: str,
+        source: str, parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+    ) -> dict[str, Any]:
+        validate_script_run(session_id, expected_generation, request_id, source, parameters, timeout_ms)
+        # Round-trip the validated input so callers cannot change the fingerprint
+        # while the run and its cancellation cross independent HTTP connections.
+        data = {
+            "session_id": session_id, "expected_generation": expected_generation,
+            "source": source, "parameters": json.loads(json.dumps(parameters or {}, ensure_ascii=False)),
+            "timeout_ms": timeout_ms,
+        }
+        # Keep run + cleanup within the host tool's 45-second window even when
+        # ordinary observation HTTP requests use the configurable 30 seconds.
+        budget = timeout_ms / 1000 + SCRIPT_CLEANUP_SECONDS
+        request = asyncio.create_task(self._mutation(
+            "/solo/acceptance/v1/script/run", data, request_id, timeout_seconds=budget,
+        ))
+        try:
+            try:
+                return await asyncio.wait_for(asyncio.shield(request), timeout=budget)
+            except TimeoutError:
+                raise BridgeError("HTTP_TIMEOUT", "脚本请求超时，请按原 request_id 核对结果。",
+                                  request_id=request_id, outcome_unknown=True) from None
+        except asyncio.CancelledError:
+            # MCP SDK cancellation is level-triggered. Shield the *independent*
+            # cancel request and wait for the backend's actual settlement; merely
+            # cancelling the awaiting HTTP task would leave an engine running.
+            await self._stop_script_request(data, request_id, request, budget)
+            raise
+        except BridgeError as failure:
+            if failure.outcome_unknown:
+                await self._stop_script_request(data, request_id, request, budget)
+            raise
+
+    async def _stop_script_request(
+        self, data: dict[str, Any], request_id: str,
+        request: asyncio.Task[dict[str, Any]], budget: float,
+    ) -> None:
+        with anyio.move_on_after(budget + 1, shield=True):
+            try:
+                # The full original fingerprint closes the cancel-before-run
+                # acceptance race. A late run must read that same checkpoint.
+                await self._mutation(
+                    "/solo/acceptance/v1/script/cancel",
+                    {**data, "target_request_id": request_id}, str(uuid4()),
+                    timeout_seconds=budget,
+                )
+            except BridgeError:
+                # The original transport failure remains unknown. The backend
+                # still owns the execution deadline; do not invent cleanup proof.
+                pass
+            finally:
+                with anyio.move_on_after(1, shield=True):
+                    try:
+                        await asyncio.shield(request)
+                    except (BridgeError, asyncio.CancelledError):
+                        pass
+        if not request.done():
+            request.cancel()
+        # Consume transport exceptions even after the caller no longer waits.
+        with anyio.move_on_after(1, shield=True):
+            try:
+                await request
+            except (BridgeError, asyncio.CancelledError):
+                pass
+
+    async def script_help(
+        self, session_id: str, expected_generation: int, *, names: list[str] | None = None,
+    ) -> dict[str, Any]:
+        validate_script_help(session_id, expected_generation, names)
+        return await self._authorized_request(
+            "POST", "/solo/acceptance/v1/script/help", {"requestId": str(uuid4()), "data": {
+                "session_id": session_id, "expected_generation": expected_generation,
+                "names": list(names or []),
+            }},
+        )
+
     async def operation_get(
         self, operation_id: str, *, since_cursor: int = 0, limit: int = 100,
     ) -> dict[str, Any]:
@@ -416,9 +553,13 @@ class BridgeClient:
         validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
         return await self._mutation("/solo/acceptance/v1/operation/" + operation_id + "/cancel", {}, request_id)
 
-    async def _mutation(self, path: str, data: dict[str, Any], request_id: str) -> dict[str, Any]:
+    async def _mutation(
+        self, path: str, data: dict[str, Any], request_id: str, *, timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
         try:
-            response = await self._authorized_request("POST", path, {"requestId": request_id, "data": data})
+            response = await self._authorized_request(
+                "POST", path, {"requestId": request_id, "data": data}, timeout_seconds=timeout_seconds,
+            )
             if response.get("request_id", request_id) != request_id:
                 raise BridgeError("INVALID_RESPONSE", "验收桥返回的请求标识不一致。")
             # A generated server operation ID does not replace the caller's deduplication key.
@@ -464,13 +605,14 @@ class BridgeClient:
             return token
 
     async def _authorized_request(
-        self, method: str, path: str, body: dict[str, Any] | None = None
+        self, method: str, path: str, body: dict[str, Any] | None = None,
+        *, timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         token = await self._token_for_request()
-        response = await self._send(method, path, body, token)
+        response = await self._send(method, path, body, token, timeout_seconds=timeout_seconds)
         if response.status_code == 401:
             token = await self._token_for_request(stale_token=token)
-            response = await self._send(method, path, body, token)
+            response = await self._send(method, path, body, token, timeout_seconds=timeout_seconds)
         return self._decode(response)
 
     async def _send(
@@ -479,13 +621,15 @@ class BridgeClient:
         path: str,
         body: dict[str, Any] | None = None,
         token: str | None = None,
+        *, timeout_seconds: float | None = None,
     ) -> httpx.Response:
         headers = {"Accept": "application/json"}
         if token is not None:
             headers["Authorization"] = "Bearer " + token
         try:
             # Bound response memory even when a reverse proxy returns a large error body.
-            async with self._http.stream(method, path, json=body, headers=headers) as response:
+            options = {} if timeout_seconds is None else {"timeout": timeout_seconds}
+            async with self._http.stream(method, path, json=body, headers=headers, **options) as response:
                 content = bytearray()
                 async for part in response.aiter_bytes():
                     content.extend(part)
@@ -523,7 +667,7 @@ class BridgeClient:
             raise BridgeError(code, message, http_status=status, retryable=status in {502, 503, 504})
         try:
             result = response.json()
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise BridgeError("INVALID_RESPONSE", "验收桥未返回有效 JSON。") from None
         if not isinstance(result, dict):
             raise BridgeError("INVALID_RESPONSE", "验收桥返回了不支持的数据结构。")
@@ -537,5 +681,18 @@ class BridgeClient:
         data = result.get("data")
         if not isinstance(data, dict):
             raise BridgeError("INVALID_RESPONSE", "验收桥响应缺少结构化数据对象。")
+        pending: list[Any] = [data]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, str):
+                if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+                    raise BridgeError("INVALID_RESPONSE", "验收桥响应包含无效 Unicode。")
+            elif isinstance(value, dict):
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+            elif isinstance(value, float) and not math.isfinite(value):
+                raise BridgeError("INVALID_RESPONSE", "验收桥响应包含非有限 JSON 数值。")
         return data
 

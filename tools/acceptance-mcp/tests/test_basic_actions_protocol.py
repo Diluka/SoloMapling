@@ -7,7 +7,7 @@ import unittest
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from solo_acceptance_mcp.smoke import require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, require_capabilities
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests.test_chat_protocol import ACT_PATH, TOOLS, ChatProtocolStub, capabilities
@@ -97,7 +97,7 @@ class BasicActionsProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_schema_binds_all_eight_basic_actions_to_strict_independent_models(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(REGISTERED_TOOLS, set(tools))
         schema = tools["game_act"].input_schema
         self.assertEqual(ACTIONS, schema["properties"]["action"]["enum"])
         self.assertEqual(set(self.args), set(schema["required"]))
@@ -299,7 +299,7 @@ class BasicActionsProtocolTests(unittest.IsolatedAsyncioTestCase):
         accepted.extend(basic_capabilities(BASE_ACTIONS + [action]) for action in PARAMETERS)
         for caps in accepted:
             with self.subTest(actions=caps["actions"]):
-                self.assertEqual(sorted(TOOLS), require_capabilities(caps, sorted(TOOLS), actors=True))
+                self.assertEqual(sorted(TOOLS), require_capabilities(caps, sorted(REGISTERED_TOOLS), actors=True))
         invalid = [basic_capabilities(ACTIONS + ["skill"]), basic_capabilities(ACTIONS + ["move"]),
                    basic_capabilities(["chat", "move"])]
         mismatched = deepcopy(basic_capabilities())
@@ -307,7 +307,7 @@ class BasicActionsProtocolTests(unittest.IsolatedAsyncioTestCase):
         invalid.append(mismatched)
         for caps in invalid:
             with self.subTest(actions=caps["actions"]), self.assertRaises(RuntimeError):
-                require_capabilities(caps, sorted(TOOLS), actors=True)
+                require_capabilities(caps, sorted(REGISTERED_TOOLS), actors=True)
 
     async def test_same_id_parameter_conflict_is_left_to_backend_and_is_not_retried(self) -> None:
         seen = {}

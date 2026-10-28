@@ -22,11 +22,12 @@ ACTOR_TOOLS = frozenset({"actor_open", "actor_close", "operation_get", "operatio
 ACTOR_IMPLEMENTED_TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS
 BASIC_IMPLEMENTED_TOOLS = ACTOR_IMPLEMENTED_TOOLS | {"game_act"}
 COMMAND_TOOLS = frozenset({"game_command_help", "game_command"})
-IMPLEMENTED_TOOLS = BASIC_IMPLEMENTED_TOOLS | COMMAND_TOOLS
+SCRIPT_TOOLS = frozenset({"script_run", "script_help"})
+IMPLEMENTED_TOOLS = BASIC_IMPLEMENTED_TOOLS | COMMAND_TOOLS | SCRIPT_TOOLS
 
 
 def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False, chat: bool = False) -> list[str]:
-    """Accept implemented actor subsets and the optional paired command tools."""
+    """Preserve actor subsets and independent paired script/command announcements."""
     if len(names) != len(set(names)) or set(names) != IMPLEMENTED_TOOLS:
         raise RuntimeError("MCP 工具清单与当前已实现接口不一致。")
     enabled = capabilities.get("enabled_tools")
@@ -36,8 +37,10 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         or not isinstance(enabled, list)
         or any(not isinstance(name, str) for name in enabled)
         or len(enabled) != len(set(enabled))
-        or set(enabled) - COMMAND_TOOLS not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, BASIC_IMPLEMENTED_TOOLS)
+        or set(enabled) - COMMAND_TOOLS - SCRIPT_TOOLS not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, BASIC_IMPLEMENTED_TOOLS)
         or set(enabled) & COMMAND_TOOLS not in (set(), COMMAND_TOOLS)
+        or set(enabled) & SCRIPT_TOOLS not in (set(), SCRIPT_TOOLS)
+        or SCRIPT_TOOLS <= set(enabled) and not BASIC_IMPLEMENTED_TOOLS <= set(enabled)
     ):
         raise RuntimeError("实际验收桥没有返回合法的已开放能力。")
     expected_round = "R2a" if ACTOR_TOOLS <= set(enabled) else "R1"

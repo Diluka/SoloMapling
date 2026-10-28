@@ -21,7 +21,8 @@ from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 
 OBSERVATION_TOOLS = {"game_capabilities", "game_observe"}
 ACTOR_TOOLS = {"actor_open", "actor_close", "operation_get", "operation_cancel"}
-TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS | {"game_act"} | COMMAND_TOOLS
+TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS | {"game_act"}
+REGISTERED_TOOLS = TOOLS | COMMAND_TOOLS | {"script_run", "script_help"}
 ACT_PATH = "/solo/acceptance/v1/actor/act"
 MAX_LONG = 2**63 - 1
 REGISTERED_ACTIONS = ["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
@@ -144,7 +145,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
             caps = await client.call_tool("game_capabilities", {})
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(REGISTERED_TOOLS, set(tools))
         annotations = tools["game_act"].annotations
         self.assertFalse(annotations.read_only_hint)
         self.assertTrue(annotations.destructive_hint)
@@ -400,22 +401,22 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_capability_helper_accepts_only_complete_supported_backend_tool_subsets(self) -> None:
         for enabled in [OBSERVATION_TOOLS, OBSERVATION_TOOLS | ACTOR_TOOLS, TOOLS]:
             with self.subTest(enabled=enabled):
-                self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(TOOLS)))
+                self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS)))
                 if "game_act" in enabled:
-                    self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(TOOLS), chat=True))
+                    self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS), chat=True))
                 else:
                     with self.assertRaises(RuntimeError):
-                        require_capabilities(capabilities(enabled), sorted(TOOLS), chat=True)
+                        require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS), chat=True)
         for enabled in [OBSERVATION_TOOLS | {"game_act"}, OBSERVATION_TOOLS | {"actor_open"},
                         TOOLS - {"actor_close"}, TOOLS | {"unknown_tool"}]:
             with self.subTest(enabled=enabled), self.assertRaises(RuntimeError):
-                require_capabilities(capabilities(enabled), sorted(TOOLS))
+                require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS))
         for field in ["actions", "actor_control"]:
             for value in [None, [], {}, ["npc"]]:
                 invalid = capabilities(TOOLS)
                 invalid[field] = value
                 with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
-                    require_capabilities(invalid, sorted(TOOLS))
+                    require_capabilities(invalid, sorted(REGISTERED_TOOLS))
 
     async def test_stdio_backend_with_chat_disabled_is_not_promoted_by_the_registered_game_act_tool(self) -> None:
         old_capabilities = capabilities(OBSERVATION_TOOLS | ACTOR_TOOLS)
@@ -426,7 +427,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with self.stdio_client() as client:
             names = [tool.name for tool in (await client.list_tools()).tools]
             response = await client.call_tool("game_capabilities", {})
-        self.assertEqual(TOOLS, set(names))
+        self.assertEqual(REGISTERED_TOOLS, set(names))
         self.assertEqual(old_capabilities, response.structured_content)
         self.assertNotIn("game_act", require_capabilities(response.structured_content, names, actors=True))
         self.assertEqual([], response.structured_content["actions"])

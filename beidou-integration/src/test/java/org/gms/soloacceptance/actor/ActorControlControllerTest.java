@@ -73,6 +73,12 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                assertThrows(ObservationException.class, () -> controller.scriptRun(null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                assertThrows(ObservationException.class, () -> controller.scriptHelp(null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                assertThrows(ObservationException.class, () -> controller.scriptCancel(null)).status());
 
         authenticate("reader", "ROLE_USER");
         assertEquals(HttpStatus.FORBIDDEN,
@@ -81,6 +87,12 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.act(null)).status());
+        assertEquals(HttpStatus.FORBIDDEN,
+                assertThrows(ObservationException.class, () -> controller.scriptRun(null)).status());
+        assertEquals(HttpStatus.FORBIDDEN,
+                assertThrows(ObservationException.class, () -> controller.scriptHelp(null)).status());
+        assertEquals(HttpStatus.FORBIDDEN,
+                assertThrows(ObservationException.class, () -> controller.scriptCancel(null)).status());
         verifyNoInteractions(service);
     }
 
@@ -473,6 +485,45 @@ class ActorControlControllerTest {
         assertNull(mapper.treeToValue(body, ActorActRequest.class).parameters().kind());
         parameters.putNull("selection");
         assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class));
+    }
+
+    @Test
+    void scriptEndpointsKeepAdminOwnerRequestIdsAndOriginalCancellationFingerprint() {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("script-admin", "ROLE_ADMIN");
+        var script = new ActorScriptRequest("session", 7L, "parameters.x + 1", Map.of("x", 3), 1000L);
+        when(service.scriptRun("script-admin", "script-id", script)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
+        assertEquals("SUCCEEDED", controller.scriptRun(new SubmitBody<>("script-id", script)).getData().get("status"));
+        var help = new ActorScriptHelpRequest("session", 7L, List.of());
+        when(service.scriptHelp("script-admin", help)).thenReturn(Map.of("functions", List.of()));
+        assertEquals(List.of(), controller.scriptHelp(new SubmitBody<>("help-id", help)).getData().get("functions"));
+        var cancel = new ActorScriptCancelRequest("session", 7L, "script-id", script.source(), script.parameters(), 1000L);
+        when(service.scriptCancel("script-admin", "cancel-id", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
+        assertEquals("cancel-id", controller.scriptCancel(new SubmitBody<>("cancel-id", cancel)).getResponseId());
+        verify(service).scriptRun("script-admin", "script-id", script);
+        verify(service).scriptHelp("script-admin", help);
+        verify(service).scriptCancel("script-admin", "cancel-id", cancel);
+    }
+
+    @Test
+    void scriptJsonRejectsCoercedSourcesGenerationsTimeoutsAndHelpNames() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String valid = "{\"session_id\":\"session\",\"expected_generation\":7,\"source\":\"1+1\",\"parameters\":{},\"timeout_ms\":1000}";
+        for (String field : List.of("session_id", "expected_generation", "source", "timeout_ms")) {
+            List<String> invalid = List.of("true", "{}", "[]", "1.25");
+            for (String value : invalid) {
+                ObjectNode body = (ObjectNode) mapper.readTree(valid);
+                body.set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorScriptRequest.class), field + "=" + value);
+            }
+        }
+        ActorScriptRequest defaults = mapper.readValue("{\"session_id\":\"session\",\"expected_generation\":7,\"source\":\"1\"}", ActorScriptRequest.class);
+        assertEquals(1000L, defaults.timeoutMs());
+        assertEquals(Map.of(), defaults.parameters());
+        for (String invalid : List.of("[1]", "[true]", "{}", "\"fn\"")) {
+            assertThrows(Exception.class, () -> mapper.readValue("{\"session_id\":\"session\",\"expected_generation\":7,\"names\":" + invalid + "}", ActorScriptHelpRequest.class));
+        }
     }
 
     private static ObjectNode npcActionJson(ObjectMapper mapper, String action) throws Exception {
