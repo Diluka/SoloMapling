@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。本轮候选新增 `script_run`、`script_help`，客户端共九工具，首片只执行纯脚本与返回空函数目录。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准；脚本切片的源码测试、CI、隔离及实际部署结果按 [#199](https://github.com/Diluka/SoloMapling/issues/199) 分别记录。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。本轮源码新增 `script_run`、`script_help`，客户端共九工具，首片只执行纯脚本与返回空函数目录。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准；脚本切片的源码测试、CI、隔离及实际部署结果按 [#199](https://github.com/Diluka/SoloMapling/issues/199) 分别记录。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -101,7 +101,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 当前工具接口
 
-下表列出当前客户端的九工具，脚本两工具为本轮候选基础切片；实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关。
+下表列出当前客户端的九工具，脚本两工具为本轮源码实现的基础切片；实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -112,8 +112,8 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
 | `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
-| `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 本轮候选：纯 JavaScript，无游戏函数 |
-| `script_help` | session_id、expected_generation、可选 names | 查询同源函数描述，未注册时 functions 为空 | 本轮候选：只读，不分配脚本工作 |
+| `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 本轮基础切片：纯 JavaScript，无游戏函数 |
+| `script_help` | session_id、expected_generation、可选 names | 查询同源函数描述，未注册时 functions 为空 | 本轮基础切片：只读，不分配脚本工作 |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。
 

@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现九个工具；`script_run/script_help` 为本轮候选脚本基础，实际部署结果见 #199。后端是否已开启角色、已审 NPC、基本动作与脚本，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现九个工具；`script_run/script_help` 为本轮源码提供的脚本基础，实际部署与各层验收结果见 #199。后端是否已开启角色、已审 NPC、基本动作与脚本，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|

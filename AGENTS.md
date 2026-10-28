@@ -119,7 +119,7 @@ python3 beidou-integration/scripts/build.py --help
 ## #199/#204 脚本基础切片
 
 - MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。次要游戏操作按需求进入脚本环境；本轮只贯通纯脚本、JSON 参数、有界语言输出与结果，以及解析/运行错误。
-- 候选新增 `script_run`、`script_help`，客户端共九工具。实际部署与各层验收以对应 Issue 证据及 `game_capabilities` 为准，不把源码存在当作已上线。
+- 本轮源码新增 `script_run`、`script_help`，客户端共九工具。实际部署与各层验收以对应 Issue 证据及 `game_capabilities` 为准，不把源码存在当作已上线。
 - 脚本设施由 `CharacterRuntime` 承载，调用使用当前角色、模块执行代次及原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令 lane。MCP 只保留协议、鉴权、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
 - 帮助与实际函数绑定共用最小注册描述来源；生产未注册游戏函数时返回空目录，不能把现有 NPC 脚本的 `cm/im/qm/rm/em` 或 Java 互操作当成可用能力。
 - 超时、MCP 中断、模块停止和根关闭均须核实脚本推进已停止、Context 已关闭及原 work 真正结算。`Future.cancel/isDone`、HTTP 返回或 operation 终态不能单独证明收尾；纯脚本无限循环也必须能被真实终止。

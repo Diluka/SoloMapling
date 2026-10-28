@@ -1,6 +1,6 @@
 # 运行体脚本执行：纯脚本基础
 
-本页描述 [#199](https://github.com/Diluka/SoloMapling/issues/199) 与 [#204](https://github.com/Diluka/SoloMapling/issues/204) 的本轮候选基础切片。源码、CI、隔离 MCP 和实际部署结果由 Issue 分别留证，不能由本页推导部署已完成。
+本页描述 [#199](https://github.com/Diluka/SoloMapling/issues/199) 与 [#204](https://github.com/Diluka/SoloMapling/issues/204) 的本轮源码基础切片。源码测试、CI、隔离 MCP 和实际部署结果由 Issue 分别留证，不能由本页推导部署已完成。
 
 本片让已有角色上的 MCP 调用执行纯 JavaScript、传入 JSON 参数、收集语言输出并取得可序列化结果。生产函数目录为空。现有 `game_act` 保留，具体游戏函数、动作迁移、行为模块脚本和共享观察/事件目录另行推进；本片不等待 #200 全部完成。
 
