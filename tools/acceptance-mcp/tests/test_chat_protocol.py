@@ -15,13 +15,13 @@ from uuid import uuid4
 
 from mcp import Client, StdioServerParameters
 
-from solo_acceptance_mcp.smoke import require_capabilities
+from solo_acceptance_mcp.smoke import COMMAND_TOOLS, require_capabilities
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 
 
 OBSERVATION_TOOLS = {"game_capabilities", "game_observe"}
 ACTOR_TOOLS = {"actor_open", "actor_close", "operation_get", "operation_cancel"}
-TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS | {"game_act"}
+TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS | {"game_act"} | COMMAND_TOOLS
 ACT_PATH = "/solo/acceptance/v1/actor/act"
 MAX_LONG = 2**63 - 1
 
@@ -138,7 +138,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
     def action_requests(self) -> list[dict]:
         return [request for request in self.stub.requests if request["path"] == ACT_PATH]
 
-    async def test_stdio_registers_exactly_seven_tools_with_explicit_chat_mutation_annotations(self) -> None:
+    async def test_stdio_registers_implemented_tools_with_explicit_chat_mutation_annotations(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
             caps = await client.call_tool("game_capabilities", {})

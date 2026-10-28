@@ -1,5 +1,7 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
+新增 #207 独立管理指令入口的配置、参数和恢复规则见[管理指令说明](commands.md)。该入口直接复用原生服务，与角色运行体解耦；实际启用和部署状态以 `debug_commands` 能力公告及 #207 验收记录为准。
+
 **状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已完成隔离及实际部署验收。** 当前已交付七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply/inventory_move`，NPC 回复仅开放已审查的 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。当前按 [#200 基本操作调试入口](https://github.com/Diluka/SoloMapling/issues/200) 逐片验收；[#199 同步脚本与函数帮助](https://github.com/Diluka/SoloMapling/issues/199) 为后续二期，尚未实现。礼包接受、完整城镇菜单、付费出行、SocialBot 回复及其他基本动作继续独立推进。宿主原生工具加载与真实客户端玩法分别记录；每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。

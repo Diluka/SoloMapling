@@ -10,6 +10,7 @@ import org.gms.scripting.event.EventInstanceManager;
 import org.gms.server.maps.MapManager;
 import org.gms.server.maps.MapleMap;
 import org.gms.soloacceptance.actor.ActorControlService;
+import org.gms.soloacceptance.command.DebugCommandService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -41,6 +42,8 @@ public final class AcceptanceObservationService {
     private String referenceGeneration;
     @Autowired(required = false)
     private ObjectProvider<ActorControlService> actorControls;
+    @Autowired(required = false)
+    private ObjectProvider<DebugCommandService> debugCommands;
 
     public AcceptanceObservationService() {
         this(Server::getInstance, SourceIdentity::read, MAX_SCENES);
@@ -66,6 +69,14 @@ public final class AcceptanceObservationService {
             }
             result.put("actor_control", actorCapabilities);
         }
+        DebugCommandService commands = debugCommands == null ? null : debugCommands.getIfAvailable();
+        Map<String, Object> commandCapabilities = commands == null
+                ? Map.of("enabled", false, "enabled_tools", List.of(), "commands", List.of())
+                : commands.publicCapabilities();
+        for (Object tool : (List<?>) commandCapabilities.get("enabled_tools")) {
+            enabledTools.add((String) tool);
+        }
+        result.put("debug_commands", commandCapabilities);
         result.put("implementation_round", controls == null ? "R1" : "R2a");
         result.put("enabled_tools", enabledTools);
         result.put("scopes", controls == null ? List.of("world", "scene") : List.of("world", "scene", "actor"));

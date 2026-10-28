@@ -109,3 +109,9 @@ python3 beidou-integration/scripts/build.py --help
 - #164 的候选背包移位能力位于中立 `soloMapling.game.action.NativeInventoryActions`，经运行体原模块 scope、Grant 与唯一 lane 执行；MCP 仅适配身份、请求、场景及结果，不实现第二份物品规则。实际部署以对应 Issue 和能力公告为准。
 - `inventory_move` 仅接受五类普通背包内不同的正槽位1..127；零/负槽位属于其他原生分流，必须拒绝，不提前开放丢弃或穿脱。原生整槽移动、交换、合堆与300ms限频保持原样。
 - 成功必须核同一原生背包锁内的两槽前后事实，派发后取消不撤回；原生事实与work真实结算分开。背包存档另核正常退出及同CID重开，既有 `persisted_state_verified` 不包含背包。详见 `docs/shared-game-foundation/inventory-move.md`。
+
+## #207 独立管理指令调试入口
+
+- 管理指令直接复用北斗原生管理服务，与 CharacterRuntime、模块 scope/Grant 和角色 lane 解耦。角色、背包和存档数据仍在北斗服务端；不得以未经验证的并发假设强加运行体前置。后续 #199 只需将同一适配绑定到脚本环境，不复制实现。
+- `game_command_help` / `game_command` 独立于 `game_act`；需本地 `enabled`、`actors-enabled`、`debug-commands-enabled` 三开关同时启用，新增开关默认关闭。沿正常管理员 JWT，目标限已有 profile 登记的在线普通专用角色；首轮仅普通 USE/ETC 可堆叠物品，不透传全服、提权或其他资源分支。
+- 请求携带独立 `expected_command_generation`，从 help/capabilities 获取。按 owner/request_id 保留本进程最多256条历史且不淘汰，原ID同参数恢复事实、变参拒绝、旧进程代次拒绝；未知结果不新ID重发。实际数量前后态和同CID重开存档分开验证。各层交付以 #207 为准，详见 `docs/mcp-acceptance/commands.md`。

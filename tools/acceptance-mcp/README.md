@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、中心、有限回复及背包移位，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现九个工具，实际后端是否已开启角色控制、动作或独立管理指令，以 `game_capabilities.enabled_tools`、`actions` 与 `debug_commands` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -11,6 +11,10 @@
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 | `game_act` | 在真实 actor 场景中排队 `chat`、`npc_center_open`、`npc_cancel`、`npc_reply` 或 `inventory_move` | 写操作；必须有 request_id 和实际 expected_context |
+| `game_command_help` | 查询独立管理指令的实际范围、参数和管理进程代次 | 只读；需启用 debug-commands-enabled |
+| `game_command` | 对已登记在线调试角色调用原生 give 物品服务 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
+
+管理指令的配置、目标、真实结果与原 ID 恢复见[管理指令说明](../../docs/mcp-acceptance/commands.md)。新增工具不扩大 `game_act` 范围，后端未启用时不公告为可用能力。
 
 基本调试入口按 [#200](https://github.com/Diluka/SoloMapling/issues/200) 逐片交付，后续同步脚本由 [#199](https://github.com/Diluka/SoloMapling/issues/199) 单独验收；能力公告只列实际已实现的工具、动作和观察范围。
 
