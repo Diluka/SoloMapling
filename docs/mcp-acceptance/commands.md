@@ -68,7 +68,7 @@ solomapling:
 原生handle返回void，可能在未知命令、权限不足或Client忙时发提示后正常return。
 因此 `status=RETURNED`、`native_handler_invoked=true`、`native_handler_returned=true`
 只表示调用已返回，`command_outcome=UNREPORTED` 不确认命令业务成功。需要通过原生
-反馈包或实际状态判断效果，不能只看JS无异常、HTTP200或MCP的is_error=false。管理员黄字反馈沿actor包窗口的yellow_tip读取（原生0x4D），与普通聊天广播分开，保留原编码、有界文本和游标语义。原NPC action/nextLevel回调已持有Client信号量时，嵌套调用handle可能沿原规则提示busy；原回调返回后的source/后续调用继续沿原入口处理，本片不绕过该锁。
+反馈包或实际状态判断效果，不能只看JS无异常、HTTP200或MCP的is_error=false。管理员黄字反馈沿actor包窗口的yellow_tip读取（原生0x4D），与普通聊天广播分开，保留原编码、有界文本和游标语义。Client忙碌提示沿原有server_message（0x44/type5）读取；原生动作信号量有7个许可，NPC回调持有一份许可并不意味着嵌套命令必然拒绝。本片不改变许可或锁规则。
 原生调用异常返回UNKNOWN；目标资格失败等本层拒绝则不调用原生处理器。
 
 MCP按管理员身份/request_id保留本进程最多256条历史，不淘汰；满容量明确拒绝。
