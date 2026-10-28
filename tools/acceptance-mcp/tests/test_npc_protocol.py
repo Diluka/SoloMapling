@@ -343,7 +343,6 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(PACKET_CAPABILITIES["decoded_packets"], actual["decoded_packets"][:3])
         self.assertEqual(NPC_DECODER, actual["decoded_packets"][3])
         self.assertFalse(response.structured_content["event_stream"])
-        self.assertEqual([], response.structured_content["recipes"])
         self.assertEqual(PACKET_CAPABILITIES,
                          require_packet_capability(npc_capabilities(actions=["chat"], npc_decoder=False)))
         for types in [[True], [4.0], ["4"], [], [0], [4, 5]]:

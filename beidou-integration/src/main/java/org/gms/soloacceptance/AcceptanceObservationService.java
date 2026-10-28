@@ -70,7 +70,6 @@ public final class AcceptanceObservationService {
         result.put("enabled_tools", enabledTools);
         result.put("scopes", controls == null ? List.of("world", "scene") : List.of("world", "scene", "actor"));
         result.put("actions", actorCapabilities == null ? List.of() : actorCapabilities.get("actions"));
-        result.put("recipes", List.of());
         result.put("server_online", runtime.active() && serverSource.get().isOnline());
         result.put("source", SourceIdentity.publicFields(identitySource.get()));
         result.put("default_limit", DEFAULT_LIMIT);

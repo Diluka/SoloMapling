@@ -30,7 +30,7 @@ def capabilities(enabled: set[str]) -> dict:
     value = deepcopy(CAPABILITIES)
     value.update(
         implementation_round="R2a" if ACTOR_TOOLS <= enabled else "R1",
-        enabled_tools=sorted(enabled), actions=["chat"] if "game_act" in enabled else [], recipes=[],
+        enabled_tools=sorted(enabled), actions=["chat"] if "game_act" in enabled else [],
     )
     if "game_act" in enabled:
         value["actor_control"] = {"actions": ["chat"]}
@@ -405,7 +405,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(RuntimeError):
                         require_capabilities(capabilities(enabled), sorted(TOOLS), chat=True)
         for enabled in [OBSERVATION_TOOLS | {"game_act"}, OBSERVATION_TOOLS | {"actor_open"},
-                        TOOLS - {"actor_close"}, TOOLS | {"recipe_run"}]:
+                        TOOLS - {"actor_close"}, TOOLS | {"unknown_tool"}]:
             with self.subTest(enabled=enabled), self.assertRaises(RuntimeError):
                 require_capabilities(capabilities(enabled), sorted(TOOLS))
         for field in ["actions", "actor_control"]:

@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复也已完成隔离及实际部署验收。** #117 共享上下文已完成完整构建、CI、隔离及实际部署验收并关闭。该轮已验收交付源码为 `8f8ebf485c719b868d5ba7ab4a6950632bfff730`（[PR #130](https://github.com/Diluka/SoloMapling/pull/130)）；#63、#67～#70、#72、限频验收修正 #74、#75 和 #110 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply`，回复仅开放 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。#110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已完成隔离及实际部署验收。** 当前已交付七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply/inventory_move`，NPC 回复仅开放已审查的 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。当前按 [#200 基本操作调试入口](https://github.com/Diluka/SoloMapling/issues/200) 逐片验收；[#199 同步脚本与函数帮助](https://github.com/Diluka/SoloMapling/issues/199) 为后续二期，尚未实现。礼包接受、完整城镇菜单、付费出行、SocialBot 回复及其他基本动作继续独立推进。宿主原生工具加载与真实客户端玩法分别记录；每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -31,7 +31,7 @@ solomapling:
 
 ## 与二代、PQ 共享基础
 
-[共享入口 #116](https://github.com/Diluka/SoloMapling/issues/116) 统一跟踪一份中立Java后端，接口及作用域见 [共享游戏基建说明](../shared-game-foundation/README.md)。[#117 中立上下文](https://github.com/Diluka/SoloMapling/issues/117) 已加入 WorldEpoch、角色/场景结构检查和 MCP/Bot 两种薄适配，已完成完整构建、CI、隔离和实际部署验收；第二类Bot合同测试与实际MCP证据分开。当前实际运行已包含此共享实现，七工具和四种动作的公开契约不因本轮提炼增加。
+[共享入口 #116](https://github.com/Diluka/SoloMapling/issues/116) 统一跟踪一份中立Java后端，接口及作用域见 [共享游戏基建说明](../shared-game-foundation/README.md)。[#117 中立上下文](https://github.com/Diluka/SoloMapling/issues/117) 已加入 WorldEpoch、角色/场景结构检查和 MCP/Bot 两种薄适配，已完成完整构建、CI、隔离和实际部署验收；第二类Bot合同测试与实际MCP证据分开。#117 交付时保持七工具和四种动作；后续动作按独立切片接入同一共享实现。
 
 共享上下文只核对已指定的原生对象关系，不读普通登录标志，不依赖验收开关、`Server.getInstance()`、全世界目录或包捕获。MCP继续保留JWT/admin、owner/profile、账号lease/在线Client、GM0、排除bot、普通登录状态和request_id历史。Bot薄适配以BotClient及精确BotRegistry登记授信，保持V1角色真实loggedIn=false；其真实原生对象/宿主路由替身测试不代表完整V2模块已经运行。V2/PQ通过内部Java适配消费，不经Python/HTTP/MCP发动作，也不复制整个ActorControlService。
 
@@ -53,7 +53,7 @@ solomapling:
 
 ## 目标与定位
 
-让操作者通过MCP观察当前游戏，主动操作专用验收角色，触发正常游戏脚本，并调用可重复的验收流程。验收角色由操作者控制；公会核心队员和自动PQ bot是它的交互对象，也可在多角色场景中作为协作队员。它们共享正常游戏动作能力，身份、调度归属和验收职责分开。
+让操作者通过 MCP 观察当前游戏，主动操作专用验收角色，并通过正常入口触发游戏脚本。当前先验证单项基本操作，后续同步脚本按 #199 推进。验收角色由操作者控制；公会核心队员和自动PQ bot是它的交互对象，也可在多角色场景中作为协作队员。它们共享正常游戏动作能力，身份、调度归属和验收职责分开。
 
 这里的角色是**服务器端玩家替身**：用于验证服务器业务链、机器人行为、NPC/门户/物品/组队与副本结果。真实客户端的网络握手、封包加解密、渲染、输入和玩家操控体验仍有独立验收。
 
@@ -99,9 +99,9 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 - 释放角色先取消/排空本actor操作，再沿原生对话、队伍、事件注销、存档与离线流程清理；不复用明确跳过EIM/MatchChecker的环境bot离队捷径。默认保留持久fixture数据，清理只针对本次控制会话和本次创建的隔离资源。
 - profile、客户端、地图及原生登记需要完整初始化与失败回滚；没有Netty socket时的Client会话依赖必须逐项测试，不以强改loggedIn或反射地图集合跳过正常生命周期。
 
-## 工具接口与后续草案
+## 当前工具接口
 
-下表区分已部署能力和后续设计。已部署七工具包括 `game_act` 的四种动作，npc_reply仅支持已审查的select/decline。角色/动作接口须开启双开关，其他 NPC、移动和 recipe 不注册空能力。
+下表列出已交付的七工具。`game_act` 当前支持五种动作，npc_reply 仅支持已审查的 select/decline，inventory_move 仅支持普通背包正槽位移位。角色/动作接口须开启双开关，后续能力在独立实现与验收后开放。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -111,9 +111,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `actor_close` | session_id、expected_generation、request_id | 排队正常离线，查询清理及持久化核验结果，保留 fixture | R2a |
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
-| `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | chat/中心首屏/取消/npc_reply已部署，reply仅select/decline |
-| `recipe_list` | 可选 name | 命名流程、版本、输入 schema、步骤与需要能力 | R4，未注册 |
-| `recipe_run` | session_ids、name、version、inputs、request_id | 启动命名流程，返回可追踪 run/operation_id | R4，未注册 |
+| `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | chat/中心首屏/取消/npc_reply/inventory_move 已交付，reply 仅 select/decline |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。
 
@@ -124,7 +122,7 @@ R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/
 - `party_create/invite/accept/leave`：保留队长、容量、等级、邀请及实例流程；新profile不能自动改变真实玩家队伍。
 - `pickup/drop/use_item/hit_reactor/attack`：按每项正常原生链逐个开放，真实归属、背包变化、道具消耗、技能条件与目标结果可观察；外观动作不算通过。
 
-动作类型应有各自输入schema和范围校验。公共请求不接受任意Java方法、反射字段、SQL、JS文本或服务器脚本路径；“调用游戏脚本”通过NPC/门户等正常入口发生。需要测试数据准备时另列fixture准备步骤和前后快照，不纳入正常游玩通过证据。
+动作类型应有各自输入schema和范围校验。当前基本动作请求不接受任意Java方法、反射字段、SQL、JS文本或服务器脚本路径；“调用游戏脚本”通过NPC/门户等正常入口发生。需要测试数据准备时另列fixture准备步骤和前后快照，不纳入正常游玩通过证据。
 
 NPC的`start()`本身可能传送、修改任务或发放物品，尚未选择菜单也可能有副作用。普通`npc_talk`按可变更游戏状态的动作记录；取消对话不意味着回滚已发生变化。用于“只看菜单”的预置检查流程只能选择已核对启动行为的具体NPC/场景，绑定被核对的脚本版本，并核对实际前后状态。
 
@@ -161,7 +159,7 @@ R2a 原生角色快照包含身份、等级/经验、HP/MP、金币、职业、�
 }
 ```
 
-上例是 `actor_control.packet_observation` 的结构。#70 交付时保持六工具且 `actions=[]`；已部署 #72 单独增加 `game_act` 与 `actions=["chat"]`，#75 进一步增加两个中心动作与 NPC 解码类型。`recipes=[]`、`event_stream=false` 不变，包观察仍使用拉取窗口，不是订阅推送。
+上例是 `actor_control.packet_observation` 的结构。#70 交付时保持六工具且 `actions=[]`；已部署 #72 单独增加 `game_act` 与 `actions=["chat"]`，#75 进一步增加两个中心动作与 NPC 解码类型。`event_stream=false`，包观察仍使用拉取窗口，不是订阅推送。
 
 ### 请求与身份
 
@@ -242,7 +240,7 @@ ACTION 经 MCP 模块消费该角色宿主的唯一 lane，与根 OPEN/CLOSE 保
 
 原生 handler 返回不代表成功；旧回声、其他角色的同文消息、0x44 系统公告均不能代替本次自身回声。完整窗口内无匹配回声为 `FAILED/native_chat_not_broadcast`；原生异常或必要事件已丢失且无法确认时为 `INDETERMINATE/native_chat_outcome_unknown`，保留原请求ID、不盲重放。已观测到的广播事实不能因后续日志/观察异常被改写为未发送。
 
-#72 交付时的 capabilities 在顶层 `enabled_tools` 包含 game_act，`actions=["chat"]`；`actor_control.maximum_pending_actions_per_session=7`、`actor_executor_queue_capacity=8`。在线时另公告原生 `chat_minimum_interval_ms=200` 和实际 `native_clock_update_interval_ms`；后者来自北斗配置，不猜测默认值。原生限频使用缓存时钟，墙钟等待250ms不一定足够；验收脚本正常发送第二条前等待 `max(250, 最小间隔 + 时钟更新间隔)`，超过本轮操作超时则在登录前拒绝，失败不自动重发。该实物问题由 #72 子项 [#74](https://github.com/Diluka/SoloMapling/issues/74) 修正并验收关闭，原始失败证据保留。`implementation_round` 继续为 `R2a`，以明确工具与动作字段判断可用性。#75 已交付固定中心首屏与取消；#110 已交付有限NPC回复，其他NPC、移动、任意脚本和 recipe 尚未实现。
+#72 交付时的 capabilities 在顶层 `enabled_tools` 包含 game_act，`actions=["chat"]`；`actor_control.maximum_pending_actions_per_session=7`、`actor_executor_queue_capacity=8`。在线时另公告原生 `chat_minimum_interval_ms=200` 和实际 `native_clock_update_interval_ms`；后者来自北斗配置，不猜测默认值。原生限频使用缓存时钟，墙钟等待250ms不一定足够；验收脚本正常发送第二条前等待 `max(250, 最小间隔 + 时钟更新间隔)`，超过本轮操作超时则在登录前拒绝，失败不自动重发。该实物问题由 #72 子项 [#74](https://github.com/Diluka/SoloMapling/issues/74) 修正并验收关闭，原始失败证据保留。`implementation_round` 继续为 `R2a`，以明确工具与动作字段判断可用性。#75 已交付固定中心首屏与取消；#110 已交付有限NPC回复，其他 NPC 和移动仍待各自切片，同步脚本按 #199 后续实现。
 
 本项已在隔离及实际部署使用官方 MCP SDK 于出生地图发出两条带运行 nonce 的 GBK 中文普通聊天，每条均只收到一次真实自身广播。实际部署回声序号为32、33；第二条按200ms+777ms留出等待，实测在首操作完成后等待1014.38ms。已验证相同请求不重复广播、独立正文观察、终态历史无正文、正常保存退出及同 CID 重开，数据与网页证据分别留存。排队满额仍能 close、取消和原生未广播等边界由确定性测试补足；真实客户端画面未验。#72/#74 已关闭，#64 继续保留 SocialBot 回复、提示菜单、话题与告别等实际交互，NPC 出行前置由 #65 继续推进。命令与恢复检查点见 [工具运行说明](../../tools/acceptance-mcp/README.md)。
 
@@ -367,22 +365,15 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 - 清理或存档无法证实时返回 `INDETERMINATE` 并 quarantine，保留 profile 占用，不冒称释放成功。检查操作、实际原生登记与证据后恢复，不能通过新开或强改在线字段绕过。停服有界等待后仍未确认的会话保持 quarantine，旧世界对象不能在新代次发布。
 - 写请求必须保留调用方 `request_id`。401 最多刷新一次 JWT 并重发同一信封；连接失败、超时或无效收据导致结果未知时不自动重放，不换新 ID 重试。`operation_get` 可断线后继续查询；HTTP响应成功和业务终态分开处理。
 
-`expected_context` 已用于聊天的真实场景与世界代次检查；#75 取消另核最新dialogue_version，后续地图动作再增加目标 OID 等条件。移动、交物品和复合流程仍以真实后态作证；recipe 的条件等待、断言和收益幂等另在 R4 实现。
+`expected_context` 已用于聊天的真实场景与世界代次检查；#75 取消另核最新dialogue_version，后续地图动作再增加目标 OID 等条件。基本动作按 #200 在固定场景分别核验指令、实际结果、停止或取消及必要存档；后续脚本仍需遵守各动作的原生规则与真实结算。
 
-## 内置流程减少操作步骤
+## 基本操作与后续同步脚本
 
-两类“脚本”分别处理：游戏原生NPC/门户/事件脚本沿正常入口执行；内置验收recipe只组合已开放动作、条件等待和断言。recipe采用版本化的简单步骤表，复杂场景使用小型专用执行器，先不构造通用脚本语言。
+一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱，按各自切片开放。当前背包移位已交付，其余基本动作仍待实现或验收。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。
 
-| recipe草案 | 输入和流程 | 通过证据 | 开放前提 |
-|---|---|---|---|
-| `observe_scene` | 无actor时按已返回scene_ref观察，或R2后使用已有session→快照→读取增量 | 位置、对象、游标一致；不自动打开角色或改变状态 | 单步观察在R1可用；命名recipe到R4开放 |
-| `social_greeting` | 指定附近SocialBot→走近→准确名字点名→等待该对象回复 | 原生聊天handler、目标回复身份和收到的CHATTEXT；清理互动 | R2角色/聊天，移动需R3 |
-| `npc_inspect` | 选择已核对启动无副作用的具体NPC/场景→获取正文/菜单→取消对话 | NPC_TALK结构、对话版本和真实前后状态；一般NPC不承诺无副作用 | R2原生交互与脚本核对；命名recipe到R4开放 |
-| `portal_roundtrip` | 正常走到门户→通过→按规则返回 | 原生门户结果、真实地图实例、抵达；失败不传送绕过 | R3 |
-| `party_lifecycle` | 多个专用profile创建/邀请/接受→核对名册→正常离队 | 邀请与原生名册一致，退出后无EIM/MatchChecker残留 | R3与多actor能力 |
-| `pq_stage_probe` | 选择已实现规则和实际阶段→保留真人职责→执行分工→验证原生结果 | 当前实例分工、真实物品/机关/阶段和取消恢复；不凭本地DONE清关 | R5及对应PQ规则已实现 |
+二期 [#199](https://github.com/Diluka/SoloMapling/issues/199) 安排在 #200 最终验收之后，计划提供 `script_run` 和 `script_help`。Agent 根据本次任务编写脚本，经一次同步调用取得结果、校验错误或运行异常；帮助与运行体实际公开能力使用一致描述来源。脚本在运行体托管的环境中执行，行为模块按中立协议贡献能力、观察和事件；相关运行体基础由 [#204](https://github.com/Diluka/SoloMapling/issues/204) 补齐。
 
-recipe清单要显示`planned/available/blocked`、版本、所需能力和参数。脚本批量操作的每一步仍记录operation和证据；不能因为一键化而跳过原生资格。后续可增加“暂停在某阶段”“单步继续”“等待真人操作”等调试流程。
+脚本入口与运行体依赖均未实现。后续接线需独立核验调用中断、实际动作收尾和临时上下文释放；当前七工具与基本动作可独立使用和验收。
 
 ## 螺旋迭代计划
 
@@ -394,11 +385,11 @@ recipe清单要显示`planned/available/blocked`、版本、所需能力和参�
 | R2a 原生角色生命周期 | 专用原生持久 fixture、session/操作队列、登录/退出/保存；隔离及实际部署已验收，#63关闭 | 同一CID打开/释放/再加载，原生在线/存档连续，幂等、取消与冲突；同JVM停启后能保存，不混环境bot，不改既有玩家 |
 | R2b 普通聊天与回复 | #70/#72/#74 已完成隔离/部署验收并关闭，SocialBot 往返仍待后续 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
 | R2c NPC 对话 | #75 已部署验收；#110无收益select/decline已完成隔离及实际部署验收，accept/完整菜单出行由#112/#113推进 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
-| R3 原生动作 | 移动、门户、组队和物品/机关逐项增量 | 每动作正常原生路径及结果；不可达/拒绝/失败清楚返回；真实库存与任务进度一致；多actor无互相控制 |
-| R4 预置流程 | recipe发现/版本、run/status/cancel、条件等待、断言与证据 | 一键跑完整基础流程；中断/断线/重试/取消不重复收益；失败可定位到具体步骤与最后事实 |
+| 一期基本操作 #200 | 移动与停止、普通攻击、拾取丢弃、物品使用、背包移位和穿脱逐片交付 | 固定场景分别核验指令、真实结果、停止或取消及必要存档，复用同一宿主与原生规则 |
+| 二期同步脚本 #199 | #200 总验收后推进 script_run/script_help 及 #204 运行体依赖 | 同步返回实际结果或错误，帮助与能力一致；调用中断后实际工作收尾、资源释放可核验 |
 | R5 组队协作验收 | 多actor分工、真人保留角色、单个PQ阶段和逐步扩展 | 一真人与合法bot编制逐阶段验证；双队/双频道隔离、同时站位、掉线补位与失败恢复；每种PQ独立留证 |
 
-R5依赖[组队任务计划#13](https://github.com/Diluka/SoloMapling/issues/13)及[团队协作内核#14](https://github.com/Diluka/SoloMapling/issues/14)，不因MCP可发包或配置了recipe就宣称所有任务能通关。R2/R3可在R4流程成熟前单步验收，避免为了减少点击先做一个未经验证的大流程。
+组队协作依赖[组队任务计划 #13](https://github.com/Diluka/SoloMapling/issues/13)及[团队协作内核 #14](https://github.com/Diluka/SoloMapling/issues/14)，按对应任务与实际阶段独立验收。基本操作通过、脚本调用成功与 PQ 通关分别记录，不能互相替代。
 
 ## MCP SDK与Codex接入
 
@@ -455,14 +446,15 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 - [#76：SocialBot 点名、菜单话题与告别验收](https://github.com/Diluka/SoloMapling/issues/76)
 - [R2c：NPC 多页对话、版本与取消](https://github.com/Diluka/SoloMapling/issues/65)
 - [R3：原生移动、门户、组队与物品动作逐项验证](https://github.com/Diluka/SoloMapling/issues/58)
-- [R4：内置验收流程、可中断运行与证据报告](https://github.com/Diluka/SoloMapling/issues/59)
+- [#200：MCP 基本操作调试入口验收](https://github.com/Diluka/SoloMapling/issues/200)
+- [#199：MCP 二期脚本执行与函数帮助草案](https://github.com/Diluka/SoloMapling/issues/199)
 - [R5：多验收角色与单任务阶段的团队协作验证](https://github.com/Diluka/SoloMapling/issues/60)
 - [Milestone](https://github.com/Diluka/SoloMapling/milestone/3)
 
-以上任务使用 GitHub 原生 Sub-issues 关联：#55 下为 R1～R5，#57 下为 #63～#65；#63 的验收缺陷 #67（原生角色视图）、#68（人口日志）和 #69（导航预热停服）分别关联为子项，均已随R2a验收关闭。#70 和 #72 为 #64 的子项，均已关闭；#72 的限频验收缺陷 #74 同样已关闭。#75 为 #65 的首个NPC切片，已完成隔离及实际部署验收并关闭；#65 继续通过 #110 无收益回复、#112 礼包准备、#113 完整菜单与付费出行逐项验收；#64 的 #76 再验证 SocialBot 完整交互，两个父任务均保持开放。正文引用用于说明，不替代平台父子关系。
+任务使用 GitHub 原生 Sub-issues 关联，当前排期以 #55、#200 和 #199 为准。既有原生角色、聊天与 NPC 切片继续保留各自证据；#63 的验收缺陷 #67（原生角色视图）、#68（人口日志）和 #69（导航预热停服）分别关联为子项，均已随R2a验收关闭。#70 和 #72 为 #64 的子项，均已关闭；#72 的限频验收缺陷 #74 同样已关闭。#75 为 #65 的首个NPC切片，已完成隔离及实际部署验收并关闭；#65 继续通过 #110 无收益回复、#112 礼包准备、#113 完整菜单与付费出行逐项验收；#64 的 #76 再验证 SocialBot 完整交互，两个父任务均保持开放。正文引用用于说明，不替代平台父子关系。
 
 各切片独立开发、独立验收，通过后及时补充证据并关闭，随后同步总跟踪；剩余未验内容保持开放，不因设计或单测完成而关闭整个里程碑。MCP 发现迁移 bot 的问题时，先保留请求与实际场景/回复证据，再建独立缺陷 Issue，修复后重跑同一场景验收并关闭。
 
 ## #200 基本操作：背包移位
 
-#164 增加 `game_act/inventory_move` 候选能力，严格参数为 `inventory_type`、`source_slot`、`target_slot`；它直接消费运行体共享 Java 能力和唯一 lane，不把基本动作实现留在 MCP。actor 实时库存观察与正常退出后同 CID 重开用于核实际状态和存档。规则及分层验收见[背包移位](../shared-game-foundation/inventory-move.md)，实际已开放能力以 `game_capabilities.actions` 为准。其余 #200 动作继续逐片交付。
+#164 已通过 PR #202 交付 `game_act/inventory_move`，严格参数为 `inventory_type`、`source_slot`、`target_slot`；它直接消费运行体共享 Java 能力和唯一 lane，不把基本动作实现留在 MCP。actor 实时库存观察与正常退出后同 CID 重开用于核实际状态和存档。规则及分层验收见[背包移位](../shared-game-foundation/inventory-move.md)，实际已开放能力以 `game_capabilities.actions` 为准。其余 #200 动作继续逐片交付。
