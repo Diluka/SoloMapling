@@ -31,7 +31,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tools["script_help"].annotations.read_only_hint)
         run_schema = tools["script_run"].input_schema
         self.assertIs(False, run_schema["additionalProperties"])
-        self.assertEqual(set(SCRIPT_ARGS), set(run_schema["properties"]))
+        self.assertEqual(set(SCRIPT_ARGS) | {"environment"}, set(run_schema["properties"]))
         self.assertEqual({"session_id", "expected_generation", "request_id", "source"}, set(run_schema["required"]))
         self.assertEqual((1, 5000), (run_schema["properties"]["timeout_ms"]["minimum"],
                                     run_schema["properties"]["timeout_ms"]["maximum"]))

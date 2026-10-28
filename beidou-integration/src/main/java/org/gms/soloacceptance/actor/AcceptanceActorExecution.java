@@ -17,6 +17,8 @@ import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeEvents;
 import soloMapling.game.script.ScriptExecution;
 import soloMapling.game.script.ScriptRequest;
+import soloMapling.game.script.nativeenv.NativeScriptExecution;
+import soloMapling.game.script.nativeenv.NativeScriptRequest;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -149,6 +151,18 @@ final class AcceptanceActorExecution {
 
     Map<String, Object> scriptHelp(List<String> names) {
         try { return requireModule().scriptHelp(names); }
+        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
+    }
+
+    NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request) {
+        NativeActorHandle exactHandle = adoptedHandle();
+        if (exactHandle == null) throw new ObservationException(HttpStatus.CONFLICT, "actor_not_actable");
+        try { return requireModule().runNativeScript(work, request, backend.nativeScriptAdapter(exactHandle, request.kind())); }
+        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
+    }
+
+    List<Map<String, Object>> nativeScriptContexts() {
+        try { return requireModule().nativeScriptContexts(); }
         catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
     }
 

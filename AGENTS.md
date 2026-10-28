@@ -121,9 +121,17 @@ python3 beidou-integration/scripts/build.py --help
 - MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。次要游戏操作按需求进入脚本环境；本轮只贯通纯脚本、JSON 参数、有界语言输出与结果，以及解析/运行错误。
 - 本轮源码新增 `script_run`、`script_help`；加上 #207 两项管理工具后，当前客户端共十一工具。实际部署与各层验收以对应 Issue 证据及 `game_capabilities` 为准，不把源码存在当作已上线。
 - 脚本设施由 `CharacterRuntime` 承载，调用使用当前角色、模块执行代次及原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令 lane。MCP 只保留协议、鉴权、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
-- 帮助与实际函数绑定共用最小注册描述来源；生产未注册游戏函数时返回空目录，不能把现有 NPC 脚本的 `cm/im/qm/rm/em` 或 Java 互操作当成可用能力。
-- 超时、MCP 中断、模块停止和根关闭均须核实脚本推进已停止、Context 已关闭及原 work 真正结算。`Future.cancel/isDone`、HTTP 返回或 operation 终态不能单独证明收尾；纯脚本无限循环也必须能被真实终止。
+- 纯模式的帮助与实际函数绑定共用最小注册描述来源；未注册函数时返回空目录，不得从旧脚本调查推导纯模式可用 `cm/im/qm/rm/em` 或 Java 互操作。显式北斗 `environment` 的原生对象和 host access 按 #216 的实际适配契约及帮助核对。
+- 纯脚本超时、MCP 中断、模块停止和根关闭均须核实脚本推进已停止、Context 已关闭及原 work 真正结算。`Future.cancel/isDone`、HTTP 返回或 operation 终态不能单独证明收尾；纯脚本无限循环也必须能被真实终止。原生持久环境的本次结算与最终关闭另按 #216 核验。
 - 本轮不展开行为模块脚本、共享观察/事件大全或游戏函数，不迁移或删除现有 `game_act`。移动、攻击、背包、NPC、加点等函数及直接动作迁移后续独立验收；基础切片通过不关闭整个 #199/#204。接口与边界见 `docs/robot-runtime/script-execution.md`。
+
+## #216 北斗脚本环境接入
+
+- `script_run` 的可选 `environment` 选择 `npc/quest/portal/reactor/event` 及 `start/invoke/close`，不增加 MCP 工具，不迁移现有十三动作或独立管理指令。`script_help` 的 `native_environments/contexts` 来自实际适配描述，不为每个北斗 Java 方法另写同义函数目录。
+- NPC/QM 复用原管理器创建的精确 CM/QM、Client 缓存引擎和回调状态；原生入口不是玩家附近点选 NPC。门户和机关从当前实际地图取得精确对象并加载匹配原脚本；独占引擎不接管全局门户缓存。事件使用实际 Channel 与同一受管 Invocable 创建角色自有原生 EventManager，不替换或取消频道共享事件。
+- 原生 Context 可跨调用保留。`invocation_settled/work_settled` 证明本次调用结算，`context_closed=false,context_state=OPEN` 是正常保留；最终关闭、取消、模块停止及根关闭另核引擎、精确原生会话和调度资源真实释放，不能套用纯模式每次关闭的断言。已有外来或后继 CM/QM 不得被接管或清理。
+- 沿原 CharacterRuntime、模块代次、scope/work 与资源登记管理，不另建角色宿主、动作队列或物理工作账本。guest 循环能强制停止不代表正在执行的 host Java 调用已返回；原生调度异步取消、已出队回调和 EIM 延迟清理必须据实保留债务。完整 EIM/地图实例、机器人实际交互和真实客户端玩法按独立证据验收，不把静态方法可达性当已交付。
+- 首环 #219 明确拒绝尚未接入的 EIM 实例创建，不能让原脚本创建实例地图后漏记其一分钟延迟清理。官方北斗 submodule 保持只读，适配和织入只维护在 Solo。接口、来源、连续调用及结果见 `docs/robot-runtime/beidou-script-environment.md`；源码、CI、隔离 MCP 与实际部署结果分别记录，不提前将整个 #216 标为完成。
 
 ## #207 独立管理指令调试入口
 

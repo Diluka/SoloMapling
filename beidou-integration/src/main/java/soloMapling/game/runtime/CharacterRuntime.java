@@ -10,6 +10,10 @@ import soloMapling.game.script.ScriptExecution;
 import soloMapling.game.script.ScriptFunction;
 import soloMapling.game.script.ScriptRegistry;
 import soloMapling.game.script.ScriptRequest;
+import soloMapling.game.script.nativeenv.NativeScriptAdapter;
+import soloMapling.game.script.nativeenv.NativeScriptExecution;
+import soloMapling.game.script.nativeenv.NativeScriptRequest;
+import soloMapling.game.script.nativeenv.NativeScriptSession;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -307,6 +311,7 @@ public final class CharacterRuntime {
     }
 
     public final class ModuleContext {
+        private NativeScriptSession nativeScript;
         private final ModuleRef ref;
         private final ExecutionScope scope;
         private CharacterCommandLane.Grant grant;
@@ -320,11 +325,47 @@ public final class CharacterRuntime {
             requireOwn(work); Objects.requireNonNull(request);
             synchronized (monitor) {
                 requireActive(this, null);
+                require(nativeScript == null, "native_script_context_active");
                 return ScriptExecution.start(work, request, scriptFunctions.bindings(this), () -> {
                     synchronized (monitor) { requireActive(this, null); }
                     requireBinding().requireCurrent();
                 });
             }
+        }
+        /** One owned native environment per module; published before its first carrier can execute. */
+        public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
+                                                      NativeScriptAdapter adapter) {
+            requireOwn(work); Objects.requireNonNull(request); Objects.requireNonNull(adapter);
+            NativeScriptSession session;
+            synchronized (monitor) {
+                requireActive(this, null);
+                if ("start".equals(request.operation())) {
+                    require(nativeScript == null, "native_script_context_active");
+                    nativeScript = new NativeScriptSession(request.kind(), scope, this::acceptWork,
+                            () -> {
+                                synchronized (monitor) { requireActive(this, null); }
+                                requireBinding().requireCurrent();
+                            }, adapter, () -> {
+                                synchronized (monitor) { if (nativeScript != null && nativeScript.isClosed()) nativeScript = null; }
+                                tryFinishStop(ref); tryFinalizeClose();
+                            });
+                } else {
+                    require(nativeScript != null && nativeScript.contextId().equals(request.contextId())
+                            && nativeScript.kind().equals(request.kind()), "native_script_context_stale");
+                }
+                session = nativeScript;
+            }
+            try { return NativeScriptExecution.start(work, session, request); }
+            catch (RuntimeException | Error failure) { session.requestClose(); throw failure; }
+        }
+        public List<Map<String, Object>> nativeScriptContexts() {
+            NativeScriptSession session;
+            synchronized (monitor) { session = nativeScript; }
+            return session == null ? List.of() : List.of(session.describe());
+        }
+        public Map<String, Object> nativeScriptHelp() {
+            synchronized (monitor) { requireActive(this, null); }
+            return Map.of("contexts", nativeScriptContexts(), "maximum_contexts_per_module", 1);
         }
         public Map<String, Object> scriptHelp(List<String> names) {
             synchronized (monitor) { requireActive(this, null); return scriptFunctions.help(this, names); }

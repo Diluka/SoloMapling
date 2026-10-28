@@ -16,8 +16,14 @@ public record ActorScriptCancelRequest(
         @JsonDeserialize(using = ActorObserveRequest.StrictStringDeserializer.class) String source,
         Map<String, Object> parameters,
         @JsonProperty("timeout_ms")
-        @JsonDeserialize(using = ActorObserveRequest.StrictLongDeserializer.class) Long timeoutMs) {
+        @JsonDeserialize(using = ActorObserveRequest.StrictLongDeserializer.class) Long timeoutMs,
+        ActorScriptEnvironment environment) {
+    public ActorScriptCancelRequest(String sessionId, Long expectedGeneration, String targetRequestId,
+                                    String source, Map<String, Object> parameters, Long timeoutMs) {
+        this(sessionId, expectedGeneration, targetRequestId, source, parameters, timeoutMs, null);
+    }
+
     ActorScriptRequest invocation() {
-        return new ActorScriptRequest(sessionId, expectedGeneration, source, parameters, timeoutMs);
+        return new ActorScriptRequest(sessionId, expectedGeneration, source, parameters, timeoutMs, environment);
     }
 }

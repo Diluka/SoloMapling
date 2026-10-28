@@ -53,6 +53,11 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.script.nativeenv.NativeScriptAdapter;
+import org.gms.soloscripting.NativeDialogueScripts;
+import org.gms.soloscripting.NativePortalScripts;
+import org.gms.soloscripting.NativeReactorScripts;
+import org.gms.soloscripting.NativeEventScripts;
 
 import java.sql.Date;
 import java.util.ArrayList;
@@ -464,6 +469,24 @@ public final class NativeActorBackend {
 
     /** Trusted MCP origin adapter retains the same ordinary-role policy as existing actions. */
     void requireCurrentRole(NativeActorHandle handle) { requireOrdinaryActor(handle); }
+
+    /** Selects an adapter for the same trusted role; native managers retain all gameplay rules. */
+    public NativeScriptAdapter nativeScriptAdapter(NativeActorHandle handle, String kind) {
+        requireOrdinaryActor(handle);
+        return switch (kind) {
+            case "npc", "quest" -> new NativeDialogueScripts(handle.client(), kind);
+            case "portal" -> new NativePortalScripts(handle.client());
+            case "reactor" -> new NativeReactorScripts(handle.client());
+            case "event" -> new NativeEventScripts(handle.client());
+            default -> throw conflict("native_script_environment_unavailable");
+        };
+    }
+
+    /** Help and capability announcements consume the exact same adapter declarations. */
+    public List<Map<String, Object>> nativeScriptEnvironments() {
+        return List.of(NativeDialogueScripts.descriptor("npc"), NativeDialogueScripts.descriptor("quest"),
+                NativePortalScripts.descriptor(), NativeReactorScripts.descriptor(), NativeEventScripts.descriptor());
+    }
 
     private void requireOrdinaryActor(NativeActorHandle handle) {
         if (!isCurrent(handle) || handle.character().gmLevel() != 0 || BotRegistry.isBot(handle.character())) {

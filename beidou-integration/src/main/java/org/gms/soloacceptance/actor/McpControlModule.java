@@ -7,6 +7,9 @@ import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.script.ScriptExecution;
 import soloMapling.game.script.ScriptRequest;
+import soloMapling.game.script.nativeenv.NativeScriptAdapter;
+import soloMapling.game.script.nativeenv.NativeScriptExecution;
+import soloMapling.game.script.nativeenv.NativeScriptRequest;
 import soloMapling.game.runtime.RuntimeModule;
 
 import java.util.Objects;
@@ -52,6 +55,13 @@ public final class McpControlModule implements RuntimeModule {
     }
 
     public Map<String, Object> scriptHelp(List<String> names) { return context().scriptHelp(names); }
+
+    public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
+                                                  NativeScriptAdapter adapter) {
+        return context().runNativeScript(work, request, adapter);
+    }
+
+    public List<Map<String, Object>> nativeScriptContexts() { return context().nativeScriptContexts(); }
 
     public CharacterCommandLane.Submission submitInteraction(ExecutionScope.WorkHandle work, Runnable preflight,
                                                               Runnable body, Runnable settled) {
