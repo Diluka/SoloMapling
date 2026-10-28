@@ -1,0 +1,510 @@
+schemaVersion: 1
+map:
+  id: solo.recreation
+  title: SoloMapling 休闲游戏与场景活动
+  summary: 记录机器人牌局、骰子、付费掉落游戏及休闲表演的源码规则；这些实现不等于北斗真人玩法已经验收。
+nodes:
+- id: solo.recreation
+  kind: domain
+  name: SoloMapling 休闲游戏
+  summary: 为玩家和环境机器人提供休闲互动，拥有回合、参加资格、下注判定和游戏奖励规则；人口生成与原生资产结算由协作域负责。
+  aliases:
+  - 小游戏
+  - 娱乐机器人
+  - 赌场
+  anchors:
+  - kind: directory
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack
+    description: 牌局状态与庄家行为，其他休闲活动位于相邻 BotTypes 源码。
+- id: solo.recreation.blackjack
+  kind: scenario
+  name: 加入并参加二十一点牌局
+  summary: 玩家通过 Join 申请加入最多含庄家八人的牌桌，按地面筹码、发牌和 Hit/Stand 进入回合；重复入座或满桌拒绝，连续三次无下注移出。
+  aliases:
+  - Blackjack
+  - 二十一点
+  - 牌桌
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackDealerBot.java
+    value: BlackjackDealerBot.processJoinInquiries
+    description: 处理 Join、重复入座和满桌拒绝。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackDealerBot.java
+    value: BlackjackDealerBot.processAllPlayersBets
+    description: 读取玩家原位置附近的地面筹码，处理离图与无下注的跳过次数。
+- id: solo.recreation.table
+  kind: data
+  name: 牌桌与回合状态
+  summary: 保存庄家、玩家、手牌、下注地面对象、当前行动者和回合阶段；属于进程内游戏状态，不是独立持久角色或资金账本。
+  aliases:
+  - BlackjackTable
+  - 牌局状态
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackTable.java
+    description: 牌桌容量、阶段、参与者、发牌顺序与新回合重置。
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackPlayer.java
+    description: 每位参与者的手牌、地面筹码、原位置与结算标志。
+- id: solo.recreation.blackjack-settlement
+  kind: operation
+  name: 按牌局结果处理筹码
+  summary: 赢局尝试投放额外筹码，普通胜利按原下注数量、Blackjack 按一点五倍取整；平局保留原筹码，输局收走地面筹码。收回输局筹码会减十点人气并离桌；普通玩家中奖投放受当前北斗适配限制。
+  aliases:
+  - 派彩
+  - 收注
+  - 牌局结算
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackDealerBot.java
+    value: BlackjackDealerBot.payWinner
+    description: 按筹码数量逐个向中奖者投放，不能由任务受理推导已经派彩。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackDealerBot.java
+    value: BlackjackDealerBot.lootLoserBets
+    description: 核对输局筹码仍在地面，收注或对收回筹码者扣人气并离桌。
+- id: solo.recreation.blackjack-rules
+  kind: invariant
+  name: 牌点与庄家胜负规则
+  summary: A 按牌点折算，爆牌为负，庄家爆牌则玩家胜，双方 Blackjack 为平；胜负先按 Blackjack 和爆牌再比较牌点，庄家依既定阈值补牌。
+  aliases:
+  - BlackjackRules
+  - 爆牌
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/Blackjack/BlackjackRules.java
+    value: BlackjackRules.determineOutcome
+    description: 决定普通胜负、平局与 Blackjack 胜利。
+- id: solo.recreation.chip-catalog
+  kind: data
+  name: 休闲游戏筹码定义
+  summary: 使用四种邮票道具作为筹码，并定义兑换参考面值、NPC 与商店 ID。北斗集成不自动执行继承的 Cosmic 商店初始化 SQL，不能由 NPC
+    生成推导筹码兑换已可用。
+  aliases:
+  - CasinoChipConfig
+  - 邮票筹码
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/Casino/CasinoChipConfig.java
+    description: 四种筹码、参考面值及筹码 NPC/商店标识。
+  - kind: file
+    value: beidou-integration/scripts/build.py
+    description: 确认北斗构建只合入 Solo 资源，不导入 Cosmic 迁移或执行筹码商店 SQL。
+- id: solo.recreation.prop-ownership
+  kind: invariant
+  name: 不过期游戏道具只接受环境机器人所有者
+  summary: 当前北斗适配的 spawnItemDropNoExpire 要求 owner 已登记于 BotRegistry，仍检查地图掉落限制；Blackjack
+    对普通玩家调用专属中奖投放会被拒绝，未建立真人派彩可用的承诺。
+  aliases:
+  - 游戏道具归属
+  - 真人派彩限制
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/aspect/soloMapling/beidou/DropCompatibility.aj
+    value: MapleMap.spawnItemDropNoExpire
+    description: 在创建不过期道具前拒绝非环境机器人所有者，并沿原生地图登记与掉落路径创建。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotCommandsPack/DropCommands.java
+    value: DropCommands.botThrowItemToOwner
+    description: Blackjack 中奖投放把获奖角色作为 owner，因而受到上述所有者条件限制。
+- id: solo.recreation.dice
+  kind: scenario
+  name: 以地面筹码参加单双骰子局
+  summary: 对话选择 Cho 或 Han，扫描玩家附近邮票筹码，掷双骰后按和值单双判定；赢局尝试向地图掉落奖励，输局收注，收回筹码会扣人气。保留源码实现边界，未声称真实玩法已验。
+  aliases:
+  - DiceBot
+  - Cho
+  - Han
+  - 骰子
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DiceBot.java
+    value: DiceBot.processBet
+    description: 按骰子和值与所选单双判胜，并进入奖励或收注路径。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DiceBot.java
+    value: DiceBot.detectBet
+    description: 扫描玩家附近地面筹码；没有筹码时重新等待下注。
+- id: solo.recreation.drop-game
+  kind: scenario
+  name: 通过原生交易付费参加限时掉落游戏
+  summary: 一次服务一名玩家，接受一千万或五千万金币档位，随后邀请入队并限时投放奖池道具；金额不符取消交易，未入队超时不退费，离图或到时停止。交易确认与失败退款的完整后态仍需独立验收。
+  aliases:
+  - DropGameBot
+  - 掉落游戏
+  - 付费小游戏
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DropGameBot.java
+    value: DropGameBot.tradeValidate
+    description: 等待对方锁定，按精确金额选择档位或取消原生交易。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DropGameBot.java
+    value: DropGameBot.partyWait
+    description: 以实际同队状态进入游戏，超时按已付金币放弃处理。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DropGameBot.java
+    value: DropGameBot.activeGame
+    description: 监控玩家离图及游戏截止时间并结束投放。
+- id: solo.recreation.loot-pools
+  kind: data
+  name: 掉落游戏分档奖池
+  summary: 从 Solo 只读资源加载档位内普通与特殊道具及权重，按权重抽取掉落；缺档位或读取错误形成空奖池，空奖池重置不能自动等同退款完成。
+  aliases:
+  - DropGameLootPool
+  - 奖池权重
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DropGameLootPool.java
+    value: DropGameLootPool.load
+    description: 加载分档奖池，缺失或错误时保留空池结果。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/DropGameBot.java
+    value: DropGameBot.tradeFinalize
+    description: 空奖池时只调用交易清理与重置，文字提示不作为实际退款证据。
+- id: solo.recreation.gacha-display
+  kind: scenario
+  name: 在有人地图表演扭蛋掉落
+  summary: 扭蛋机器人在有真人地图触发固定目标奖品的反应堆掉落表演并拾取自身物品；processReward 当前直接返回，不代表完整玩家抽奖、付费或奖励反应链。
+  aliases:
+  - GachaBot
+  - 扭蛋表演
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/GachaBot.java
+    value: GachaBot.runRoulette
+    description: 检查真人在场后生成反应堆掉落表演。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/GachaBot.java
+    value: GachaBot.processReward
+    description: 当前为空实现，不能据此扩展完整奖励处理语义。
+- id: solo.recreation.hospitality
+  kind: scenario
+  name: 游乐区迎宾与饮品互动
+  summary: 迎宾机器人响应地图进入事件，玩家接受饮品后选择既定饮品，拒绝则告别，等待超时重置；交付通过地图掉落而非直接发进玩家背包。
+  aliases:
+  - GameZoneHostBot
+  - 迎宾
+  - 饮品
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/GameZoneHostBot.java
+    value: GameZoneHostBot.handleEvent
+    description: 根据进入地图事件发送迎宾问候。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/GameZoneHostBot.java
+    value: GameZoneHostBot.serveDrink
+    description: 将选定饮品投放到玩家位置，实际拾取仍属北斗地图规则。
+- id: solo.recreation.jump-display
+  kind: scenario
+  name: 宠物公园跳跃表演
+  summary: HenesysJQBot按选定动作层级播放跳跃、恢复或休息，必要时转回HenesysBot；属于环境机器人表现，不是玩家跳跃任务通关或奖励交付证据。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/HenesysJQBot.java
+    value: HenesysJQBot.attemptJQ
+    description: 播放当前层级跳跃动作并决定下一状态。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/HenesysJQBot.java
+    value: HenesysJQBot.recover
+    description: 按实际位置决定恢复或重新开始。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/HenesysJQBot.java
+    value: HenesysJQBot.convertToHenesysBot
+    description: 退出跳跃表演后转换回普通环境角色行为。
+relations:
+- from: solo.recreation.blackjack
+  type: part_of
+  to: solo.recreation
+  summary: 牌局参加与回合属于休闲游戏。
+- from: solo.recreation.table
+  type: part_of
+  to: solo.recreation
+  summary: 休闲游戏拥有牌桌与回合状态。
+- from: solo.recreation.blackjack-settlement
+  type: part_of
+  to: solo.recreation
+  summary: 牌局筹码结算属于休闲游戏规则。
+- from: solo.recreation.blackjack-rules
+  type: part_of
+  to: solo.recreation
+  summary: 休闲游戏定义牌点与胜负。
+- from: solo.recreation.chip-catalog
+  type: part_of
+  to: solo.recreation
+  summary: 休闲游戏定义筹码道具与参考面值。
+- from: solo.recreation.prop-ownership
+  type: part_of
+  to: solo.recreation
+  summary: 游戏道具的北斗适配限制在此集中记录。
+- from: solo.recreation.dice
+  type: part_of
+  to: solo.recreation
+  summary: 单双骰子局属于休闲游戏。
+- from: solo.recreation.drop-game
+  type: part_of
+  to: solo.recreation
+  summary: 付费限时掉落游戏属于休闲游戏。
+- from: solo.recreation.loot-pools
+  type: part_of
+  to: solo.recreation
+  summary: 休闲游戏拥有分档奖池及权重。
+- from: solo.recreation.gacha-display
+  type: part_of
+  to: solo.recreation
+  summary: 扭蛋表演属于休闲场景活动。
+- from: solo.recreation.hospitality
+  type: part_of
+  to: solo.recreation
+  summary: 迎宾与饮品互动属于休闲场景活动。
+- from: solo.recreation.blackjack
+  type: writes
+  to: solo.recreation.table
+  summary: 加入、发牌和选择更新牌桌回合。
+- from: solo.recreation.blackjack
+  type: constrained_by
+  to: solo.recreation.blackjack-rules
+  summary: 手牌胜负按统一规则判定。
+- from: solo.recreation.blackjack
+  type: invokes
+  to: solo.recreation.blackjack-settlement
+  summary: 牌局决出结果后尝试处理筹码。
+- from: solo.recreation.blackjack-settlement
+  type: reads
+  to: solo.recreation.table
+  summary: 按每位玩家的牌局结果与地面下注对象结算。
+- from: solo.recreation.blackjack-settlement
+  type: constrained_by
+  to: solo.recreation.prop-ownership
+  summary: 获奖者专属不过期掉落受当前 owner 限制。
+- from: solo.recreation.blackjack-settlement
+  type: writes
+  to: beidou.world.scene
+  summary: 奖励尝试与收注改变地图掉落对象，而不是直接改写玩家背包。
+- from: solo.recreation.blackjack-settlement
+  type: writes
+  to: beidou.identity.characters
+  summary: 输局后收回筹码的玩家会被扣除人气。
+- from: solo.recreation.dice
+  type: writes
+  to: beidou.world.scene
+  summary: 骰子奖励与收注通过地面掉落对象进行。
+- from: solo.recreation.dice
+  type: writes
+  to: beidou.identity.characters
+  summary: 收回输局筹码时修改玩家人气。
+- from: solo.recreation.drop-game
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 档位付费沿北斗原生交易锁定、确认和取消路径。
+- from: solo.recreation.drop-game
+  type: reads
+  to: solo.recreation.loot-pools
+  summary: 按已选档位加载和抽取奖励。
+- from: solo.recreation.drop-game
+  type: writes
+  to: beidou.social.party
+  summary: 机器人发出原生组队邀请，并在结束时离队解散自己的队伍。
+- from: solo.recreation.drop-game
+  type: writes
+  to: beidou.world.scene
+  summary: 在游戏时限内创建可拾取并会到期的地图道具。
+- from: solo.recreation.gacha-display
+  type: reads
+  to: beidou.world.scene
+  summary: 没有真人在场时不进行扭蛋表演。
+- from: solo.recreation.gacha-display
+  type: writes
+  to: beidou.world.scene
+  summary: 表演创建反应堆掉落，机器人随后拾取自己的道具。
+- from: solo.recreation.hospitality
+  type: writes
+  to: beidou.world.scene
+  summary: 饮品交付以地图掉落呈现，拾取沿北斗规则。
+- from: solo.recreation.jump-display
+  type: part_of
+  to: solo.recreation
+  summary: 环境跳跃表演属于休闲场景活动。
+- from: solo.recreation.jump-display
+  type: reads
+  to: beidou.world.scene
+  summary: 读取机器人实际位置以判断跳跃恢复或重启。
+flows:
+- id: solo.recreation.blackjack.flow
+  name: 参加牌局并识别实际派彩边界
+  summary: 区分入桌拒绝、回合胜负与当前北斗适配能否投放中奖筹码。
+  scenario: solo.recreation.blackjack
+  startsAt: join
+  steps:
+  - id: join
+    kind: decision
+    name: 牌桌是否可以接纳玩家
+    summary: 已在桌或满桌时拒绝，否则等待下轮。
+    concept: solo.recreation.blackjack
+  - id: rejected
+    kind: outcome
+    name: 未加入牌桌
+    summary: 已在桌或满桌，参与者集合不新增。
+  - id: round
+    kind: action
+    name: 按地面下注与玩家行动进行回合
+    summary: 无下注可跳过，连续三次无下注会离桌；有下注者发牌并选择 Hit 或 Stand。
+    concept: solo.recreation.blackjack
+  - id: result
+    kind: decision
+    name: 本轮属于哪种结果
+    summary: 按牌点、爆牌与 Blackjack 规则判定。
+    concept: solo.recreation.blackjack-rules
+  - id: no-hand
+    kind: outcome
+    name: 本轮跳过或离桌
+    summary: 没有参与手牌不进入中奖或输局结算。
+  - id: push
+    kind: outcome
+    name: 平局保留地面原注
+    summary: 不额外派彩也不收取原注。
+  - id: collect
+    kind: action
+    name: 核对并收取输局原注
+    summary: 仍在地面的筹码由庄家收走，收回下注者扣人气并离桌。
+    concept: solo.recreation.blackjack-settlement
+  - id: lost
+    kind: outcome
+    name: 输局处理结束
+    summary: 已收注或进入收回原注的惩罚分支。
+  - id: owner
+    kind: decision
+    name: 中奖者是否满足当前不过期道具所有者条件
+    summary: 当前适配要求 owner 为已登记环境机器人。
+    concept: solo.recreation.prop-ownership
+  - id: blocked
+    kind: outcome
+    name: 普通玩家中奖投放受限
+    summary: 真人 owner 会被北斗适配拒绝，不能宣称已经派彩或回合完整完成。
+  - id: payout
+    kind: action
+    name: 尝试逐个投放额外筹码
+    summary: 普通胜利按原注数量，Blackjack 按一点五倍取整；仍受地图掉落限制。
+    concept: solo.recreation.blackjack-settlement
+  - id: attempted
+    kind: outcome
+    name: 到达环境机器人派彩路径
+    summary: 仅描述源码可到达路径，实际游戏奖励与回合收尾仍需玩法验收。
+  transitions:
+  - from: join
+    to: rejected
+    when: 已在桌或满桌
+  - from: join
+    to: round
+    when: 可以接纳
+  - from: round
+    to: result
+  - from: result
+    to: no-hand
+    when: 无参与手牌
+  - from: result
+    to: push
+    when: 平局
+  - from: result
+    to: collect
+    when: 输局
+  - from: collect
+    to: lost
+  - from: result
+    to: owner
+    when: 普通胜利或 Blackjack 胜利
+  - from: owner
+    to: blocked
+    when: 普通玩家 owner
+  - from: owner
+    to: payout
+    when: 已登记环境机器人 owner
+  - from: payout
+    to: attempted
+- id: solo.recreation.drop-game.flow
+  name: 付费掉落游戏的拒绝与退出
+  summary: 描述金额、奖池、入队和游戏时限各分支，不把交易确认或退款文案当作资产结算证据。
+  scenario: solo.recreation.drop-game
+  startsAt: price
+  steps:
+  - id: price
+    kind: decision
+    name: 锁定金额是否匹配档位
+    summary: 等待对方锁定，接受一千万或五千万金币；取消、锁定超时或金额不符退出。
+    concept: solo.recreation.drop-game
+  - id: refused
+    kind: outcome
+    name: 取消交易并重置
+    summary: 沿原生交易取消路径结束，没有进入掉落游戏。
+  - id: confirm
+    kind: action
+    name: 请求确认原生交易并加载奖池
+    summary: 当前源码延时后进入档位准备，不能据此宣称真实交易结算已经核验。
+    concept: solo.recreation.drop-game
+  - id: pool
+    kind: decision
+    name: 奖池是否可用
+    summary: 按档位加载奖池，空池进入清理重置。
+    concept: solo.recreation.loot-pools
+  - id: empty
+    kind: outcome
+    name: 空奖池重置且退款后态未保证
+    summary: 源码虽提示退款，但此处只执行交易清理与重置，不建立退款完成事实。
+  - id: party
+    kind: decision
+    name: 玩家是否及时加入机器人队伍
+    summary: 邀请失败或等待超时会结束，源码对未入队超时明确不退费。
+    concept: solo.recreation.drop-game
+  - id: forfeit
+    kind: outcome
+    name: 未开局结束且不自动退款
+    summary: 邀请失败或未及时同队时重置；不宣称已退还金币。
+  - id: play
+    kind: action
+    name: 启动限时移动与奖池掉落
+    summary: 同队后准备加速与掉落，奖品作为地图道具供玩家按规则拾取。
+    concept: solo.recreation.drop-game
+  - id: end
+    kind: decision
+    name: 玩家离图还是游戏到时
+    summary: 任一条件结束异步投放，停止移动并清理机器人队伍。
+    concept: solo.recreation.drop-game
+  - id: left
+    kind: outcome
+    name: 玩家离图提前结束
+    summary: 停止后续掉落并尝试离队清理，不恢复已发生收益或费用。
+  - id: elapsed
+    kind: outcome
+    name: 游戏时间结束
+    summary: 停止后续掉落并进入告别与队伍清理，实际奖励后态需独立验收。
+  transitions:
+  - from: price
+    to: refused
+    when: 取消、超时或金额不匹配
+  - from: price
+    to: confirm
+    when: 金额匹配已锁定
+  - from: confirm
+    to: pool
+  - from: pool
+    to: empty
+    when: 空奖池或读取失败
+  - from: pool
+    to: party
+    when: 奖池可用
+  - from: party
+    to: forfeit
+    when: 邀请失败或未及时加入
+  - from: party
+    to: play
+    when: 玩家与机器人实际同队
+  - from: play
+    to: end
+  - from: end
+    to: left
+    when: 玩家离开地图
+  - from: end
+    to: elapsed
+    when: 游戏时限到达

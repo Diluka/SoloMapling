@@ -1,0 +1,773 @@
+schemaVersion: 1
+map:
+  id: beidou-quests
+  title: 北斗上游：任务、NPC与挑战
+  summary: 从任务状态、原生对话及脚本和Java挑战规则建立的功能地图。
+nodes:
+- id: beidou.quests
+  kind: domain
+  name: 北斗：任务、NPC与挑战规则
+  summary: 固定北斗1.12的任务资格、进度、NPC交互及组队/比赛挑战规则。事件实例和地图运行基础由世界域提供。
+  aliases:
+  - 任务
+  - NPC
+  - 组队任务
+  - PQ
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest
+    description: 定位任务需求、动作与勋章规则。
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/scripts-zh-CN
+    description: 定位当前中文NPC、任务与事件脚本。
+- id: beidou.quests.quest-lifecycle
+  kind: capability
+  name: 维护任务生命周期
+  summary: 依据WZ任务需求与动作组织未接取、进行中、完成、可重复接取和放弃生命周期；特殊任务与勋章保留专门规则。
+  aliases:
+  - 任务系统
+  - 勋章任务
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/Quest.java
+    description: 查看任务状态、需求、动作与可重复条件。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/QuestStatus.java
+    description: 查看任务状态、击杀/字符串进度、时间和放弃次数。
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/medal
+    description: 定位有独立规则的勋章任务。
+- id: beidou.quests.start
+  kind: scenario
+  name: 接取任务
+  summary: 玩家任务入口先检查地图NPC/距离和任务需求，再选择脚本交互或普通开始动作；普通任务全部动作检查通过后才执行动作并进入进行中。
+  aliases:
+  - 任务接取
+  - 开始任务
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/QuestActionHandler.java
+    value: QuestActionHandler.handlePacket
+    description: 核对接取、脚本开始、地图与NPC距离分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/Quest.java
+    value: Quest.start
+    description: 核对自动开始或接取资格及全部开始动作检查。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/ItemAction.java
+    value: ItemAction.check
+    description: 任务配置物品动作时核所需物品和背包可容纳条件。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/ItemAction.java
+    value: ItemAction.run
+    description: 运行任务物品动作，先扣所需物品再发奖励物品。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/MesoAction.java
+    value: MesoAction.runAction
+    description: 按任务金币动作及配置倍率增减原生金币。
+- id: beidou.quests.complete
+  kind: scenario
+  name: 交付任务并执行奖励
+  summary: 玩家交付入口检查进行中状态、完成需求与NPC资格，转任务脚本或普通完成动作；普通路径先检查动作，再标完成并运行奖励等动作。
+  aliases:
+  - 任务完成
+  - 交任务
+  - 任务奖励
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/QuestActionHandler.java
+    value: QuestActionHandler.handlePacket
+    description: 核对交付和脚本结束入口的资格及奖励选择。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/Quest.java
+    value: Quest.complete
+    description: 核对完成动作检查、标记完成与动作执行顺序。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/ExpAction.java
+    value: ExpAction.run
+    description: 任务配置经验动作时调用原生gainExp并应用相应倍率。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/ItemAction.java
+    value: ItemAction.check
+    description: 任务配置物品动作时核所需物品和背包可容纳条件。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/ItemAction.java
+    value: ItemAction.run
+    description: 运行任务物品动作，先扣所需物品再发奖励物品。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/actions/MesoAction.java
+    value: MesoAction.runAction
+    description: 按任务金币动作及配置倍率增减原生金币。
+- id: beidou.quests.forfeit
+  kind: operation
+  name: 放弃进行中的任务
+  summary: 仅进行中的任务允许放弃，移除任务计时提示，重新标为未接取并增加放弃次数。
+  aliases:
+  - 放弃任务
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/Quest.java
+    value: Quest.forfeit
+    description: 确认进行中限制、计时移除、状态复位和放弃次数。
+- id: beidou.quests.progress
+  kind: data
+  name: 角色任务状态与进度
+  summary: 每角色任务的状态、击杀/字符串进度、NPC、时间及放弃次数；战斗和脚本可推进进度，最终存档仍由角色原生持久化负责。
+  aliases:
+  - QuestStatus
+  - 任务进度
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/QuestStatus.java
+    description: 查看任务状态与进度结构。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.raiseQuestMobCount
+    description: 怪物击杀后更新已接任务的相关计数。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.updateQuestStatus
+    description: 更新任务状态并安排角色任务通知。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/medal/VeteranHunterMedal.java
+    value: VeteranHunterMedal.onMonsterKilled
+    description: 只对已接且击杀等级合格的老猎手勋章任务增加进度。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/medal/SpecialChallengeMedal.java
+    value: SpecialChallengeMedal.onMonsterKilled
+    description: 特殊挑战勋章复用怪物死亡事件推进对应已接任务。
+- id: beidou.quests.eligibility
+  kind: invariant
+  name: 任务状态、需求与NPC资格有效
+  summary: 原生玩家入口检查任务状态、需求和信息进度，并核NPC地图/距离；自动任务有明确例外。脚本的forceStart/forceComplete不是玩家入口自动拥有的通用绕过权。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/Quest.java
+    value: Quest.canStart
+    description: 核对接取状态、开始需求及信息进度。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/quest/Quest.java
+    value: Quest.canComplete
+    description: 核对进行中状态、完成需求及信息进度。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/QuestActionHandler.java
+    value: QuestActionHandler.isNpcNearby
+    description: 核对自动任务例外、地图NPC与位置距离。
+- id: beidou.quests.npc-dialogue
+  kind: interface
+  name: 原生NPC与任务对话路由
+  summary: 原生对话回复先区分QM与CM，再按当前CM的legacy或NextLevel上下文派发；包类型、拒绝和取消语义随真实路由变化。
+  aliases:
+  - CM
+  - QM
+  - NPCMoreTalk
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/NPCMoreTalkHandler.java
+    value: NPCMoreTalkHandler.handlePacket
+    description: 按当前QM/CM和回复类型接收文字、选择或取消。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/NPCMoreTalkHandler.java
+    value: NPCMoreTalkHandler.cmRouting
+    description: 按当前NextLevelContext选择legacy action或nextLevel。
+- id: beidou.quests.talk
+  kind: scenario
+  name: 建立NPC脚本对话
+  summary: 地图NPC点击进入原生脚本管理；脚本中心或道具等入口可指定脚本，各入口保留其自己的准入。建立CM后装载脚本，拒绝条件或脚本故障不算成功交互。
+  aliases:
+  - NPC对话
+  - 脚本中心
+  - legacy
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/NPCTalkHandler.java
+    value: NPCTalkHandler.handlePacket
+    description: 定位地图NPC点击、地图限制和对话启动。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/npc/NPCScriptManager.java
+    value: NPCScriptManager.start
+    description: 定位脚本名入口、点击间隔和CM/脚本建立。
+- id: beidou.quests.reply
+  kind: operation
+  name: 回答或结束当前对话
+  summary: legacy action和NextLevel按当前对话上下文推进；不同NextLevel类型对返回/拒绝/取消使用不同mode，正常结束或异常沿管理器清理。
+  aliases:
+  - NPC选择
+  - NPC取消
+  - NextLevel
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/npc/NPCScriptManager.java
+    value: NPCScriptManager.action
+    description: 派发legacy回复，脚本异常时清理。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/npc/NPCScriptManager.java
+    value: NPCScriptManager.nextLevel
+    description: 按当前NextLevel类型处理选择、返回与关闭。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/npc/NPCScriptManager.java
+    value: NPCScriptManager.dispose
+    description: 清理当前CM与脚本资源。
+- id: beidou.quests.dialogue-context
+  kind: data
+  name: 当前CM/QM与脚本上下文
+  summary: 原生Client当前绑定的NPC会话CM、任务会话QM与其脚本状态，决定下一次回复的目标和生命周期；二者不可仅按NPC模板ID混用。
+  aliases:
+  - 对话状态
+  - NextLevelContext
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/npc/NPCConversationManager.java
+    description: 查看CM及NextLevel上下文。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/quest/QuestActionManager.java
+    description: 查看QM的任务、开始/结束状态。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    description: 查看当前Client的CM/QM绑定。
+- id: beidou.quests.scripted-quest
+  kind: capability
+  name: 通过任务脚本接取或交付
+  summary: 任务脚本管理器维护QM、start/end脚本交互和清理；脚本入口仍检查任务状态及地图NPC等条件，具体剧情和收益由对应脚本决定。
+  aliases:
+  - 任务脚本
+  - 剧情任务
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/quest/QuestScriptManager.java
+    value: QuestScriptManager.start
+    description: 定位任务开始脚本、QM建立与后续回复。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/quest/QuestScriptManager.java
+    value: QuestScriptManager.end
+    description: 定位任务结束脚本及状态/NPC资格检查。
+- id: beidou.quests.party-challenge
+  kind: scenario
+  name: 组队进入并结束事件挑战
+  summary: 事件规则决定招募、合格成员、阶段、通关、超时与离队收尾，调用世界域事件基础建立实例。KerningPQ仅作为一组已核实规则例证，不将其参数推广到全部任务。
+  aliases:
+  - 组队副本
+  - KPQ
+  - KerningPQ
+  - 通关
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/scripts-zh-CN/npc/9020000.js
+    value: action
+    description: 定位废弃都市组队任务NPC的队伍/队长与启动选择。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/scripts-zh-CN/event/KerningPQ.js
+    value: getEligibleParty
+    description: 按同招募图、等级、人数与队长筛选参与队伍。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/scripts-zh-CN/event/KerningPQ.js
+    value: clearPQ
+    description: 确认通关标记和事件计时停止。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/scripts-zh-CN/event/KerningPQ.js
+    value: end
+    description: 确认超时或失败后退出成员并释放实例。
+- id: beidou.quests.challenge-rules
+  kind: invariant
+  name: 以具体任务规则判定准入和完成
+  summary: 每个挑战使用自己的队伍、等级、人数、地图、阶段与时间条件；本例配置可解除人数或等级限制，通关与奖励领取分别验证。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/scripts-zh-CN/event/KerningPQ.js
+    value: getEligibleParty
+    description: 检查本例的可配置人数/等级限制、同图与队长条件。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/scripts-zh-CN/event/KerningPQ.js
+    value: scheduledTimeout
+    description: 确认本例计时结束后的失败收尾。
+- id: beidou.quests.challenge-reward
+  kind: operation
+  name: 领取事件配置的奖励
+  summary: 事件配置奖励按档位发经验或随机物品，有物品奖励时先核背包格位；事件也可明确调用成员金币发放接口，按成员/地图和倍率发金币。通关、配置奖励及实际发放是不同事实。
+  aliases:
+  - 副本奖励
+  - 随机奖励
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.giveEventReward
+    description: 核对奖励档位、纯经验、背包空间与随机物品分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.giveEventPlayersMeso
+    description: 事件明确调用时，按登记成员、可选地图和角色金币倍率发放金币。
+- id: beidou.quests.competitive-challenges
+  kind: capability
+  name: 处理Java驱动的比赛和挑战
+  summary: 嘉年华按CP等规则结算，阿里安特按积分及公平性计算奖励，金字塔按击杀、miss和随时间变化的能量条控制挑战；这些规则不只存在于事件脚本。
+  aliases:
+  - 怪物嘉年华
+  - 阿里安特
+  - 金字塔
+  - 比赛
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/partyquest/MonsterCarnival.java
+    value: MonsterCarnival.complete
+    description: 定位双方CP比较与比赛结束分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/partyquest/AriantColiseum.java
+    value: AriantColiseum.distributeAriantPoints
+    description: 定位积分、奖励档和不公平比赛处理。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/partyquest/Pyramid.java
+    value: Pyramid.startGaugeSchedule
+    description: 定位随时间减少的挑战能量及阶段判断。
+- id: beidou.quests.table-games
+  kind: capability
+  name: 原生五子棋与记忆翻牌
+  summary: 原生OMOK与MATCH_CARD提供双人房间、密码和访客、准备/开始、落子或配对、认输/和棋与离场；房间和比赛状态由MiniGame维护，属于竞技玩法，独立于EIM事件和交易商店。
+  aliases:
+  - 五子棋
+  - 记忆翻牌
+  - OMOK
+  - MATCH_CARD
+  - 桌游
+  - 小游戏
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PlayerInteractionHandler.java
+    value: PlayerInteractionHandler.handlePacket
+    description: 定位createType 1/2、加入、准备/开始、落子/翻牌、认输/和棋、退出和赛后退出分支；共用入口不转移玩法归属。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.minigameMatchStarted
+    description: 开始本局并初始化赛后退出标志。
+- id: beidou.quests.play-table-game
+  kind: scenario
+  name: 加入桌游、完成对局并收尾
+  summary: 创建房间核存活、迷你房间资格及对应道具；访客加入核密码和空位。五子棋连线或翻牌积分触发胜负，认输和接受和棋走对应结算。游客在对局中退出判房主胜，房主退出关闭房间；赛后退出按标志执行，不能泛称所有离场都判负。
+  aliases:
+  - 小游戏对局
+  - 五子棋胜负
+  - 翻牌积分
+  - 认输
+  - 和棋
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PlayerInteractionHandler.java
+    value: PlayerInteractionHandler.handlePacket
+    description: 核创建、加入、行动、和棋、认输及退出的实际原生分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.setPiece
+    description: 五子棋落子及连线判胜。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.setOwnerPoints
+    description: 翻牌积分达到本局配对总量后判定胜负或平局。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.minigameMatchOwnerWins
+    description: 在本局仍进行中时结算房主胜利、记录战绩并处理赛后退出。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.minigameMatchDraw
+    description: 记录平局，房间平局积分另受五分钟间隔约束。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.removeVisitor
+    description: 游客进行中离场判房主胜，并解绑游客。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    value: MiniGame.closeRoom
+    description: 关闭房间并解除双方MiniGame绑定。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.closeMiniGame
+    description: 按房主或游客分别关闭房间/移除游客。
+- id: beidou.quests.table-game-state
+  kind: data
+  name: 桌游房间、棋盘与玩家战绩
+  summary: MiniGame持有房主/访客、密码、类型、棋盘/卡牌、对局状态、分数、认输次数和赛后退出标志；双方角色分别累计五子棋或翻牌胜/负/平，最终沿角色存档保存。
+  aliases:
+  - 小游戏战绩
+  - 五子棋战绩
+  - 翻牌战绩
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniGame.java
+    description: 查看房间、棋盘/牌组和每局结算数据。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.setMiniGamePoints
+    description: 分别累计双方OMOK或MATCH_CARD胜、负、平。
+relations:
+- from: beidou.quests.quest-lifecycle
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.start
+  type: part_of
+  to: beidou.quests.quest-lifecycle
+  summary: 该责任由任务生命周期维护。
+- from: beidou.quests.complete
+  type: part_of
+  to: beidou.quests.quest-lifecycle
+  summary: 该责任由任务生命周期维护。
+- from: beidou.quests.forfeit
+  type: part_of
+  to: beidou.quests.quest-lifecycle
+  summary: 该责任由任务生命周期维护。
+- from: beidou.quests.progress
+  type: part_of
+  to: beidou.quests.quest-lifecycle
+  summary: 该责任由任务生命周期维护。
+- from: beidou.quests.eligibility
+  type: part_of
+  to: beidou.quests.quest-lifecycle
+  summary: 该责任由任务生命周期维护。
+- from: beidou.quests.npc-dialogue
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.talk
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.reply
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.dialogue-context
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.scripted-quest
+  type: part_of
+  to: beidou.quests.quest-lifecycle
+  summary: 该责任由任务生命周期维护。
+- from: beidou.quests.party-challenge
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.challenge-rules
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.challenge-reward
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.competitive-challenges
+  type: part_of
+  to: beidou.quests
+  summary: 该责任由北斗任务、NPC与挑战域维护。
+- from: beidou.quests.start
+  type: writes
+  to: beidou.quests.progress
+  summary: 按本操作的任务状态转换写入任务进度。
+- from: beidou.quests.complete
+  type: writes
+  to: beidou.quests.progress
+  summary: 按本操作的任务状态转换写入任务进度。
+- from: beidou.quests.forfeit
+  type: writes
+  to: beidou.quests.progress
+  summary: 按本操作的任务状态转换写入任务进度。
+- from: beidou.quests.start
+  type: constrained_by
+  to: beidou.quests.eligibility
+  summary: 保留相应状态、需求与NPC资格。
+- from: beidou.quests.complete
+  type: constrained_by
+  to: beidou.quests.eligibility
+  summary: 保留相应状态、需求与NPC资格。
+- from: beidou.quests.start
+  type: reads
+  to: beidou.world.scene
+  summary: 玩家接取入口核地图内NPC与距离。
+- from: beidou.quests.complete
+  type: reads
+  to: beidou.world.scene
+  summary: 玩家交付入口核地图内NPC与距离。
+- from: beidou.quests.talk
+  type: writes
+  to: beidou.quests.dialogue-context
+  summary: 建立当前原生Client的CM与脚本上下文。
+- from: beidou.quests.reply
+  type: reads
+  to: beidou.quests.dialogue-context
+  summary: 依当前CM/QM和NextLevel上下文决定回复路由。
+- from: beidou.quests.reply
+  type: writes
+  to: beidou.quests.dialogue-context
+  summary: 推进或关闭当前会话，更新原生脚本状态。
+- from: beidou.quests.reply
+  type: consumes
+  to: beidou.quests.npc-dialogue
+  summary: 经当前原生NPC回复入口派发。
+- from: beidou.quests.party-challenge
+  type: constrained_by
+  to: beidou.quests.challenge-rules
+  summary: 由本任务规则决定参与资格与结束条件。
+- from: beidou.quests.party-challenge
+  type: consumes
+  to: beidou.world.events
+  summary: 利用原生事件实例、成员登记、地图与计时基础。
+- from: beidou.quests.challenge-reward
+  type: invokes
+  to: beidou.combat.gain-level
+  summary: 配置经验奖励时进入角色原生成长结算。
+- from: beidou.quests.complete
+  type: writes
+  to: beidou.identity.characters
+  summary: 完成任务产生的角色数据变化随原生角色存档保存。
+- from: beidou.quests.complete
+  type: invokes
+  to: beidou.combat.gain-level
+  summary: 任务配置经验动作时通过原生角色经验规则发放。
+- from: beidou.quests.table-games
+  type: part_of
+  to: beidou.quests
+  summary: 桌游对局是原生竞技玩法能力。
+- from: beidou.quests.play-table-game
+  type: part_of
+  to: beidou.quests.table-games
+  summary: 桌游的房间、对局和退出构成同一支持生命周期。
+- from: beidou.quests.table-game-state
+  type: part_of
+  to: beidou.quests.table-games
+  summary: 桌游玩法拥有房间和胜负数据的意义。
+- from: beidou.quests.play-table-game
+  type: writes
+  to: beidou.quests.table-game-state
+  summary: 建立或解除房间绑定、推进棋盘/配对并记录本局结果。
+- from: beidou.quests.play-table-game
+  type: reads
+  to: beidou.economy.inventory
+  summary: 创建五子棋或翻牌房间时核持有对应小游戏道具。
+- from: beidou.quests.play-table-game
+  type: reads
+  to: beidou.world.scene
+  summary: 在当前地图登记、查找和广播小游戏房间。
+- from: beidou.quests.play-table-game
+  type: writes
+  to: beidou.identity.characters
+  summary: 对局结算累计双方角色的小游戏胜、负、平战绩。
+- from: beidou.quests.start
+  type: reads
+  to: beidou.economy.inventory
+  summary: 任务配置物品动作时检查所需物品与背包容纳条件。
+- from: beidou.quests.start
+  type: writes
+  to: beidou.economy.inventory
+  summary: 运行任务物品动作时扣除所需物品并发放配置奖励。
+- from: beidou.quests.start
+  type: writes
+  to: beidou.economy.wallet
+  summary: 运行任务金币动作时按配置增减原生金币，不据此承诺余额预检查。
+- from: beidou.quests.complete
+  type: reads
+  to: beidou.economy.inventory
+  summary: 任务配置物品动作时检查所需物品与背包容纳条件。
+- from: beidou.quests.complete
+  type: writes
+  to: beidou.economy.inventory
+  summary: 运行任务物品动作时扣除所需物品并发放配置奖励。
+- from: beidou.quests.complete
+  type: writes
+  to: beidou.economy.wallet
+  summary: 运行任务金币动作时按配置增减原生金币，不据此承诺余额预检查。
+- from: beidou.quests.challenge-reward
+  type: reads
+  to: beidou.economy.inventory
+  summary: 有物品奖励时检查对应背包格位，空间不足返回失败。
+- from: beidou.quests.challenge-reward
+  type: writes
+  to: beidou.economy.inventory
+  summary: 通过原生gainItem发放选中的事件物品奖励。
+- from: beidou.quests.challenge-reward
+  type: writes
+  to: beidou.economy.wallet
+  summary: 事件明确调用giveEventPlayersMeso时，按登记成员、可选地图与倍率发放金币。
+flows:
+- id: beidou.quests.start.flow
+  name: 普通任务接取与拒绝
+  summary: 覆盖普通Quest.start的动作检查；脚本任务另由QM驱动，玩家包入口还有地图和NPC资格检查。
+  scenario: beidou.quests.start
+  startsAt: start
+  steps:
+  - id: start
+    kind: action
+    name: 尝试普通任务接取
+    summary: 读取角色现有任务状态、开始需求及自动开始设置。
+    concept: beidou.quests.start
+  - id: eligible
+    kind: decision
+    name: 自动开始或满足接取需求
+    summary: 普通接取必须满足状态、需求和信息进度；autoStart有源码例外。
+    concept: beidou.quests.eligibility
+  - id: check-actions
+    kind: decision
+    name: 全部开始动作检查通过
+    summary: 逐一检查开始动作的背包、物品等条件，失败立即返回。
+  - id: refused
+    kind: outcome
+    name: 本次未接取任务
+    summary: 未运行开始动作和forceStart；保持当前任务状态。
+  - id: run
+    kind: action
+    name: 执行开始动作并标为进行中
+    summary: 按开始动作执行后调用forceStart更新状态。
+    concept: beidou.quests.start
+  - id: started
+    kind: outcome
+    name: 任务进入进行中
+    summary: 可继续推进进度、交付或放弃。
+  transitions:
+  - from: start
+    to: eligible
+  - from: eligible
+    to: check-actions
+    when: 自动开始或需求满足
+  - from: eligible
+    to: refused
+    when: 普通接取需求不满足
+  - from: check-actions
+    to: run
+    when: 全部开始动作检查通过
+  - from: check-actions
+    to: refused
+    when: 任一开始动作检查失败
+  - from: run
+    to: started
+- id: beidou.quests.talk.flow
+  name: 当前NPC与任务的选择回复路由
+  summary: 展示非文本回复路径：按真实QM/CM和当前NextLevel上下文路由；同一取消字节不可套用于全部对话。文本输入另有原生分支。
+  scenario: beidou.quests.talk
+  startsAt: receive
+  steps:
+  - id: receive
+    kind: action
+    name: 收到原生非文本对话回复
+    summary: 解析非文本回复的mode和选择；本流程不代替文本输入路径。
+    concept: beidou.quests.reply
+  - id: owner
+    kind: decision
+    name: 当前回复属于哪类会话
+    summary: 优先当前QM；无QM时检查当前CM。
+    concept: beidou.quests.dialogue-context
+  - id: quest
+    kind: action
+    name: 交给任务开始或结束脚本
+    summary: 依据QM的isStart派发start或end，由任务脚本决定继续和结束。
+    concept: beidou.quests.scripted-quest
+  - id: route
+    kind: decision
+    name: 当前CM是否为NextLevel
+    summary: 依据当前CM的NextLevelContext而非NPC模板或历史包猜测。
+    concept: beidou.quests.npc-dialogue
+  - id: legacy
+    kind: action
+    name: 沿legacy action回答
+    summary: 使用原生mode/type/selection推进，脚本决定结束。
+    concept: beidou.quests.reply
+  - id: next
+    kind: action
+    name: 沿NextLevel类型回答
+    summary: 按选择型、输入型或顺序型的语义返回、拒绝或关闭。
+    concept: beidou.quests.reply
+  - id: ignored
+    kind: outcome
+    name: 没有当前会话可路由
+    summary: 无当前QM和CM时不建立新的对话授权。
+  - id: handled
+    kind: outcome
+    name: 按当前会话处理回复
+    summary: 脚本可继续对话、正常结束或异常清理，业务收益由具体脚本决定。
+  transitions:
+  - from: receive
+    to: owner
+  - from: owner
+    to: quest
+    when: 当前存在QM
+  - from: owner
+    to: route
+    when: 没有QM且存在CM
+  - from: owner
+    to: ignored
+    when: 当前QM和CM均不存在
+  - from: quest
+    to: handled
+  - from: route
+    to: legacy
+    when: levelType为空
+  - from: route
+    to: next
+    when: levelType非空
+  - from: legacy
+    to: handled
+  - from: next
+    to: handled
+- id: beidou.quests.party-challenge.flow
+  name: KerningPQ准入与结束
+  summary: 以固定中文KerningPQ规则说明组队准入、事件启动、通关或失败；其他任务拥有各自参数与阶段规则。
+  scenario: beidou.quests.party-challenge
+  startsAt: entry
+  steps:
+  - id: entry
+    kind: action
+    name: 队长通过招募NPC申请
+    summary: NPC核队伍和队长身份后查询事件资格。
+    concept: beidou.quests.party-challenge
+  - id: eligible
+    kind: decision
+    name: 合格队伍满足本任务规则
+    summary: 核同图成员、当前配置的等级/人数范围及队长。
+    concept: beidou.quests.challenge-rules
+  - id: refused
+    kind: outcome
+    name: 本次未进入挑战
+    summary: 不满足资格或大厅不可用时不建立本次参与实例。
+  - id: lobby
+    kind: decision
+    name: 事件大厅是否可用
+    summary: 原生事件基础拒绝已释放管理器或占用大厅。
+  - id: running
+    kind: action
+    name: 进入实例并推进阶段
+    summary: 建立实例、计时、登记成员并传入入口地图，按阶段脚本协作。
+    concept: beidou.quests.party-challenge
+  - id: result
+    kind: decision
+    name: 通关或触发结束条件
+    summary: 阶段完成可通关；超时、成员不足或未通关解散等触发失败收尾。
+  - id: clear
+    kind: outcome
+    name: 标记通关并停止计时
+    summary: clearPQ标记eventCleared；奖励格位和领取是后续独立条件。
+  - id: exit
+    kind: outcome
+    name: 成员退出且实例释放
+    summary: end逐个退出并dispose，不标为通关。
+  transitions:
+  - from: entry
+    to: eligible
+  - from: eligible
+    to: lobby
+    when: 本任务资格满足
+  - from: eligible
+    to: refused
+    when: 本任务资格不足
+  - from: lobby
+    to: running
+    when: 大厅可用并启动实例
+  - from: lobby
+    to: refused
+    when: 大厅占用或管理器不可启动
+  - from: running
+    to: result
+  - from: result
+    to: clear
+    when: 达到通关条件
+  - from: result
+    to: exit
+    when: 超时或队伍条件触发失败结束

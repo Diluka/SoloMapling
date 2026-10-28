@@ -1,0 +1,606 @@
+schemaVersion: 1
+map:
+  id: beidou-world
+  title: 北斗 1.12 · 世界与场景运行
+  summary: 只读官方北斗1.12固定源码，描述世界、频道、场景和事件实例的业务责任；不表示本次完成运行或玩法验收。
+nodes:
+- id: beidou.world
+  kind: domain
+  name: 北斗·世界与场景运行
+  summary: 为在线角色提供世界、频道、公共地图及独立事件实例的运行环境；具体任务通关规则由任务及事件脚本业务决定。
+  aliases:
+  - 世界
+  - 频道
+  - 地图
+  - 实例
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server
+    description: 世界、频道及服务端运行入口。
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps
+    description: 地图实例、门户与成员状态。
+- id: beidou.world.topology
+  kind: data
+  name: 世界与频道拓扑
+  summary: 世界集合、频道地址及各世界倍率构成当前可进入的游戏环境；属于内存运行状态。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    description: 世界列表、频道地址与世界创建管理。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/World.java
+    description: 世界内频道和在线玩家集合。
+- id: beidou.world.scene
+  kind: data
+  name: 地图场景与成员
+  summary: 场景由实际 MapleMap 对象及其世界、频道、事件实例和成员共同确定；相同地图编号可以对应不同实例。
+  aliases:
+  - scene
+  - 地图成员
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapleMap.java
+    description: 地图中的角色、地图对象、门户和事件关联。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapManager.java
+    description: 按频道或事件实例持有独立地图缓存。
+- id: beidou.world.instance
+  kind: data
+  name: 事件实例状态
+  summary: 一次事件持有独立玩家集合、实例地图管理器、计时器和脚本属性，释放后停止该实例生命周期。
+  aliases:
+  - EIM
+  - 副本状态
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    description: 事件实例成员、地图、属性、计时和释放状态。
+- id: beidou.world.open-world
+  kind: operation
+  name: 建立世界与频道
+  summary: 按世界配置创建世界、频道、运行服务和频道地址；达到世界数量上限或竞争登记失败时不接纳新世界。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    value: Server.addWorld
+    description: 创建并登记新世界，并补充已有账号的世界角色视图。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    value: Server.initWorld
+    description: 应用世界倍率、频道数量及世界上限。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    value: Server.init
+    description: 完整原生启动按配置初始化世界频道及登录服务，并加载事件脚本。
+- id: beidou.world.stop-world
+  kind: operation
+  name: 关闭世界与频道
+  summary: 先经各频道关闭商店、断开玩家并释放事件和地图，再停止世界定时服务；由原生退出链路处理玩家保存。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/World.java
+    value: World.shutdown
+    description: 逐频道关闭并停止世界定时任务。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/Channel.java
+    value: Channel.shutdown
+    description: 关闭商店、断开玩家、释放事件与地图并停止频道监听。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    value: Server.shutdownInternal
+    description: 完整原生关闭进入世界关闭，等待频道结束，再停公共调度与登录服务。
+- id: beidou.world.load-scene
+  kind: operation
+  name: 取得公共或独立实例地图
+  summary: 频道与事件各自通过 MapManager 加载并缓存地图，也支持取得不进入缓存的一次性地图；取得地图可能创建场景。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapManager.java
+    value: MapManager.getMap
+    description: 从当前管理器缓存取得地图，不存在时从 WZ 加载。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapManager.java
+    value: MapManager.getDisposableMap
+    description: 创建不进入该管理器缓存的一次性地图。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.getMapInstance
+    description: 取得事件自身管理器中的地图并关联当前事件。
+- id: beidou.world.membership
+  kind: operation
+  name: 登记与移除地图成员
+  summary: 角色进入场景时更新成员和地图编号并触发入口脚本；离开时移除成员、广播离场并释放角色在地图中的控制关系。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapleMap.java
+    value: MapleMap.addPlayer
+    description: 登记成员并执行首位玩家及普通入图脚本。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapleMap.java
+    value: MapleMap.removePlayer
+    description: 移除成员并释放怪物控制、召唤等地图关联。
+- id: beidou.world.change-map
+  kind: scenario
+  name: 通过门户或原生传送跨图
+  summary: 玩家门户入口验证当前状态、门户开放与距离，脚本及原生角色传送沿角色事件实例解析目标地图。
+  aliases:
+  - 传送
+  - 门户
+  - 跨图
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ChangeMapHandler.java
+    value: ChangeMapHandler.handlePacket
+    description: 处理门户、死亡回城和特定引导地图传送，并拒绝无效门户请求。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.changeMap
+    description: 按事件关联解析地图、触发跨图事件并执行原生场景切换。
+- id: beidou.world.change-channel
+  kind: scenario
+  name: 保存状态并切换频道
+  summary: 仅允许符合生命、地图和交互限制的角色迁往可用频道；原频道移除角色并保存后，发送目标频道连接信息。
+  aliases:
+  - 换频道
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ChangeChannelHandler.java
+    value: ChangeChannelHandler.handlePacket
+    description: 拒绝同频道及商城、交易、商店、小游戏中的换频道请求。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    value: Client.changeChannel
+    description: 核对地图与目标频道资格，保存角色并建立频道过渡。
+- id: beidou.world.events
+  kind: interface
+  name: 事件脚本生命周期接口
+  summary: 北斗通过频道事件脚本管理器承载事件脚本，提供场次创建、参与者登记、计时、死亡/断线/退出及释放回调；重载更换频道脚本管理器，活动玩法和奖励由各脚本制定。
+  aliases:
+  - 事件回调
+  - EventManager
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventManager.java
+    value: EventManager.startInstance
+    description: 向单人、队伍或远征队事件启动提供受大厅和并发限制的入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.invokeScriptFunction
+    description: 向本场事件脚本派发受实例状态约束的回调。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/Channel.java
+    value: Channel.reloadEventScriptManager
+    description: 未结束的频道取消旧脚本管理器并按当前事件集合重建，供运营事件重载使用。
+- id: beidou.world.start-event
+  kind: scenario
+  name: 申请并建立事件场次
+  summary: 入口核对管理器状态、队长并发许可及大厅，调用脚本 setup 后登记符合条件的玩家并启动事件；方法返回值不能替代脚本和实际入场结果。
+  aliases:
+  - 开副本
+  - 活动入场
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventManager.java
+    value: EventManager.startInstance
+    description: 核对大厅、并发许可并运行 setup、成员登记和事件启动。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventManager.java
+    value: EventManager.newInstance
+    description: 登记命名实例，已有同名场次时拒绝创建。
+- id: beidou.world.participation
+  kind: operation
+  name: 登记、退出与断线事件成员
+  summary: 仅登记处于世界中的有效角色，保持角色与实例的双向关联；退出和断线通知由脚本决定后续玩法处理。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.registerPlayer
+    description: 核对在线世界状态和实例状态后登记成员并可运行入场脚本。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.unregisterPlayer
+    description: 运行退出登记回调，移除关联并清理专属物品。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.playerDisconnected
+    description: 把断线交给当前事件脚本处理。
+- id: beidou.world.event-clock
+  kind: operation
+  name: 管理事件倒计时与超时
+  summary: 实例向参与者显示事件计时，到期调用 scheduledTimeout；停止计时会取消定时任务并移除倒计时。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.startEventTimer
+    description: 建立实例倒计时并在到期时运行超时回调。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.stopEventTimer
+    description: 停止实例倒计时并清理参与者的时钟显示。
+- id: beidou.world.dispose-event
+  kind: operation
+  name: 结束并释放事件实例
+  summary: 释放操作运行脚本 dispose、解绑成员、清空实例数据和定时任务，通知管理器归还大厅，并延时释放实例地图。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.dispose
+    description: 结束实例并清理成员、计时及地图资源。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventManager.java
+    value: EventManager.disposeInstance
+    description: 按事件大厅延时规则释放占用并移除实例登记。
+- id: beidou.world.mini-dungeon
+  kind: operation
+  name: 管理迷你地牢成员与退出
+  summary: 迷你地牢维护独立成员及超时；队长离开时关闭并送出剩余成员，最后一名离开后清理地牢。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniDungeon.java
+    value: MiniDungeon.unregisterPlayer
+    description: 成员离开时决定继续、关闭或释放迷你地牢。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MiniDungeon.java
+    value: MiniDungeon.close
+    description: 送出当前成员并取消本地倒计时。
+- id: beidou.world.scene-identity
+  kind: invariant
+  name: 场景身份包含实际实例
+  summary: 公共频道和每次事件均有自己的地图管理器；不能仅用 map_id 断定角色位于同一场景。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapManager.java
+    value: MapManager.getMap
+    description: 地图缓存归属当前 MapManager，管理器携带独立事件对象。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/scripting/event/EventInstanceManager.java
+    value: EventInstanceManager.getMapInstance
+    description: 事件地图绑定本次实例。
+- id: beidou.world.travel-rules
+  kind: invariant
+  name: 迁移沿原生地图与交互限制
+  summary: 门户请求受地图切换状态、封禁、门户开放及距离约束；频道迁移另受存活、禁止迁移地图、迷你地牢和当前交互限制。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ChangeMapHandler.java
+    value: ChangeMapHandler.handlePacket
+    description: 验证门户状态和角色位置，不接纳任意客户端目标地图。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    value: Client.changeChannel
+    description: 拒绝不可迁移的生命/地图状态与不可用频道。
+- id: beidou.world.lifecycle
+  kind: interface
+  name: 原生游戏服启动与停止边界
+  summary: Server.init完成原生资源、世界频道、登录服务及事件脚本初始化并置online；shutdownInternal带重入保护关闭世界频道和公共服务，按restart请求可重新初始化。此原生方法边界与事件实例脚本回调分开，未承诺Solo后台工作排空。
+  aliases:
+  - Server.init
+  - Server.shutdownInternal
+  - 游戏服生命周期
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    value: Server.init
+    description: 原生游戏初始化方法；正常返回是Solo织入启动通知所观察的边界。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/Server.java
+    value: Server.shutdownInternal
+    description: 带重入保护的原生停止/重启方法；Solo在进入前执行自身停止处理。
+relations:
+- from: beidou.world.topology
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.scene
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.instance
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.open-world
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.stop-world
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.load-scene
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.membership
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.change-map
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.change-channel
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.events
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.start-event
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.participation
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.event-clock
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.dispose-event
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.mini-dungeon
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.scene-identity
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.travel-rules
+  type: part_of
+  to: beidou.world
+  summary: 该职责或状态由北斗世界与场景运行域维护。
+- from: beidou.world.open-world
+  type: writes
+  to: beidou.world.topology
+  summary: 建立或结束当前世界和频道的可用运行状态。
+- from: beidou.world.stop-world
+  type: writes
+  to: beidou.world.topology
+  summary: 建立或结束当前世界和频道的可用运行状态。
+- from: beidou.world.load-scene
+  type: writes
+  to: beidou.world.scene
+  summary: 改变地图实例的建立、成员归属或角色所在场景。
+- from: beidou.world.membership
+  type: writes
+  to: beidou.world.scene
+  summary: 改变地图实例的建立、成员归属或角色所在场景。
+- from: beidou.world.change-map
+  type: writes
+  to: beidou.world.scene
+  summary: 改变地图实例的建立、成员归属或角色所在场景。
+- from: beidou.world.change-channel
+  type: writes
+  to: beidou.world.scene
+  summary: 改变地图实例的建立、成员归属或角色所在场景。
+- from: beidou.world.change-map
+  type: invokes
+  to: beidou.world.load-scene
+  summary: 原生跨图按公共地图或当前事件实例取得目标地图。
+- from: beidou.world.change-map
+  type: invokes
+  to: beidou.world.membership
+  summary: 跨图沿原生地图成员移除与加入完成场景切换。
+- from: beidou.world.change-channel
+  type: writes
+  to: beidou.identity.characters
+  summary: 换频道移除当前在线成员后调用 saveCharToDB 保存角色。
+- from: beidou.world.change-channel
+  type: consumes
+  to: beidou.identity.native-character
+  summary: 频道过渡使用原生角色保存和会话迁移边界。
+- from: beidou.world.change-map
+  type: constrained_by
+  to: beidou.world.travel-rules
+  summary: 迁移须满足对应原生入口的角色、地图及交互规则。
+- from: beidou.world.change-channel
+  type: constrained_by
+  to: beidou.world.travel-rules
+  summary: 迁移须满足对应原生入口的角色、地图及交互规则。
+- from: beidou.world.load-scene
+  type: constrained_by
+  to: beidou.world.scene-identity
+  summary: 地图业务以实际频道/事件中的场景对象为边界。
+- from: beidou.world.change-map
+  type: constrained_by
+  to: beidou.world.scene-identity
+  summary: 地图业务以实际频道/事件中的场景对象为边界。
+- from: beidou.world.membership
+  type: constrained_by
+  to: beidou.world.scene-identity
+  summary: 地图业务以实际频道/事件中的场景对象为边界。
+- from: beidou.world.start-event
+  type: writes
+  to: beidou.world.instance
+  summary: 维护事件实例从创建、参与、计时到结束的状态。
+- from: beidou.world.participation
+  type: writes
+  to: beidou.world.instance
+  summary: 维护事件实例从创建、参与、计时到结束的状态。
+- from: beidou.world.event-clock
+  type: writes
+  to: beidou.world.instance
+  summary: 维护事件实例从创建、参与、计时到结束的状态。
+- from: beidou.world.dispose-event
+  type: writes
+  to: beidou.world.instance
+  summary: 维护事件实例从创建、参与、计时到结束的状态。
+- from: beidou.world.start-event
+  type: consumes
+  to: beidou.world.events
+  summary: 沿事件脚本提供的生命周期回调执行场次规则。
+- from: beidou.world.participation
+  type: consumes
+  to: beidou.world.events
+  summary: 沿事件脚本提供的生命周期回调执行场次规则。
+- from: beidou.world.event-clock
+  type: consumes
+  to: beidou.world.events
+  summary: 沿事件脚本提供的生命周期回调执行场次规则。
+- from: beidou.world.dispose-event
+  type: consumes
+  to: beidou.world.events
+  summary: 沿事件脚本提供的生命周期回调执行场次规则。
+- from: beidou.world.start-event
+  type: invokes
+  to: beidou.world.participation
+  summary: 实例建立后登记当前符合条件的在线参与者。
+- from: beidou.world.dispose-event
+  type: writes
+  to: beidou.world.scene
+  summary: 事件结束后延时释放该实例的地图管理器。
+- from: beidou.world.stop-world
+  type: invokes
+  to: beidou.world.dispose-event
+  summary: 频道停止时释放其事件管理器与现存事件实例。
+- from: beidou.world.mini-dungeon
+  type: invokes
+  to: beidou.world.change-map
+  summary: 地牢关闭时通过原生角色跨图送出成员。
+- from: beidou.world.lifecycle
+  type: part_of
+  to: beidou.world
+  summary: 原生服务启动停止协议由世界与场景运行域提供。
+- from: beidou.world.open-world
+  type: publishes
+  to: beidou.world.lifecycle
+  summary: 原生Server.init承担世界频道建立并提供完整启动方法边界。
+- from: beidou.world.stop-world
+  type: publishes
+  to: beidou.world.lifecycle
+  summary: 原生shutdownInternal提供完整游戏服关闭或重启边界。
+flows:
+- id: beidou.world.change-channel.flow
+  name: 原生频道迁移
+  summary: 保留原生拒绝路径，并把发送迁移连接信息与目标频道实际上线区分。
+  scenario: beidou.world.change-channel
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 请求切换频道
+    summary: 读取目标频道并检查当前交互。
+    concept: beidou.world.change-channel
+  - id: interaction
+    kind: decision
+    name: 当前交互允许迁移
+    summary: 同频道请求会断开，商城、小游戏、商店或交易中的请求不迁移。
+    concept: beidou.world.travel-rules
+  - id: eligibility
+    kind: decision
+    name: 角色、地图和目标频道允许
+    summary: 封禁、死亡、禁止迁移地图、迷你地牢或目标频道不可用时拒绝。
+    concept: beidou.world.travel-rules
+  - id: save
+    kind: action
+    name: 移除当前成员并保存
+    summary: 保存增益与角色状态，移除当前地图和频道成员。
+    concept: beidou.world.change-channel
+  - id: transition
+    kind: outcome
+    name: 进入频道过渡
+    summary: 发送目标频道地址，后续目标频道登录由原生角色生命周期处理。
+  - id: rejected
+    kind: outcome
+    name: 不执行频道迁移
+    summary: 按入口规则恢复操作或断开连接；未发生正常频道迁移。
+  transitions:
+  - from: request
+    to: interaction
+  - from: interaction
+    to: eligibility
+    when: 当前交互允许且目标不是当前频道
+  - from: interaction
+    to: rejected
+    when: 同频道或存在限制交互
+  - from: eligibility
+    to: save
+    when: 资格满足且频道可用
+  - from: eligibility
+    to: rejected
+    when: 任一角色、地图或频道检查不满足
+  - from: save
+    to: transition
+- id: beidou.world.start-event.flow
+  name: 申请队伍事件场次
+  summary: 展示队伍事件入口的大厅与 setup 拒绝路径；开始调用不构成玩法完成证据。
+  scenario: beidou.world.start-event
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 队伍申请事件场次
+    summary: 入口由队伍及队长、当前地图申请事件。
+    concept: beidou.world.start-event
+  - id: admission
+    kind: decision
+    name: 入口与大厅可用
+    summary: 检查管理器未释放、队长未占并发许可、许可可取得及大厅可用。
+    concept: beidou.world.start-event
+  - id: setup
+    kind: action
+    name: 调用脚本建立实例
+    summary: 运行 setup 并登记命名实例与大厅。
+    concept: beidou.world.start-event
+  - id: instance
+    kind: decision
+    name: 实例创建可继续
+    summary: 同名实例或 setup 无法产生实例时释放本次大厅占用；其他脚本错误须查看实际证据。
+    concept: beidou.world.instance
+  - id: register
+    kind: action
+    name: 登记可参与成员并启动事件
+    summary: 按队伍资格、在线与当前地图登记成员，再调用事件开始。
+    concept: beidou.world.participation
+  - id: running
+    kind: outcome
+    name: 进入脚本事件生命周期
+    summary: 事件已推进启动调用；实际成员、脚本异常、目标达成与奖励仍需分别核对。
+  - id: refused
+    kind: outcome
+    name: 未建立本次场次
+    summary: 入口或 setup 拒绝本次申请，调用方不得推定已经入场。
+  - id: uncertain
+    kind: outcome
+    name: 脚本异常，需核对实际后态
+    summary: 部分脚本异常被记录后入口仍可能返回 true；实例或成员可能尚未完整建立，不据此确认成功或自动重试。
+  transitions:
+  - from: request
+    to: admission
+  - from: admission
+    to: setup
+    when: 入口许可和大厅可用
+  - from: admission
+    to: refused
+    when: 入口停用、并发冲突或无可用大厅
+  - from: setup
+    to: instance
+  - from: instance
+    to: register
+    when: 取得可登记实例并正常继续
+  - from: instance
+    to: refused
+    when: 同名实例或 setup 无法建立实例
+  - from: register
+    to: running
+  - from: instance
+    to: uncertain
+    when: 出现其他脚本异常或缺少回调

@@ -1,0 +1,440 @@
+schemaVersion: 1
+map:
+  id: solo.social
+  title: SoloMapling · 机器人社交
+  summary: 点名、静态文案、可选外部模型和环境群聊；区分旧 V1 广播与共享原生动作。
+nodes:
+- id: solo.social
+  kind: domain
+  name: SoloMapling 机器人社交
+  summary: 为同图玩家提供点名对话、静态本地化回复和可选模型回复，并支持环境机器人闲聊；本图描述源码，不证明真实模型和客户端交互已验收。
+  aliases:
+  - SocialBot
+  - 机器人聊天
+  - LLM
+  - 中文对话
+  anchors:
+  - kind: document
+    value: README.md
+    description: 机器人点名语法、语言配置及桩/真实模型验收边界。
+- id: solo.social.route-chat
+  kind: scenario
+  name: 点名接入机器人对话
+  summary: 仅观察已由原生普通聊天成功广播的真人消息；按同图名字和当前交互者分流，未匹配且无会话的消息不触发对话。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotMessagingSystem/Dispatcher.java
+    value: Dispatcher.processMessages
+    description: 处理原生聊天观察消息并分流点名或会话续聊。
+  - kind: file
+    value: beidou-integration/src/main/aspect/soloMapling/beidou/GameplayHooks.aj
+    description: 只在 GeneralChatHandler 完成正常 ChatLogger 路径后观察真人广播。
+- id: solo.social.start-conversation
+  kind: operation
+  name: 开始或拒绝社交会话
+  summary: SocialBot 有活跃交互者时不接第二位玩家；重复打扰按交互级别降为短答、非语言回应或忽略。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.onFirstInteraction
+    description: 按交互级别执行问候、单次答复或拒绝。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotMessagingSystem/Dispatcher.java
+    value: Dispatcher.handleSocialBotSession
+    description: 忙碌时不把会话交给第二位玩家。
+- id: solo.social.conversation
+  kind: data
+  name: 社交会话与轮次
+  summary: 保存当前交互者、等待选择/回复状态和会话修订；模型上下文按机器人和玩家隔离并有界保留，结束清空。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    description: 当前交互者和社交状态、会话修订与打扰追踪。
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/LlmSystem/SocialChatSessionStore.java
+    description: 按 bot/player 隔离的有界上下文。
+- id: solo.social.choose-reply
+  kind: scenario
+  name: 选择静态回复或模型回复
+  summary: 已知选项走 YAML 或组队/告别分支；未识别文本且模型已启用才请求模型，否则回到静态分类。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.handleDialogueChoice
+    description: 识别选项并选择静态、组队、告别或模型路径。
+- id: solo.social.yaml-reply
+  kind: operation
+  name: 回复本地化静态对话
+  summary: 读取对应类别和上下文文案，缺语言文件或节点时回退英文；无法解析上下文的行不直接原样发送。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.respondWithYamlCategory
+    description: 选择静态类别、表情并保留当前会话资格。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotDialogueHandler.java
+    value: BotDialogueHandler.getRandomResolvedLine
+    description: 解析对话模板中的人物与环境上下文。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotDialogueHandler.java
+    value: BotDialogueHandler.readDialogueYaml
+    description: 查找语言节点并按实现回退。
+- id: solo.social.llm-reply
+  kind: operation
+  name: 请求可选模型回复
+  summary: 只有启用且配置有效时调用模型，受模型、token、历史和超时配置限制；失败可回退 YAML 或重新显示选项。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.handleFreeformLlm
+    description: 异步发起模型轮次并按配置决定回退。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/LlmSystem/SocialLlmService.java
+    value: SocialLlmService.completeAsync
+    description: 构建有界上下文请求并处理超时、空答复与回调失败。
+- id: solo.social.end-conversation
+  kind: operation
+  name: 结束社交会话
+  summary: 告别、会话超时等明确重置路径使会话修订失效、清空该机器人与玩家的模型历史并移除当前交互者；单独停止调度不等于重置会话。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.resetConversation
+    description: 更新修订并释放当前交互者和历史。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.checkConversationTimeout
+    description: 超时后按静态话术结束会话。
+- id: solo.social.broadcast
+  kind: operation
+  name: 广播机器人文案
+  summary: 旧 V1 SocialCommands 直接构造 CHATTEXT 并广播到地图；当前 SocialBot 路径未迁入共享 NativeActionService，不能据此推断
+    lane 和原生玩家限频校验。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotCommandsPack/SocialCommands.java
+    value: SocialCommands.BotSpeak
+    description: 选择普通文案或打字表现。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotCommandsPack/SocialCommands.java
+    value: SocialCommands.BotFullChat
+    description: 直接通过原生地图广播聊天文本包。
+- id: solo.social.ambient-chat
+  kind: scenario
+  name: 玩家在场时的环境闲聊
+  summary: 在有真人的配置地图上选择可参与闲聊的多个 SocialBot，按脚本和地图冷却播放；不把闲逛机器人纳入旧移动引擎群聊。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/ConversationManager.java
+    value: ConversationManager.tick
+    description: 按真人在场、地图冷却和可用群组发起闲聊。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/ConversationManager.java
+    value: ConversationManager.findClusterOnMap
+    description: 筛选空闲 SocialBot 并排除正在会话者。
+- id: solo.social.dialogue-packs
+  kind: data
+  name: 静态对话与语言资源
+  summary: 内置英文和中文对话包提供菜单、社交、闲聊等文案；资源不依赖真实模型调用。
+  aliases: []
+  anchors:
+  - kind: directory
+    value: src/main/java/soloMapling/ArtificialPlayer/BotDialoguePack
+    description: 英文静态文案与上下文节点。
+  - kind: directory
+    value: src/main/java/soloMapling/ArtificialPlayer/BotDialoguePack-zh-CN
+    description: 简体中文静态文案。
+- id: solo.social.language-rule
+  kind: invariant
+  name: 显式语言优先且缺资源回退
+  summary: 语言取 solomapling.language、北斗 gms.service.language、en-US 的优先顺序；缺指定语言资源时回退英文。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/SoloMaplingLanguageConfig.java
+    value: SoloMaplingLanguageConfig.configure
+    description: 依配置优先级确定文案语言。
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/LocalizedResources.java
+    value: LocalizedResources.resolve
+    description: 先选本地化资源，缺失时回退英文。
+- id: solo.social.current-turn-rule
+  kind: invariant
+  name: 会话结束后不应用迟到模型回复
+  summary: 模型结果和后续延时表现必须继续匹配当前玩家与捕获的会话修订；新会话或结束后旧轮次失效。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SocialBot.java
+    value: SocialBot.isCurrentLlmTurn
+    description: 同时复核会话修订和当前交互者。
+- id: solo.social.model-provider
+  kind: interface
+  name: 外部 DeepSeek 模型接口
+  summary: 本地只拥有请求构造、凭据读取、超时和回退；模型回答由外部服务产生，不在本图推断提供方内部行为。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/LlmSystem/DeepSeekLlmClient.java
+    value: DeepSeekLlmClient.complete
+    description: 通过 simple-openai DeepSeek 客户端提交聊天请求。
+relations:
+- from: solo.social.route-chat
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.start-conversation
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.conversation
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.choose-reply
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.yaml-reply
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.llm-reply
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.end-conversation
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.broadcast
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.ambient-chat
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.dialogue-packs
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.language-rule
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.current-turn-rule
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.model-provider
+  type: part_of
+  to: solo.social
+  summary: 属于机器人社交责任。
+- from: solo.social.route-chat
+  type: consumes
+  to: beidou.social.chat
+  summary: 接收原生成功广播后的普通玩家聊天观察。
+- from: solo.social.route-chat
+  type: reads
+  to: beidou.world.scene
+  summary: 只在消息所在原生地图角色中匹配名字。
+- from: solo.social.route-chat
+  type: invokes
+  to: solo.social.start-conversation
+  summary: 点名匹配后建立当前交互者或处理忙碌拒绝。
+- from: solo.social.start-conversation
+  type: writes
+  to: solo.social.conversation
+  summary: 记录当前交互者和交互次数。
+- from: solo.social.choose-reply
+  type: reads
+  to: solo.social.conversation
+  summary: 仅处理当前交互者的选择。
+- from: solo.social.choose-reply
+  type: invokes
+  to: solo.social.yaml-reply
+  summary: 已知静态选项或模型未启用时回复 YAML。
+- from: solo.social.choose-reply
+  type: invokes
+  to: solo.social.llm-reply
+  summary: 未匹配静态选项且模型启用时请求自由对话。
+- from: solo.social.choose-reply
+  type: invokes
+  to: solo.social.end-conversation
+  summary: 告别分支结束会话。
+- from: solo.social.yaml-reply
+  type: reads
+  to: solo.social.dialogue-packs
+  summary: 读取静态分类和上下文文案。
+- from: solo.social.yaml-reply
+  type: constrained_by
+  to: solo.social.language-rule
+  summary: 沿语言选择和英文回退。
+- from: solo.social.yaml-reply
+  type: invokes
+  to: solo.social.broadcast
+  summary: 通过 V1 广播呈现文案。
+- from: solo.social.llm-reply
+  type: consumes
+  to: solo.social.model-provider
+  summary: 调用外部提供方生成回复。
+- from: solo.social.llm-reply
+  type: reads
+  to: solo.social.conversation
+  summary: 构造机器人与玩家专属历史。
+- from: solo.social.llm-reply
+  type: writes
+  to: solo.social.conversation
+  summary: 追加本轮用户输入与有效模型答复。
+- from: solo.social.llm-reply
+  type: constrained_by
+  to: solo.social.current-turn-rule
+  summary: 回调及延时显示前复核当前轮次。
+- from: solo.social.llm-reply
+  type: invokes
+  to: solo.social.yaml-reply
+  summary: 请求失败且开启回退时使用静态回复。
+- from: solo.social.llm-reply
+  type: invokes
+  to: solo.social.broadcast
+  summary: 只显示仍有效的模型答复。
+- from: solo.social.end-conversation
+  type: writes
+  to: solo.social.conversation
+  summary: 清理交互者和模型历史并使旧修订失效。
+- from: solo.social.ambient-chat
+  type: reads
+  to: solo.social.dialogue-packs
+  summary: 播放适合人数的静态群聊脚本。
+- from: solo.social.ambient-chat
+  type: reads
+  to: beidou.world.scene
+  summary: 根据地图真人与空闲机器人挑选群组。
+- from: solo.social.ambient-chat
+  type: invokes
+  to: solo.social.broadcast
+  summary: 播放群聊文案。
+- from: solo.social.choose-reply
+  type: invokes
+  to: solo.companions.assess-recruit
+  summary: 玩家选择组队话题时由共用招募规则决定意愿与邀请窗口，真实入队另核。
+flows:
+- id: solo.social.choose-reply.flow
+  name: 自由文本回复及回退
+  summary: 区分组队、告别、静态选项和自由文本；模型失败按配置回退，旧会话结果不应用。
+  scenario: solo.social.choose-reply
+  startsAt: choose
+  steps:
+  - id: choose
+    kind: decision
+    name: 玩家输入属于哪条对话路径
+    summary: 组队与告别先独立处理，其他已知静态选项或未启用模型走 YAML，剩余自由文本才请求模型。
+  - id: yaml
+    kind: action
+    name: 使用静态文案
+    summary: 读取静态分类和本地化回退。
+    concept: solo.social.yaml-reply
+  - id: model
+    kind: action
+    name: 请求模型
+    summary: 按配置限制和超时等待外部回复。
+    concept: solo.social.llm-reply
+  - id: current
+    kind: decision
+    name: 会话轮次是否仍有效
+    summary: 模型返回及表现执行时核对当前玩家和修订。
+    concept: solo.social.current-turn-rule
+  - id: discarded
+    kind: outcome
+    name: 迟到结果被丢弃
+    summary: 不向已结束或更换玩家的会话应用答复。
+  - id: result
+    kind: decision
+    name: 模型是否有效返回
+    summary: 空白、异常和超时属于失败。
+  - id: fallback
+    kind: decision
+    name: 是否启用静态回退
+    summary: 配置决定失败后的用户结果。
+  - id: menu
+    kind: outcome
+    name: 重新等待玩家选择
+    summary: 不开启回退时只恢复选择状态。
+  - id: speak
+    kind: action
+    name: 广播有效文案
+    summary: 旧 V1 直接广播路径。
+    concept: solo.social.broadcast
+  - id: waiting
+    kind: outcome
+    name: 回复后继续等待选择
+    summary: 当前会话仍可继续或稍后超时结束。
+  - id: recruit
+    kind: action
+    name: 判断招募意愿
+    summary: 共享招募规则决定承诺或拒绝，承诺后仍需玩家发送匹配队伍邀请。
+    concept: solo.companions.assess-recruit
+  - id: recruit-result
+    kind: outcome
+    name: 招募意愿已答复
+    summary: 招募承诺与实际入队分开，接受/拒绝及窗口由伙伴域继续解释。
+  - id: goodbye
+    kind: action
+    name: 告别并结束会话
+    summary: 发送告别后重置交互者、历史与会话修订。
+    concept: solo.social.end-conversation
+  - id: ended
+    kind: outcome
+    name: 当前会话结束
+    summary: 后续旧轮次模型结果不再应用。
+  transitions:
+  - from: choose
+    to: model
+    when: 非组队非告别的未知文本且模型已启用
+  - from: choose
+    to: yaml
+    when: 已知静态分类或其他文本但模型未启用
+  - from: yaml
+    to: speak
+  - from: model
+    to: current
+  - from: current
+    to: discarded
+    when: 玩家或修订已失效
+  - from: current
+    to: result
+    when: 仍属当前会话
+  - from: result
+    to: speak
+    when: 有效非空回复
+  - from: result
+    to: fallback
+    when: 失败、空答复或超时
+  - from: fallback
+    to: yaml
+    when: 启用 YAML 回退
+  - from: fallback
+    to: menu
+    when: 未启用 YAML 回退
+  - from: speak
+    to: waiting
+  - from: choose
+    to: recruit
+    when: 组队选项
+  - from: choose
+    to: goodbye
+    when: 告别选项
+  - from: recruit
+    to: recruit-result
+  - from: goodbye
+    to: ended

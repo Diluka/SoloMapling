@@ -1,0 +1,684 @@
+schemaVersion: 1
+map:
+  id: solo.acceptance
+  title: SoloMapling：MCP 游戏验收
+  summary: 专用普通角色的受控观察、原生聊天与已审 NPC 验收；源码接线与实际部署能力分别确认。
+nodes:
+- id: solo.acceptance
+  kind: domain
+  name: MCP 游戏验收
+  summary: 让授权管理员观察世界并用白名单专用普通角色进行受控原生验收；七工具及开放动作以运行时 capabilities 为准。
+  aliases:
+  - 验收桥
+  - solo_acceptance
+  - R2a
+  anchors:
+  - kind: file
+    value: docs/mcp-acceptance/README.md
+    description: 让授权管理员观察世界并用白名单专用普通角色进行受控原生验收；七工具及开放动作以运行时 capabilities 为准。
+- id: solo.acceptance.protocol
+  kind: interface
+  name: 七工具验收协议
+  summary: 提供 capabilities、observe、actor_open、actor_close、operation_get、operation_cancel、game_act；角色密码与任意 CID 不进入工具参数。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: tools/acceptance-mcp/src/solo_acceptance_mcp/server.py
+    value: build_server
+    description: 构建受能力过滤的 MCP 工具服务，桥接到有鉴权的本地验收接口。
+- id: solo.acceptance.discover
+  kind: scenario
+  name: 观察已加载世界与场景
+  summary: 先枚举已加载地图与被在线成员引用的实例，再凭实际 scene_ref 查询场景；不为观察创建地图或副本。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/AcceptanceObservationService.java
+    value: AcceptanceObservationService.observe
+    description: 按 world 或 scene 范围返回当前代次的真实已加载对象快照，旧引用拒绝。
+- id: solo.acceptance.open
+  kind: scenario
+  name: 打开专用原生验收角色
+  summary: 通过配置 profile 解析普通账号与角色，沿北斗登录和频道进入规则创建或重登；同一宿主绑定且控制模块可用才确认 OPEN。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.runOpen
+    description: 在根已接纳 OPEN work 内打开角色、绑定来源和模块，成功发布前检查取消及会话当前性。
+- id: solo.acceptance.observe
+  kind: operation
+  name: 观察本会话角色与包事件
+  summary: 核验 owner、session、代次和真实在线对象，从同一宿主来源读取角色事实及独立包窗口；观察不新增操作历史。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.observe
+    description: 在读取前后复核会话和在线对象，只向合法活会话返回角色与包正文。
+- id: solo.acceptance.chat
+  kind: scenario
+  name: 通过原生普通聊天发言
+  summary: 按真实 session 与最近场景快照受理普通文本，模块复用共享 Java 动作；只有新匹配自身原文广播包才确认成功。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.submitChat
+    description: 将同一宿主原 work、MCP 场景守卫与聊天取证适配交给共享动作，按真实 work 结算退款。
+- id: solo.acceptance.npc
+  kind: scenario
+  name: 进行已审无收益 NPC 对话
+  summary: 固定原生脚本中心入口，按完整 offer、已审路径和最新版本选择、拒绝或取消；未开放礼包 accept、任意 NPC 和完整出行。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java
+    value: NativeActorBackend.npcReply
+    description: 派发已审 select 或 decline，按新 NPC 包、原生 CM 与来源路径确认结果。
+- id: solo.acceptance.close
+  kind: scenario
+  name: 正常退出并核验存档
+  summary: 由根宿主结束模块并按原来源关闭，核原生地图/队伍/事件/CM/QM 清理与声明范围持久字段；失败保留 fixture 与 quarantine。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java
+    value: NativeActorBackend.close
+    description: 沿原生合作退出和 disconnect 清理，读取数据库核声明范围存档后给出释放证明。
+- id: solo.acceptance.cancel
+  kind: operation
+  name: 请求取消未完成操作
+  summary: 按原操作和请求 ID 请求取消；取消待派发任务不关闭角色，已经广播不声称撤回，已接受关闭继续清理。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.cancel
+    description: 校验操作所有者并记录取消请求，保留真实执行与取消之间的区别。
+- id: solo.acceptance.poll
+  kind: operation
+  name: 查询异步操作事实
+  summary: 按原 operation ID 查询受理、排队、派发、结果与生命周期事件；超时后恢复原操作，不盲目重放副作用。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.get
+    description: 读取所属操作的有界事件窗口与当前结果。
+- id: solo.acceptance.native-source
+  kind: operation
+  name: 按白名单取得普通原生角色
+  summary: profile 只绑定专用 mcp_ 普通账号，沿原生账号登录、角色创建、选角和频道进入，保留租约且排除环境 Bot。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeActorBackend.java
+    value: NativeActorBackend.openOwned
+    description: 执行账号/角色白名单校验及原生登录链，在根来源握手下接纳精确角色结果。
+- id: solo.acceptance.profiles
+  kind: data
+  name: 本地角色 profile 白名单
+  summary: 配置约束账号、密码、角色名、固定世界/频道与首次创建许可；工具仅接受 profile ID，密钥不作为地图内容。
+  aliases:
+  - actor-profiles
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorProfiles.java
+    description: 配置约束账号、密码、角色名、固定世界/频道与首次创建许可；工具仅接受 profile ID，密钥不作为地图内容。
+- id: solo.acceptance.sessions
+  kind: data
+  name: 验收角色会话
+  summary: 记录 owner、profile、session_generation、捕获世界来源和同一 CharacterRuntime 关联；不复制宿主根资源或角色档案。
+  aliases:
+  - session
+  - runtime_generation
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    description: 记录 owner、profile、session_generation、捕获世界来源和同一 CharacterRuntime 关联；不复制宿主根资源或角色档案。
+- id: solo.acceptance.operations
+  kind: data
+  name: 请求幂等与异步操作历史
+  summary: 进程内保留请求身份与参数指纹、operation 结果和事件；容量满明确拒绝并为首次关闭预留额度。
+  aliases:
+  - request_id
+  - operation_id
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    description: 进程内保留请求身份与参数指纹、operation 结果和事件；容量满明确拒绝并为首次关闭预留额度。
+- id: solo.acceptance.packets
+  kind: data
+  name: 角色原生包事件窗口
+  summary: 根 AcceptanceClient 持有最多 256 包的独立序号窗口，已知正文有界解码；过期、截断和未来游标明确处理。
+  aliases:
+  - since_cursor
+  - packet sequence
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/org/gms/soloacceptance/actor/PacketEventBuffer.java
+    description: 根 AcceptanceClient 持有最多 256 包的独立序号窗口，已知正文有界解码；过期、截断和未来游标明确处理。
+- id: solo.acceptance.dialogue
+  kind: data
+  name: 当前可信对话版本与选项
+  summary: 对话资格关联最新 NPC 包、同一活跃 CM、已审来源和完整选项；未知坏包或派发消费使旧资格失效。
+  aliases:
+  - dialogue_version
+  - offer
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/org/gms/soloacceptance/actor/NativeDialogueTracker.java
+    description: 对话资格关联最新 NPC 包、同一活跃 CM、已审来源和完整选项；未知坏包或派发消费使旧资格失效。
+- id: solo.acceptance.quarantine
+  kind: data
+  name: 未核验关闭与保留 fixture
+  summary: 原生创建/清理不确定时保留角色资料、资源债务和恢复关联，不自动删除账号或宣称 CLOSED。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.runClose
+    description: 清理未核验时将会话保留为 QUARANTINED 并保存固定失败事实。
+- id: solo.acceptance.admin
+  kind: invariant
+  name: 管理身份与会话所有权
+  summary: 沿正常管理端 JWT 验证 ROLE_ADMIN，再按 owner 约束每个 session 和 operation；可观察不等于可接管任意角色。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/AcceptanceAccess.java
+    value: AcceptanceAccess.requireAdmin
+    description: 从原生 Spring Security 上下文要求已认证管理员身份。
+- id: solo.acceptance.idempotency
+  kind: invariant
+  name: 相同请求恢复相同事实
+  summary: 同作用域 request_id 的相同指纹复用原 operation，参数冲突拒绝；不遗忘历史腾容量，重启不承诺旧幂等。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.duplicate
+    description: 按 kind、owner、target、request_id 校验请求指纹并恢复已记录操作。
+- id: solo.acceptance.context
+  kind: invariant
+  name: 外层会话与实际场景双重守卫
+  summary: 动作受理和出队均核 owner、会话/世界代次与 expected_context；runtime_generation 始终表示世界代次。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/ActorControlService.java
+    value: ActorControlService.validateActionContext
+    description: 凭实际角色来源比对最近场景引用，不能以同 map_id 替代真实实例。
+- id: solo.acceptance.reply-rule
+  kind: invariant
+  name: 只回答最新完整且已审的对话
+  summary: select 必须来自该版完整 offer 且命中已审路径；decline 仅已审福利确认，派发前消费版本，未知副作用不恢复资格。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/org/gms/soloacceptance/actor/AcceptanceClient.java
+    value: AcceptanceClient.validateNativeDialogueReply
+    description: 逐项核最新版本、完整菜单和路径白名单，拒绝未开放收益或出行选择。
+relations:
+- from: solo.acceptance.protocol
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.discover
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.open
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.observe
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.chat
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.npc
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.close
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.cancel
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.poll
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.native-source
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.profiles
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.sessions
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.operations
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.packets
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.dialogue
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.quarantine
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.admin
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.idempotency
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.context
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.reply-rule
+  type: part_of
+  to: solo.acceptance
+  summary: 该责任属于 MCP 游戏验收。
+- from: solo.acceptance.discover
+  type: publishes
+  to: solo.acceptance.protocol
+  summary: 向工具提供实际世界/场景能力与只读快照。
+- from: solo.acceptance.discover
+  type: constrained_by
+  to: solo.acceptance.admin
+  summary: 仅经正常管理员入口观察。
+- from: solo.acceptance.open
+  type: invokes
+  to: solo.acceptance.native-source
+  summary: 按白名单沿原生链取得普通角色。
+- from: solo.acceptance.open
+  type: invokes
+  to: solo.runtime.bind-role
+  summary: 在同一根宿主登记并绑定角色来源。
+- from: solo.acceptance.open
+  type: writes
+  to: solo.acceptance.sessions
+  summary: 成功打开建立由 owner 持有的外部会话。
+- from: solo.acceptance.open
+  type: writes
+  to: solo.acceptance.operations
+  summary: 受理 OPEN 时记录幂等请求和异步操作。
+- from: solo.acceptance.open
+  type: constrained_by
+  to: solo.acceptance.admin
+  summary: 外层管理员身份与会话所有权保持。
+- from: solo.acceptance.open
+  type: constrained_by
+  to: solo.acceptance.idempotency
+  summary: 重复原请求恢复 operation，不重复创建或登录。
+- from: solo.acceptance.native-source
+  type: reads
+  to: solo.acceptance.profiles
+  summary: 只接纳本地配置角色与固定世界/频道。
+- from: solo.acceptance.observe
+  type: invokes
+  to: solo.runtime.observe-role
+  summary: 角色事实读取同一根来源。
+- from: solo.acceptance.observe
+  type: reads
+  to: solo.acceptance.sessions
+  summary: 读取前后验证活会话和 owner。
+- from: solo.acceptance.observe
+  type: reads
+  to: solo.acceptance.packets
+  summary: 按独立包游标返回有界事件正文。
+- from: solo.acceptance.observe
+  type: reads
+  to: solo.acceptance.dialogue
+  summary: 观察当前 CM 和最新可信对话资格。
+- from: solo.acceptance.observe
+  type: consumes
+  to: solo.runtime.events
+  summary: 只读诊断同一宿主安全事实，保持游标独立。
+- from: solo.acceptance.observe
+  type: constrained_by
+  to: solo.acceptance.admin
+  summary: 旧会话和其他 owner 不得读取正文。
+- from: solo.acceptance.chat
+  type: invokes
+  to: solo.runtime.dispatch-chat
+  summary: MCP 薄适配复用同一 Java 普通聊天执行。
+- from: solo.acceptance.chat
+  type: consumes
+  to: solo.runtime.command-api
+  summary: 通过控制模块使用根宿主唯一 lane。
+- from: solo.acceptance.chat
+  type: reads
+  to: solo.acceptance.packets
+  summary: 以新自身 CID、原文和 show0 匹配包确认广播。
+- from: solo.acceptance.chat
+  type: reads
+  to: solo.runtime.action-result
+  summary: 投影共享动作的派发事实、来源和完整性。
+- from: solo.acceptance.chat
+  type: writes
+  to: solo.acceptance.operations
+  summary: 保留一次外部操作结果，不另造执行状态。
+- from: solo.acceptance.chat
+  type: constrained_by
+  to: solo.acceptance.context
+  summary: 受理和实际派发前复核最近观察的实际场景。
+- from: solo.acceptance.chat
+  type: constrained_by
+  to: solo.acceptance.idempotency
+  summary: 原请求重试不多发广播。
+- from: solo.acceptance.npc
+  type: consumes
+  to: solo.runtime.command-api
+  summary: 现有 NPC 动作沿同一宿主 interaction 授权和通道。
+- from: solo.acceptance.npc
+  type: reads
+  to: solo.acceptance.dialogue
+  summary: 使用真实当前 CM、来源路径与最新版本。
+- from: solo.acceptance.npc
+  type: writes
+  to: solo.acceptance.dialogue
+  summary: 派发先消费版本，再按新原生包建立后继资格。
+- from: solo.acceptance.npc
+  type: writes
+  to: solo.acceptance.operations
+  summary: 分别记录派发、对话结果与未知状态。
+- from: solo.acceptance.npc
+  type: constrained_by
+  to: solo.acceptance.reply-rule
+  summary: 完整 offer 与已审路径共同约束选择。
+- from: solo.acceptance.npc
+  type: constrained_by
+  to: solo.acceptance.context
+  summary: NPC 动作同样检查会话和实际场景。
+- from: solo.acceptance.close
+  type: invokes
+  to: solo.runtime.close-role
+  summary: 最终关闭归根宿主，模块停止不替代角色退出。
+- from: solo.acceptance.close
+  type: writes
+  to: solo.acceptance.sessions
+  summary: 只有来源释放和实际结算后结束外部会话。
+- from: solo.acceptance.close
+  type: writes
+  to: solo.acceptance.quarantine
+  summary: 未核验清理保留恢复记录和 fixture。
+- from: solo.acceptance.close
+  type: writes
+  to: solo.acceptance.operations
+  summary: 关闭操作携带原生清理与声明范围存档证据。
+- from: solo.acceptance.close
+  type: constrained_by
+  to: solo.runtime.exact-release
+  summary: 只允许原根许可释放精确登记的验收角色。
+- from: solo.acceptance.close
+  type: constrained_by
+  to: solo.runtime.true-settlement
+  summary: 原生清理成功和所有工作结算分别确认。
+- from: solo.acceptance.cancel
+  type: writes
+  to: solo.acceptance.operations
+  summary: 记录取消请求而不抹掉已发生的动作事实。
+- from: solo.acceptance.cancel
+  type: constrained_by
+  to: solo.acceptance.idempotency
+  summary: 取消请求同样要求稳定请求 ID。
+- from: solo.acceptance.poll
+  type: reads
+  to: solo.acceptance.operations
+  summary: 原操作查询用于超时后的事实恢复。
+- from: solo.acceptance.open
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 沿北斗正常管理端 JWT 和管理员权限进入验收接口。
+- from: solo.acceptance.native-source
+  type: consumes
+  to: beidou.identity.native-character
+  summary: 白名单来源经北斗原生登录、创建、选角和频道进入取得普通角色。
+- from: solo.acceptance.native-source
+  type: writes
+  to: beidou.identity.characters
+  summary: 允许首次创建时由原生创建器建立专用普通角色，角色持久规则仍由北斗拥有。
+- from: solo.acceptance.observe
+  type: reads
+  to: beidou.world.scene
+  summary: 从原生角色实际地图和实例读取场景事实，不能按 map_id 替换实例。
+- from: solo.acceptance.observe
+  type: reads
+  to: beidou.economy.inventory
+  summary: 只读投影原生背包摘要，不维护第二份背包。
+- from: solo.acceptance.observe
+  type: reads
+  to: beidou.economy.wallet
+  summary: 只读投影原生金币及券摘要，不更改原生计价和余额规则。
+- from: solo.acceptance.npc
+  type: consumes
+  to: beidou.quests.npc-dialogue
+  summary: 经 EnterMTSHandler 与 NPCMoreTalkHandler 触发原生脚本，路径开放范围归验收策略。
+- from: solo.acceptance.close
+  type: reads
+  to: beidou.identity.characters
+  summary: 正常退出后读取原生角色持久字段验证声明范围的保存结果。
+- from: solo.acceptance.close
+  type: consumes
+  to: beidou.identity.native-character
+  summary: 角色正常退出与存档仍沿北斗 Client.disconnect 的原生生命周期。
+flows:
+- id: solo.acceptance.open.flow
+  name: 专用角色打开
+  summary: 白名单、普通原生登录与同壳模块就绪共同决定成功。
+  scenario: solo.acceptance.open
+  startsAt: accept
+  steps:
+  - id: accept
+    kind: action
+    name: 校验并恢复请求
+    summary: 核管理员、profile、历史容量与原 request_id。
+    concept: solo.acceptance.open
+  - id: duplicate
+    kind: decision
+    name: 是否已有相同请求
+    summary: 相同指纹返回原操作，冲突指纹直接拒绝。
+    concept: solo.acceptance.idempotency
+  - id: restore
+    kind: outcome
+    name: 恢复原操作或拒绝冲突
+    summary: 不再次创建原生角色。
+  - id: native
+    kind: action
+    name: 沿原生规则取得角色
+    summary: 在 OPEN 前建立宿主，经原生账号登录、选角和频道进入。
+    concept: solo.acceptance.native-source
+  - id: ready
+    kind: decision
+    name: 来源绑定和模块是否均就绪
+    summary: 创建成功本身不等于 OPEN；还需同壳读取当前角色和模块可用。
+    concept: solo.runtime.bind-role
+  - id: open
+    kind: outcome
+    name: 会话 OPEN
+    summary: 发布 session、代次与原生角色身份。
+  - id: cleanup
+    kind: outcome
+    name: 保留失败与清理证据
+    summary: 按原根回滚；无法证实清理时保留 fixture 和 quarantine。
+  transitions:
+  - from: accept
+    to: duplicate
+  - from: duplicate
+    to: restore
+    when: 已记录相同请求或 ID 指纹冲突
+  - from: duplicate
+    to: native
+    when: 新的合法请求
+  - from: native
+    to: ready
+  - from: ready
+    to: open
+    when: 角色当前且绑定、模块和发布成功
+  - from: ready
+    to: cleanup
+    when: 原生打开、绑定或模块接入失败或取消
+- id: solo.acceptance.chat.flow
+  name: 普通聊天原生验收
+  summary: 受理、派发、广播证据和物理结算保持独立。
+  scenario: solo.acceptance.chat
+  startsAt: guard
+  steps:
+  - id: guard
+    kind: action
+    name: 校验会话与最近场景
+    summary: 按原请求恢复历史，新请求才接纳宿主原 work。
+    concept: solo.acceptance.chat
+  - id: dispatch
+    kind: action
+    name: 唯一通道派发原生聊天
+    summary: 出队再次检查上下文、编码、禁言和原生限频。
+    concept: solo.runtime.dispatch-chat
+  - id: evidence
+    kind: decision
+    name: 得到何种真实证据
+    summary: 新匹配自身广播包证明成功，完整负证据与证据不全分别处理。
+    concept: solo.runtime.action-result
+  - id: success
+    kind: outcome
+    name: 广播已发生
+    summary: 保留成功事实，后续取消不能撤回；额度仍等真实 work 结算。
+  - id: failed
+    kind: outcome
+    name: 确认未广播或未派发
+    summary: 完整负证据或派发前拒绝保留其固定结果。
+  - id: unknown
+    kind: outcome
+    name: 结果未知且不自动重放
+    summary: 派发后证据不足或异常不推断成功，也不再次发送。
+  transitions:
+  - from: guard
+    to: dispatch
+  - from: dispatch
+    to: evidence
+  - from: evidence
+    to: success
+    when: 有新匹配自身 CID 与原文的广播证据
+  - from: evidence
+    to: failed
+    when: 派发前已拒绝或完整原生负证据
+  - from: evidence
+    to: unknown
+    when: 已派发但证据不全或结果无法判定
+- id: solo.acceptance.npc.flow
+  name: 已审 NPC 回复
+  summary: 先观察完整可信菜单，再以最新版本派发有限无收益回复。
+  scenario: solo.acceptance.npc
+  startsAt: observe
+  steps:
+  - id: observe
+    kind: action
+    name: 读取当前 CM 和最新版本
+    summary: 固定原生中心入口或已审同步子对话提供来源。
+    concept: solo.acceptance.observe
+  - id: allowed
+    kind: decision
+    name: 回复是否完整且属于已审路径
+    summary: 核最新包、同 CM、完整 offer 和 select/decline 白名单。
+    concept: solo.acceptance.reply-rule
+  - id: refused
+    kind: outcome
+    name: 拒绝未开放或过期回复
+    summary: 不猜截断选项，不开放礼包 accept、目的地或任意脚本。
+  - id: consume
+    kind: action
+    name: 消费该版并派发原生回复
+    summary: 按真实 legacy/NextLevel 路由发有限回答或取消。
+    concept: solo.acceptance.npc
+  - id: result
+    kind: decision
+    name: 原生后态能否确认
+    summary: 新包、路径、当前 CM 或正常清理共同决定结果。
+  - id: verified
+    kind: outcome
+    name: 对话后态已确认
+    summary: 返回新对话资格或已拒绝/取消结果。
+  - id: uncertain
+    kind: outcome
+    name: 未知结果保留已消费状态
+    summary: 不恢复旧版本或盲重发。
+  transitions:
+  - from: observe
+    to: allowed
+  - from: allowed
+    to: refused
+    when: 旧版、菜单不完整、路径未审或参数不符
+  - from: allowed
+    to: consume
+    when: 最新完整 offer 且命中已审路径
+  - from: consume
+    to: result
+  - from: result
+    to: verified
+    when: 实际新包与原生后态一致
+  - from: result
+    to: uncertain
+    when: 证据不全或后态无法确认
+- id: solo.acceptance.close.flow
+  name: 保存退出与会话结束
+  summary: 关闭需要原生清理、声明范围存档和真实排空全部通过。
+  scenario: solo.acceptance.close
+  startsAt: begin
+  steps:
+  - id: begin
+    kind: action
+    name: 请求根宿主关闭
+    summary: 停止输入并取消未派发动作，已受理关闭继续完成清理。
+    concept: solo.runtime.close-role
+  - id: cleanup
+    kind: action
+    name: 执行来源退出并核存档
+    summary: 正常退出队伍/事件、disconnect 并核 CM/QM 和声明持久字段。
+    concept: solo.acceptance.close
+  - id: verified
+    kind: decision
+    name: 释放与全部结算是否都已证实
+    summary: operation 终态或 Future 完成不能代替实际排空。
+    concept: solo.runtime.true-settlement
+  - id: closed
+    kind: outcome
+    name: 会话关闭且 fixture 保留
+    summary: 释放 profile 与 lease，原角色数据继续保留用于重开。
+  - id: pending
+    kind: outcome
+    name: 保留关闭中或 quarantine
+    summary: 仍有工作则等待；原生清理/存档未核验则保留失败债务。
+  transitions:
+  - from: begin
+    to: cleanup
+  - from: cleanup
+    to: verified
+  - from: verified
+    to: closed
+    when: 原生与存档核验成功且所有工作真实结算
+  - from: verified
+    to: pending
+    when: 执行未结束或清理、存档、释放证据不足

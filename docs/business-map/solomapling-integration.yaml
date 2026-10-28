@@ -1,0 +1,155 @@
+schemaVersion: 1
+map:
+  id: solo.integration
+  title: SoloMapling · 北斗集成交付
+  summary: 在不改写官方子模块的前提下，提供可追溯、保留原生资源的派生服务产物与世界生命周期接线。
+nodes:
+  - id: solo.integration
+    kind: domain
+    name: SoloMapling 北斗集成交付
+    summary: 为维护者构建并核验包含机器人扩展的北斗派生产物，保持官方业务与本地扩展的来源边界。
+    aliases: [BeiDou integration, 构建织入, 派生服务交付]
+    anchors:
+      - kind: document
+        value: beidou-integration/README.md
+        description: 北斗集成的输入、产物、运行配置与分层验收约定。
+  - id: solo.integration.build
+    kind: scenario
+    name: 构建可追溯的北斗集成包
+    summary: 固定官方基线，编译机器人和适配，织入扩展并执行所选验证，生成带来源与测试状态的 JAR 和报告。
+    aliases: [build, 单JAR构建]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: main
+        description: 串联基线核对、编译织入、测试、资源验证和构建报告生成。
+    notes: skip-tests 是调试选项；该模式仍能生成产物，但 testsExecuted=false，不能据此宣称通过交付验收。
+  - id: solo.integration.check-baseline
+    kind: operation
+    name: 核对只读官方基线
+    summary: 仅接纳指定北斗提交及干净子模块，拒绝以修改官方源码解决本地兼容问题。
+    aliases: [pinned upstream, 子模块核对]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: assert_engine_unchanged
+        description: 核对北斗提交与完整工作区状态，不匹配即停止构建。
+  - id: solo.integration.weave
+    kind: operation
+    name: 编译并织入本地扩展
+    summary: 使用官方已编译类和 Solo 源码、适配及切面组成派生字节码，保留官方源码原样。
+    aliases: [AspectJ, binary weaving]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: compile_and_weave
+        description: 只编译 soloMapling 与集成输入，对官方类实施构建时织入并拒绝缺少切面的产物。
+  - id: solo.integration.verify-package
+    kind: operation
+    name: 核验服务包资源与启动边界
+    summary: 保留官方启动入口、原配置与迁移，排除 Cosmic 引擎，校验嵌套依赖与包结构。
+    aliases: [产物检查, native resources]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: verify_native_resources
+        description: 将原生配置和 Flyway 迁移与输入 JAR 逐字节比较。
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: verify_jar
+        description: 校验北斗主入口、ZIP 条目和嵌套依赖，拒绝混入 Cosmic 引擎。
+  - id: solo.integration.assemble
+    kind: operation
+    name: 组装带来源声明的派生包
+    summary: 合并织入类、Solo 资源与依赖，保留许可声明，并可从匹配的官方包复用管理页面。
+    aliases: [assemble jar, 源码身份]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: assemble_jar
+        description: 写入来源元数据与许可、可选管理页，并在替换最终产物前验证包结构和原生资源。
+  - id: solo.integration.artifact
+    kind: data
+    name: 派生服务 JAR 与来源报告
+    summary: 记录官方基线、Solo Git 身份、源码指纹、测试执行状态、织入类清单和产物摘要，供部署核验与恢复定位。
+    aliases: [build-report.json, SoloMapling-BeiDou.jar]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/scripts/build.py
+        value: source_fingerprint
+        description: 汇总实际构建输入的内容指纹，配合 main 中的构建报告和来源元数据。
+    notes: 构建报告是产物证据，不能替代数据库兼容性、实际部署或游戏玩法验收；生成文件位于忽略的 target 目录。
+  - id: solo.integration.preserved-host
+    kind: invariant
+    name: 官方来源与运行数据边界
+    summary: 官方子模块保持指定提交且干净；派生类允许织入，官方配置和迁移逐字节保留，Cosmic 引擎不混入北斗产物。
+    aliases: [只读北斗子模块, 原生资源保留]
+    anchors:
+      - kind: document
+        value: beidou-integration/MAINTENANCE.md
+        description: 维护官方基线、适配位置、原生资源与分层验证边界。
+  - id: solo.integration.start-world
+    kind: operation
+    name: 在原生世界就绪后启动扩展
+    summary: 原生世界初始化成功后，开启新世界代次并配置机器人语言、模型服务、人口与后台服务。
+    aliases: [onServerReady, 世界启动接线]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/src/main/java/soloMapling/beidou/BeiDouRuntime.java
+        value: BeiDouRuntime.onServerReady
+        description: 在原生 Server.init 完成后启动本地服务，初始化异常时触发扩展停止清理。
+      - kind: file
+        value: beidou-integration/src/main/aspect/soloMapling/beidou/GameplayHooks.aj
+        description: 绑定原生 Server.init 与本地扩展启动入口。
+  - id: solo.integration.stop-world
+    kind: operation
+    name: 在原生世界销毁前停止扩展
+    summary: 固定旧世界停止票据，停止验收输入和机器人后台活动，尝试排空并撤出机器人，再继续原生关闭。
+    aliases: [onServerStopping, 世界停止接线]
+    anchors:
+      - kind: symbol
+        file: beidou-integration/src/main/java/soloMapling/beidou/BeiDouRuntime.java
+        value: BeiDouRuntime.onServerStopping
+        description: 在原生地图和频道销毁前停止角色控制、调度、模型请求与环境人口。
+    notes: 机器人宏回调排空超时会记录错误后继续原生关闭；不能将此路径描述为必然完整排空。
+relations:
+  - {from: solo.integration.build, type: part_of, to: solo.integration, summary: 集成构建属于本项目派生服务交付。}
+  - {from: solo.integration.check-baseline, type: part_of, to: solo.integration, summary: 官方输入约束由集成交付维护。}
+  - {from: solo.integration.weave, type: part_of, to: solo.integration, summary: 本地适配与织入属于派生服务构建。}
+  - {from: solo.integration.verify-package, type: part_of, to: solo.integration, summary: 包结构与原生资源由交付过程核验。}
+  - {from: solo.integration.assemble, type: part_of, to: solo.integration, summary: 派生包的来源与内容由集成交付组装。}
+  - {from: solo.integration.artifact, type: part_of, to: solo.integration, summary: 构建身份与报告由集成交付维护。}
+  - {from: solo.integration.preserved-host, type: part_of, to: solo.integration, summary: 来源和资源保留约束属于集成交付。}
+  - {from: solo.integration.start-world, type: part_of, to: solo.integration, summary: 本地扩展接线在原生世界启动后执行。}
+  - {from: solo.integration.stop-world, type: part_of, to: solo.integration, summary: 本地扩展在原生世界销毁前结束活动。}
+  - {from: solo.integration.build, type: invokes, to: solo.integration.check-baseline, summary: 构建前后均核对官方基线与工作区。}
+  - {from: solo.integration.build, type: invokes, to: solo.integration.weave, summary: 在原样编译的官方类上织入本地扩展。}
+  - {from: solo.integration.build, type: invokes, to: solo.integration.assemble, summary: 将编译结果组装为可执行的北斗派生包。}
+  - {from: solo.integration.assemble, type: invokes, to: solo.integration.verify-package, summary: 最终产物替换前校验包结构及原生资源。}
+  - {from: solo.integration.build, type: writes, to: solo.integration.artifact, summary: 生成包含测试状态和摘要的构建报告。}
+  - {from: solo.integration.assemble, type: writes, to: solo.integration.artifact, summary: 写入派生JAR及内嵌源码身份和许可。}
+  - {from: solo.integration.build, type: constrained_by, to: solo.integration.preserved-host, summary: 不允许构建依赖未确认的官方源码修改或Cosmic混入。}
+  - {from: solo.integration.verify-package, type: constrained_by, to: solo.integration.preserved-host, summary: 保留原配置和迁移只是来源保证，不等价于数据兼容性验收。}
+  - {from: solo.integration.start-world, type: consumes, to: beidou.world.lifecycle, summary: GameplayHooks 在原生 Server.init 成功后启动本地扩展，不接管官方世界初始化。}
+  - {from: solo.integration.stop-world, type: consumes, to: beidou.world.lifecycle, summary: GameplayHooks 在原生 shutdownInternal 销毁地图前停止本地扩展。}
+  - {from: solo.integration.start-world, type: invokes, to: solo.population.initialize, summary: 仅在本地启动人口开关启用时加载配置人口，不以地图默认修改人口。}
+  - {from: solo.integration.stop-world, type: invokes, to: solo.runtime.world-stop, summary: 首先固定准确来源世界的停止票据并通知角色控制停止。}
+  - {from: solo.integration.stop-world, type: invokes, to: solo.population.stop-world, summary: 停止后台机器人活动、尝试排空并撤出本地登记人口。}
+flows:
+  - id: solo.integration.build.flow
+    name: 从固定官方基线交付派生服务
+    summary: 输入与内容检查失败即停止；成功产物保留测试执行事实，部署与玩法验收另行进行。
+    scenario: solo.integration.build
+    startsAt: baseline
+    steps:
+      - {id: baseline, kind: decision, name: 官方基线是否准确且干净, summary: 提交或工作区不符合约定时不得继续构建。, concept: solo.integration.check-baseline}
+      - {id: weave, kind: action, name: 编译与织入本地扩展, summary: 编译实际北斗集成源码并执行当前构建选项要求的测试。, concept: solo.integration.weave}
+      - {id: verify, kind: decision, name: 产物及输入一致性是否通过, summary: 核对原生资源、包结构和构建期间的源码指纹。, concept: solo.integration.verify-package}
+      - {id: artifact, kind: outcome, name: 得到可追溯产物, summary: 输出JAR与来源及测试状态报告，等待部署流程核验。, concept: solo.integration.artifact}
+      - {id: refused, kind: outcome, name: 停止本轮交付, summary: 输入或产物不符合约定，不形成合格交付结论。}
+    transitions:
+      - {from: baseline, to: weave, when: 指定提交且工作区干净}
+      - {from: baseline, to: refused, when: 基线或工作区不符}
+      - {from: weave, to: verify}
+      - {from: verify, to: artifact, when: 核验通过}
+      - {from: verify, to: refused, when: 核验失败或源码发生变化}
