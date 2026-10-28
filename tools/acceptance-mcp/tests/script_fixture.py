@@ -77,4 +77,3 @@ class ScriptStub(BridgeStub):
             return 200, envelope(script_operation(request["body"]["data"]["target_request_id"],
                                                   status="CANCELLED", closed=True))
         return super().default_response(request)
-

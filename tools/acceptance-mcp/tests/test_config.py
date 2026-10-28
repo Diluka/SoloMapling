@@ -39,4 +39,3 @@ class ConfigTests(unittest.TestCase):
             path.write_text(json.dumps({"username": USERNAME, "password": PASSWORD, "extra": TOKEN}))
             with self.assertRaises(ConfigurationError):
                 load_config(path)
-
