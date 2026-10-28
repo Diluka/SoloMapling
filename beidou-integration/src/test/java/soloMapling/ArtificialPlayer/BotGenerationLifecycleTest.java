@@ -28,6 +28,7 @@ import java.awt.Point;
 import java.util.Collections;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -345,6 +346,7 @@ class BotGenerationLifecycleTest {
 
     /** Native world/storage and character-loading boundary; allocation and both consumers are real. */
     private static final class CreationWorld implements AutoCloseable {
+        private static final int TEMPLATE_ID = 12345;
         final Server server = mock(Server.class);
         final World world = mock(World.class);
         final Channel channel = mock(Channel.class, RETURNS_DEEP_STUBS);
@@ -353,7 +355,7 @@ class BotGenerationLifecycleTest {
         final MapleMap map = mock(MapleMap.class);
         final List<Character> created = new ArrayList<>();
         final List<Character> registered = new ArrayList<>();
-        final List<Integer> collisions = new ArrayList<>();
+        final Set<Integer> persistedIds = new HashSet<>(Set.of(TEMPLATE_ID));
         final MockedStatic<Server> singleton;
         final MockedStatic<DatabaseConnection> database;
         final MockedStatic<Character> characters;
@@ -374,16 +376,7 @@ class BotGenerationLifecycleTest {
             }).when(channel).addPlayer(any(Character.class));
             doAnswer(call -> {
                 int candidate = call.getArgument(0);
-                if (collisions.isEmpty()) {
-                    onlinePlayer = nativeCharacter(mock(Client.class), candidate, "ExistingPlayer");
-                    worldPlayers.addPlayer(onlinePlayer);
-                    Character existingBot = nativeCharacter(new BotClient(0, 1), candidate - 1, "ExistingBot");
-                    BotRegistry.register(existingBot);
-                    registered.add(existingBot);
-                    collisions.add(candidate);
-                    collisions.add(candidate - 1);
-                    collisions.add(candidate - 2);
-                }
+                prepareOccupancy(candidate);
                 return call.callRealMethod();
             }).when(worldPlayers).getCharacterById(anyInt());
             Connection connection = mock(Connection.class);
@@ -395,15 +388,17 @@ class BotGenerationLifecycleTest {
                     .thenReturn(template);
             when(template.executeQuery()).thenReturn(templateRows);
             when(templateRows.next()).thenReturn(true, false);
-            when(templateRows.getInt("id")).thenReturn(12345);
+            when(templateRows.getInt("id")).thenReturn(TEMPLATE_ID);
             when(connection.prepareStatement("SELECT 1 FROM characters WHERE id = ?")).thenReturn(occupied);
             when(occupied.executeQuery()).thenReturn(occupiedRows);
             AtomicInteger checked = new AtomicInteger();
             doAnswer(call -> {
-                checked.set(call.getArgument(1));
+                int candidate = call.getArgument(1);
+                prepareOccupancy(candidate);
+                checked.set(candidate);
                 return null;
             }).when(occupied).setInt(eq(1), anyInt());
-            when(occupiedRows.next()).thenAnswer(call -> checked.get() == collisions.get(2));
+            when(occupiedRows.next()).thenAnswer(call -> persistedIds.contains(checked.get()));
             singleton = mockStatic(Server.class);
             singleton.when(Server::getInstance).thenReturn(server);
             database = mockStatic(DatabaseConnection.class);
@@ -415,8 +410,20 @@ class BotGenerationLifecycleTest {
                     .thenAnswer(call -> freshCharacter(call.getArgument(0)));
         }
 
+        private void prepareOccupancy(int candidate) {
+            if (onlinePlayer != null) return;
+            // Both storage boundaries expose the same pre-existing identities, whichever is queried first.
+            onlinePlayer = nativeCharacter(mock(Client.class), candidate, "ExistingPlayer");
+            worldPlayers.addPlayer(onlinePlayer);
+            persistedIds.add(candidate);
+            Character existingBot = nativeCharacter(new BotClient(0, 1), candidate - 1, "ExistingBot");
+            BotRegistry.register(existingBot);
+            registered.add(existingBot);
+            persistedIds.add(candidate - 2);
+        }
+
         Character freshCharacter(Client client) {
-            Character character = nativeCharacter(client, 12345, "Template");
+            Character character = nativeCharacter(client, TEMPLATE_ID, "Template");
             created.add(character);
             return character;
         }
@@ -447,11 +454,12 @@ class BotGenerationLifecycleTest {
         }
 
         void assertUnoccupiedIdentity(Character character) {
-            assertEquals(3, collisions.size());
-            assertFalse(collisions.contains(character.getId()));
+            assertFalse(persistedIds.contains(character.getId()), "新角色不能沿用模板或其它既存持久身份");
+            assertNotEquals(onlinePlayer.getId(), character.getId());
+            assertNotEquals(registered.getFirst().getId(), character.getId());
             assertTrue(character.getId() > 0);
             assertTrue(BotRegistry.isRegistered(character));
-            assertSame(onlinePlayer, worldPlayers.getCharacterById(collisions.get(0)));
+            assertSame(onlinePlayer, worldPlayers.getCharacterById(onlinePlayer.getId()));
             assertFalse(BotRegistry.isBot(onlinePlayer));
             assertTrue(BotRegistry.isRegistered(registered.getFirst()));
         }
