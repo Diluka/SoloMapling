@@ -13,6 +13,7 @@ import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.scripting.event.EventManager;
+import org.gms.scripting.SynchronizedInvocable;
 import org.gms.server.ThreadManager;
 import org.gms.server.TimerManager;
 import org.gms.util.ThreadLocalUtil;
@@ -102,7 +103,7 @@ class NativeEventSchedulerIntegrationTest {
         assertTrue(fixture.adapter.callbackHasClient.get(), "native_callback_requires_the_exact_current_client");
         NativeScriptResult read = fixture.call("invoke", opened.contextId(), "count", Map.of("base", 21));
         assertEquals(1, ((Number) read.result()).intValue());
-        assertSame(fixture.adapter.session.invocable().getClass(), fixture.adapter.manager.getIv().getClass());
+        assertSame(fixture.adapter.managedInvocable, fixture.adapter.manager.getIv());
         NativeScriptResult closed = fixture.call("close", opened.contextId(), "", Map.of());
         assertEquals("CLOSED", closed.contextState(), () -> String.valueOf(closed.toMap()));
         assertTrue(closed.contextClosed()); assertTrue(closed.invocationSettled());
@@ -132,7 +133,7 @@ class NativeEventSchedulerIntegrationTest {
         try (GraalJSScriptEngine original = GraalJSScriptEngine.create()) {
             original.put("record", (ProxyExecutable) ignored -> { ordinaryCallback.countDown(); return null; });
             original.eval("function untouched() { record(); } function cancelSchedule() {}");
-            EventManager ordinary = new EventManager(fixture.role.channel, original, "ordinary_test");
+            EventManager ordinary = new EventManager(fixture.role.channel, SynchronizedInvocable.of(original), "ordinary_test");
             assertNull(NativeScriptSession.forEventManager(ordinary));
             try {
                 ordinary.schedule("untouched", 0);
@@ -179,6 +180,7 @@ class NativeEventSchedulerIntegrationTest {
         final AtomicBoolean callbackHasClient = new AtomicBoolean();
         NativeScriptSession session;
         EventManager manager;
+        javax.script.Invocable managedInvocable;
         EventAdapter(Client client, Channel channel) { this.client = client; this.channel = channel; }
         @Override public AutoCloseable enter(NativeScriptSession session) { return NativeWorldScriptSupport.enterClient(client); }
         @Override public Object start(NativeScriptSession session, NativeScriptRequest request) throws Exception {
@@ -190,7 +192,8 @@ class NativeEventSchedulerIntegrationTest {
                 callbackHasClient.set(ThreadLocalUtil.getCurrentClient() == client); callback.countDown(); return null;
             });
             engine.eval("var count = 0; function init() {} function scheduled(ignored) { count++; record(parameters.base); } function cancelSchedule() {}");
-            manager = new EventManager(channel, session.invocable(), "owned_test");
+            managedInvocable = session.invocable();
+            manager = new EventManager(channel, managedInvocable, "owned_test");
             session.ownEventManager(manager); engine.put("em", manager);
             return session.invocable().invokeFunction("init", (Object) null);
         }
@@ -213,7 +216,7 @@ class NativeEventSchedulerIntegrationTest {
             runtime.submitOpening(work, () -> { runtime.reserveOrigin(work).adopt(role); runtime.bindAdoptedOrigin(); }, () -> {});
             work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
             context = runtime.context(runtime.mount(new RuntimeModule.Spec("native-event-test", "event", Set.of("event"),
-                    new ExecutionScope.Limits(16, 4, 16, 4)), new RuntimeModule() {}, true));
+                    new ExecutionScope.Limits(16, 2, 16, 2)), new RuntimeModule() {}, true));
         }
         NativeScriptResult call(String operation, String id, String source, Map<String, Object> parameters) throws Exception {
             return context.runNativeScript(context.acceptWork(), new NativeScriptRequest("event", operation, id,
