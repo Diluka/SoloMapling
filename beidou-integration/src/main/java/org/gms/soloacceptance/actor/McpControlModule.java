@@ -1,6 +1,7 @@
 package org.gms.soloacceptance.actor;
 
 import soloMapling.game.action.NativeActionResult;
+import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
@@ -13,10 +14,11 @@ import java.util.Set;
 public final class McpControlModule implements RuntimeModule {
     private final Spec spec;
     private volatile CharacterRuntime.ModuleContext context;
+    private final NativeMovementActions movement = new NativeMovementActions();
 
     public McpControlModule(String instanceId) {
-        spec = new Spec("mcp-control", instanceId, Set.of("chat", "interaction", "inventory"),
-                new ExecutionScope.Limits(16, 0, 16, 0));
+        spec = new Spec("mcp-control", instanceId, Set.of("chat", "interaction", "inventory", "movement", "combat"),
+                new ExecutionScope.Limits(16, 2, 16, 2));
     }
 
     public Spec spec() { return spec; }
@@ -39,6 +41,7 @@ public final class McpControlModule implements RuntimeModule {
     }
 
     public ExecutionScope.WorkHandle acceptWork() { return context().acceptWork(); }
+    NativeMovementActions movement() { return movement; }
 
     public CharacterCommandLane.Submission submitInteraction(ExecutionScope.WorkHandle work, Runnable preflight,
                                                               Runnable body, Runnable settled) {
@@ -53,6 +56,11 @@ public final class McpControlModule implements RuntimeModule {
     public <T> T prepareInventoryMove(ExecutionScope.WorkHandle work, Runnable preflight,
                                       CharacterRuntime.NativePreparation<T> preparation) {
         return context().prepareNative("inventory", work, preflight, preparation);
+    }
+
+    public <T> T prepareBasic(String control, ExecutionScope.WorkHandle work, Runnable preflight,
+                             CharacterRuntime.NativePreparation<T> preparation) {
+        return context().prepareNative(control, work, preflight, preparation);
     }
 
     public void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {

@@ -11,7 +11,7 @@ from typing import Any
 
 from mcp import Client, StdioServerParameters
 
-from .bridge import load_config
+from .bridge import ACTION_NAMES, load_config
 
 
 CONTEXT_FIELDS = (
@@ -50,11 +50,11 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         control = capabilities.get("actor_control")
         if (not isinstance(actions, list) or any(not isinstance(value, str) for value in actions)
                 or len(actions) != len(set(actions))
-                or set(actions) not in ({"chat"}, {"chat", "npc_center_open", "npc_cancel"},
-                                       {"chat", "npc_center_open", "npc_cancel", "npc_reply"},
-                                       {"chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"})
+                or not (set(actions) in ({"chat"}, {"chat", "npc_center_open", "npc_cancel"},
+                                         {"chat", "npc_center_open", "npc_cancel", "npc_reply"})
+                        or set(ACTION_NAMES[:5]) <= set(actions) <= set(ACTION_NAMES))
                 or not isinstance(control, dict) or control.get("actions") != actions):
-            raise RuntimeError("聊天动作与实际工具能力不一致。")
+            raise RuntimeError("角色动作与实际工具能力不一致。")
     elif actions != []:
         raise RuntimeError("未开放动作工具的验收桥不能公告聊天能力。")
     if chat and "game_act" not in enabled:

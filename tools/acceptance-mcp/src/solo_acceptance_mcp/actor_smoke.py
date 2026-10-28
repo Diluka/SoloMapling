@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from mcp import Client, StdioServerParameters
 
-from .bridge import BridgeConfig, PROFILE_IDENTIFIER, load_config, validate_identifier
+from .bridge import ACTION_NAMES, BridgeConfig, PROFILE_IDENTIFIER, load_config, validate_identifier
 from .smoke import CONTEXT_FIELDS, require_capabilities, require_generation, require_scene_context
 
 
@@ -185,7 +185,7 @@ class ActorAcceptance:
         check(type(value.get("schema_version")) is int and value["schema_version"] == 1, "OPERATION_SCHEMA_INVALID")
         check(value.get("kind") == kind and value.get("profile_id") == self.profile, "OPERATION_IDENTITY_MISMATCH")
         if kind == "ACTION":
-            check(value.get("action") in {"chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"}, "OPERATION_ACTION_INVALID")
+            check(value.get("action") in ACTION_NAMES, "OPERATION_ACTION_INVALID")
         check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
         if operation_id is not None:
             check(value["operation_id"] == operation_id, "OPERATION_ID_MISMATCH")

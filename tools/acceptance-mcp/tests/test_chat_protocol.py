@@ -24,6 +24,8 @@ ACTOR_TOOLS = {"actor_open", "actor_close", "operation_get", "operation_cancel"}
 TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS | {"game_act"} | COMMAND_TOOLS
 ACT_PATH = "/solo/acceptance/v1/actor/act"
 MAX_LONG = 2**63 - 1
+REGISTERED_ACTIONS = ["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
+                      "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip"]
 
 
 def capabilities(enabled: set[str]) -> dict:
@@ -145,7 +147,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(TOOLS, set(tools))
         annotations = tools["game_act"].annotations
         self.assertFalse(annotations.read_only_hint)
-        self.assertFalse(annotations.destructive_hint)
+        self.assertTrue(annotations.destructive_hint)
         self.assertTrue(annotations.idempotent_hint)
         self.assertTrue(annotations.open_world_hint)
         for name in OBSERVATION_TOOLS | {"operation_get"}:
@@ -154,7 +156,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(self.args), set(tools["game_act"].input_schema["required"]))
         self.assertIs(False, tools["game_act"].input_schema.get("additionalProperties"))
         action_schema = tools["game_act"].input_schema["properties"]["action"]
-        self.assertEqual(["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"], action_schema["enum"])
+        self.assertEqual(REGISTERED_ACTIONS, action_schema["enum"])
         self.assertFalse(caps.is_error)
         self.assertEqual(capabilities(TOOLS), caps.structured_content)
         self.assertEqual(sorted(TOOLS), require_capabilities(caps.structured_content, sorted(tools), actors=True))

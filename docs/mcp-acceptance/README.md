@@ -460,3 +460,7 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 ## #200 基本操作：背包移位
 
 #164 已通过 PR #202 交付 `game_act/inventory_move`，严格参数为 `inventory_type`、`source_slot`、`target_slot`；它直接消费运行体共享 Java 能力和唯一 lane，不把基本动作实现留在 MCP。actor 实时库存观察与正常退出后同 CID 重开用于核实际状态和存档。规则及分层验收见[背包移位](../shared-game-foundation/inventory-move.md)，实际已开放能力以 `game_capabilities.actions` 为准。其余 #200 动作继续逐片交付。
+
+## #200 其余基本操作
+
+候选增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计13动作，工具数仍为七；实际开放项以capabilities为准。基本能力均在运行体共享Java层，MCP保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。

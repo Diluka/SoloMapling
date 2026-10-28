@@ -10,7 +10,7 @@ from uuid import uuid4
 from solo_acceptance_mcp.smoke import require_capabilities
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
-from tests.test_chat_protocol import ACT_PATH, TOOLS, ChatProtocolStub, capabilities
+from tests.test_chat_protocol import ACT_PATH, TOOLS, REGISTERED_ACTIONS, ChatProtocolStub, capabilities
 from tests.test_npc_protocol import npc_capabilities
 from tests.test_npc_reply_protocol import reply_capabilities
 
@@ -63,7 +63,7 @@ class InventoryMoveProtocolTests(unittest.IsolatedAsyncioTestCase):
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         self.assertEqual(TOOLS, set(tools))
         schema = tools["game_act"].input_schema
-        self.assertEqual(ACTIONS, schema["properties"]["action"]["enum"])
+        self.assertEqual(REGISTERED_ACTIONS, schema["properties"]["action"]["enum"])
         branch = next(branch for branch in schema["allOf"][0]["oneOf"]
                       if branch["properties"]["action"]["const"] == "inventory_move")
         model = schema["$defs"][branch["properties"]["parameters"]["$ref"].split("/")[-1]]

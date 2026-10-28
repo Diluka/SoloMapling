@@ -14,6 +14,7 @@ from tests.helpers import PASSWORD, TOKEN, envelope
 from tests import test_chat_protocol as chat_protocol
 from tests.test_actor_events_smoke import PACKET_CAPABILITIES
 from tests.test_chat_protocol import (
+    REGISTERED_ACTIONS,
     ACTOR_TOOLS, ACT_PATH, MAX_LONG, OBSERVATION_TOOLS, TOOLS,
     ChatProtocolStub, capabilities,
 )
@@ -107,28 +108,37 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
         schema = tools["game_act"].input_schema
         self.assertIs(False, schema.get("additionalProperties"))
         self.assertEqual(set(self.args), set(schema["required"]))
-        self.assertEqual(ACTIONS + ["npc_reply", "inventory_move"], schema["properties"]["action"]["enum"])
+        self.assertEqual(REGISTERED_ACTIONS, schema["properties"]["action"]["enum"])
         annotations = tools["game_act"].annotations
         self.assertFalse(annotations.read_only_hint)
-        self.assertFalse(annotations.destructive_hint)
+        self.assertTrue(annotations.destructive_hint)
         self.assertTrue(annotations.idempotent_hint)
         self.assertTrue(annotations.open_world_hint)
         parameter_schema = schema["properties"]["parameters"]
         variants = parameter_schema.get("anyOf", parameter_schema.get("oneOf", []))
         branches = [schema["$defs"][variant["$ref"].split("/")[-1]] if "$ref" in variant else variant
                     for variant in variants]
-        self.assertEqual(6, len(branches))
+        self.assertEqual(14, len(branches))
         self.assertEqual({frozenset(), frozenset({"text"}), frozenset({"dialogue_version"}),
                           frozenset({"dialogue_version", "kind"}), frozenset({"dialogue_version", "kind", "selection"}),
-                          frozenset({"inventory_type", "source_slot", "target_slot"})},
+                          frozenset({"inventory_type", "source_slot", "target_slot"}),
+                          frozenset({"direction", "duration_ms"}), frozenset({"target_oid"}),
+                          frozenset({"object_id"}), frozenset({"inventory_type", "source_slot", "quantity"}),
+                          frozenset({"source_slot"}), frozenset({"source_slot", "target_slot"})},
                          {frozenset(branch.get("properties", {})) for branch in branches})
         self.assertTrue(all(branch.get("additionalProperties") is False for branch in branches))
         tagged = schema["allOf"][0]["oneOf"]
-        self.assertEqual(5, len(tagged))
+        self.assertEqual(13, len(tagged))
         self.assertEqual({
             "chat": frozenset({"text"}), "npc_center_open": frozenset(),
             "npc_cancel": frozenset({"dialogue_version"}),
             "inventory_move": frozenset({"inventory_type", "source_slot", "target_slot"}),
+            "move": frozenset({"direction", "duration_ms"}), "stop": frozenset(),
+            "attack": frozenset({"target_oid"}), "pickup": frozenset({"object_id"}),
+            "drop": frozenset({"inventory_type", "source_slot", "quantity"}),
+            "use_item": frozenset({"source_slot"}),
+            "equip": frozenset({"source_slot", "target_slot"}),
+            "unequip": frozenset({"source_slot", "target_slot"}),
         }, {branch["properties"]["action"]["const"]: frozenset(
             schema["$defs"][branch["properties"]["parameters"]["$ref"].split("/")[-1]].get("properties", {})
         ) for branch in tagged if "$ref" in branch["properties"]["parameters"]})
