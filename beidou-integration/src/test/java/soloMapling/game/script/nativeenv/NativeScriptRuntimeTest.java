@@ -26,6 +26,7 @@ import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
 
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -35,6 +36,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -110,6 +112,37 @@ class NativeScriptRuntimeTest {
         assertOpen(bounded);
         assertEquals("x".repeat(16382), bounded.stdout());
         assertTrue(bounded.outputTruncated());
+        assertClosed(fixture.closeContext(opened.contextId()));
+    }
+
+    @Test void outputArrivesBeforeTheInvocationReturnsAndMatchesItsBoundedFinalText() throws Exception {
+        Fixture fixture = fixture();
+        List<NativeScriptExecution.Output> output = new CopyOnWriteArrayList<>();
+        NativeScriptExecution execution = fixture.context.runNativeScript(fixture.context.acceptWork(),
+                request("start", null, Map.of(), null, List.of(),
+                        "console.log('A😀'); hostWait(); print('B中文'); console.error('诊断'); 42", Map.of(), 5000),
+                fixture.adapter, output::add);
+        try {
+            assertTrue(fixture.adapter.hostEntered.await(5, TimeUnit.SECONDS));
+            assertFalse(execution.completion().toCompletableFuture().isDone());
+            assertEquals("A😀\n", output.stream().map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
+        } finally { fixture.adapter.hostReleased.countDown(); }
+        NativeScriptResult opened = await(execution);
+        assertOpen(opened);
+        assertEquals(opened.stdout(), output.stream().filter(item -> item.channel().equals("stdout"))
+                .map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
+        assertEquals(opened.stderr(), output.stream().filter(item -> item.channel().equals("stderr"))
+                .map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
+
+        output.clear();
+        NativeScriptResult bounded = await(fixture.context.runNativeScript(fixture.context.acceptWork(),
+                request("invoke", opened.contextId(), Map.of(), null, List.of(),
+                        "print('x'.repeat(16382) + '😀'); 'done'", Map.of(), 5000), fixture.adapter, output::add));
+        assertOpen(bounded);
+        assertEquals(bounded.stdout(), output.stream().map(NativeScriptExecution.Output::text)
+                .collect(java.util.stream.Collectors.joining()));
+        assertTrue(output.stream().anyMatch(NativeScriptExecution.Output::truncated));
+        assertTrue(output.stream().allMatch(item -> item.text().getBytes(StandardCharsets.UTF_8).length <= 4096));
         assertClosed(fixture.closeContext(opened.contextId()));
     }
 

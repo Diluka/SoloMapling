@@ -11,7 +11,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -191,7 +191,7 @@ def validate_script_run(
     session_id: str, expected_generation: int, request_id: str, kind: str, operation: str,
     source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
     context_id: str | None = None, options: Any = _SCRIPT_DEFAULT,
-    entry: str | None = None, args: Any = _SCRIPT_DEFAULT,
+    entry: str | None = None, args: Any = _SCRIPT_DEFAULT, since_output: int = 0,
 ) -> None:
     validate_script_target(session_id, expected_generation)
     validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
@@ -200,6 +200,7 @@ def validate_script_run(
             or any(0xD800 <= ord(char) <= 0xDFFF for char in source)):
         raise BridgeError("INVALID_ARGUMENTS", "source 必须是有界 Unicode 脚本。")
     validate_integer(timeout_ms, "timeout_ms", 1, SCRIPT_MAX_TIMEOUT_MS)
+    validate_integer(since_output, "since_output", 0, MAX_LONG)
     if (not isinstance(kind, str) or kind not in NATIVE_SCRIPT_KINDS
             or not isinstance(operation, str) or operation not in NATIVE_SCRIPT_OPERATIONS):
         raise BridgeError("INVALID_ARGUMENTS", "kind 或 operation 不受支持。")
@@ -476,7 +477,8 @@ class BridgeClient:
         self, session_id: str, expected_generation: int, *, request_id: str, kind: str, operation: str,
         options: dict[str, Any], args: list[Any], source: str = "",
         parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
-        context_id: str | None = None, entry: str | None = None,
+        context_id: str | None = None, entry: str | None = None, since_output: int = 0,
+        on_event: Callable[[dict[str, Any]], Awaitable[None]],
     ) -> dict[str, Any]:
         # Freeze the complete validated native invocation before run and cancel
         # cross independent HTTP connections. Defaults are explicit in both.
@@ -489,8 +491,8 @@ class BridgeClient:
         # Keep run + cleanup within the host tool's 45-second window even when
         # ordinary observation HTTP requests use the configurable 30 seconds.
         budget = timeout_ms / 1000 + SCRIPT_CLEANUP_SECONDS
-        request = asyncio.create_task(self._mutation(
-            "/solo/acceptance/v1/script/run", data, request_id, timeout_seconds=budget,
+        request = asyncio.create_task(self._script_stream(
+            data, request_id, since_output, on_event, budget,
         ))
         try:
             try:
@@ -508,6 +510,91 @@ class BridgeClient:
             if failure.outcome_unknown:
                 await self._stop_script_request(data, request_id, request, budget)
             raise
+
+    async def _script_stream(
+        self, data: dict[str, Any], request_id: str, since_output: int,
+        on_event: Callable[[dict[str, Any]], Awaitable[None]], budget: float,
+    ) -> dict[str, Any]:
+        path = "/solo/acceptance/v1/script/stream?since_output=" + str(since_output)
+        try:
+            token = await self._token_for_request()
+            for attempt in range(2):
+                headers = {"Accept": "application/x-ndjson", "Authorization": "Bearer " + token}
+                async with self._http.stream("POST", path, json={"requestId": request_id, "data": data},
+                                             headers=headers, timeout=budget) as response:
+                    if response.status_code == 401 and attempt == 0:
+                        token = await self._token_for_request(stale_token=token)
+                        continue
+                    if response.status_code != 200:
+                        self._decode(httpx.Response(response.status_code))
+                    operation_id = None
+                    cursor = since_output
+                    pending = bytearray()
+                    async for part in response.aiter_bytes():
+                        pending.extend(part)
+                        while b"\n" in pending:
+                            line, _, pending = pending.partition(b"\n")
+                            if len(line) > self.MAX_RESPONSE_BYTES:
+                                raise BridgeError("INVALID_RESPONSE", "脚本输出流事件超过允许大小。")
+                            if not line.strip():
+                                continue
+                            try:
+                                event = json.loads(line)
+                            except (ValueError, UnicodeError, RecursionError):
+                                raise BridgeError("INVALID_RESPONSE", "脚本输出流不是有效 JSON。") from None
+                            self._validate_response_json(event)
+                            if not isinstance(event, dict):
+                                raise BridgeError("INVALID_RESPONSE", "脚本输出流事件格式无效。")
+                            kind = event.get("type")
+                            if kind == "started" and operation_id is None:
+                                identifier = event.get("operation_id")
+                                if (event.get("request_id") != request_id or not isinstance(identifier, str)
+                                        or IDENTIFIER.fullmatch(identifier) is None):
+                                    raise BridgeError("INVALID_RESPONSE", "脚本输出流关联标识无效。")
+                                operation_id = identifier
+                            elif kind == "result" and operation_id is not None:
+                                operation = event.get("operation")
+                                if (not isinstance(operation, dict) or operation.get("operation_id") != operation_id
+                                        or operation.get("request_id", request_id) != request_id):
+                                    raise BridgeError("INVALID_RESPONSE", "脚本输出流最终结果关联无效。")
+                                return {**operation, "request_id": request_id}
+                            elif kind in ("output", "gap") and operation_id is not None:
+                                if event.get("request_id") != request_id or event.get("operation_id") != operation_id:
+                                    raise BridgeError("INVALID_RESPONSE", "脚本输出流关联标识不一致。")
+                                if kind == "output":
+                                    sequence = event.get("seq")
+                                    if (type(sequence) is not int or not cursor < sequence <= MAX_LONG
+                                            or event.get("channel") not in ("stdout", "stderr")
+                                            or not isinstance(event.get("text"), str)
+                                            or type(event.get("output_truncated")) is not bool):
+                                        raise BridgeError("INVALID_RESPONSE", "脚本输出片段格式或顺序无效。")
+                                    cursor = sequence
+                                elif (type(event.get("oldest_cursor")) is not int
+                                      or type(event.get("latest_cursor")) is not int):
+                                    raise BridgeError("INVALID_RESPONSE", "脚本输出缺失标记无效。")
+                            else:
+                                raise BridgeError("INVALID_RESPONSE", "脚本输出流事件顺序无效。")
+                            await on_event(event)
+                        if len(pending) > self.MAX_RESPONSE_BYTES:
+                            raise BridgeError("INVALID_RESPONSE", "脚本输出流事件超过允许大小。")
+                    if pending.strip():
+                        raise BridgeError("INVALID_RESPONSE", "脚本输出流包含未完成的事件。")
+                    raise BridgeError("HTTP_UNAVAILABLE", "脚本输出流在最终结果前断开。")
+        except httpx.TimeoutException:
+            failure = BridgeError("HTTP_TIMEOUT", "脚本输出流读取超时。")
+        except httpx.RequestError:
+            failure = BridgeError("HTTP_UNAVAILABLE", "脚本输出流连接中断。")
+        except BridgeError as caught:
+            failure = caught
+        code, message = failure.code, failure.message
+        if failure.http_status == 409:
+            code, message = "OPERATION_CONFLICT", "请求与当前角色会话或操作状态冲突。"
+        elif failure.http_status == 410:
+            code, message = "SESSION_EXPIRED", "角色会话或操作已失效。"
+        unknown = code in {"HTTP_TIMEOUT", "HTTP_UNAVAILABLE", "INVALID_RESPONSE"}
+        unknown |= failure.http_status is not None and failure.http_status >= 500
+        raise BridgeError(code, message, http_status=failure.http_status, backend_code=failure.backend_code,
+                          request_id=request_id, outcome_unknown=unknown) from None
 
     async def _stop_script_request(
         self, data: dict[str, Any], request_id: str,
@@ -542,13 +629,16 @@ class BridgeClient:
                 pass
 
     async def operation_get(
-        self, operation_id: str, *, since_cursor: int = 0, limit: int = 100,
+        self, operation_id: str, *, since_cursor: int = 0, limit: int = 100, since_output: int = 0,
     ) -> dict[str, Any]:
         validate_identifier(operation_id, "operation_id")
         validate_integer(since_cursor, "since_cursor", 0, MAX_LONG)
         validate_integer(limit, "limit", 1, 500)
+        validate_integer(since_output, "since_output", 0, MAX_LONG)
         path = ("/solo/acceptance/v1/operation/" + operation_id
                 + "?since_cursor=" + str(since_cursor) + "&limit=" + str(limit))
+        if since_output:
+            path += "&since_output=" + str(since_output)
         return await self._authorized_request("GET", path)
 
     async def operation_cancel(self, operation_id: str, *, request_id: str) -> dict[str, Any]:
@@ -684,6 +774,11 @@ class BridgeClient:
         data = result.get("data")
         if not isinstance(data, dict):
             raise BridgeError("INVALID_RESPONSE", "验收桥响应缺少结构化数据对象。")
+        BridgeClient._validate_response_json(data)
+        return data
+
+    @staticmethod
+    def _validate_response_json(data: Any) -> None:
         pending: list[Any] = [data]
         while pending:
             value = pending.pop()
@@ -697,5 +792,4 @@ class BridgeClient:
                 pending.extend(value)
             elif isinstance(value, float) and not math.isfinite(value):
                 raise BridgeError("INVALID_RESPONSE", "验收桥响应包含非有限 JSON 数值。")
-        return data
 

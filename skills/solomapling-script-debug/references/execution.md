@@ -51,6 +51,23 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 原脚本全局变量沿同一引擎保留，本次 `parameters` 随调用更新。将所需字段投影为 JSON，原生对象和函数不能直接作为最终 JSON 结果传出。
 
+## 实时读取执行输出
+
+`script_run` 执行期间通过 MCP progress 通知发送 `started/output/gap`，`message` 是 JSON 文本。首条消息包含本次 `request_id` 和 `operation_id`；输出消息包含 `seq/channel/text/output_truncated`。官方 Python SDK 使用 `progress_callback` 接收：
+
+```python
+import json
+
+async def receive(progress, total, message):
+    event = json.loads(message)
+    if event["type"] == "output":
+        print(event["text"], end="", flush=True)
+
+result = await client.call_tool("script_run", invocation, progress_callback=receive)
+```
+
+保存最后收到的输出 `seq`。连接中断后，以原请求和完整执行参数、原 `request_id` 加 `since_output` 恢复读取；已知操作ID时，通过 `operation_get(operation_id, since_output=...)` 的 `script_output` 读取保留窗口。`gap/cursor_expired` 表明窗口缺失，`output_truncated` 表明输出达到预算。客户端的通知展示按实际宿主验证，最终响应继续提供 JSON 结果、错误和真实收尾状态。
+
 ## 判断结果与关闭
 
 分别核对：

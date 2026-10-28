@@ -24,6 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 /** One exact native role, one carrier lane, and replaceable compiled modules. Internal ABI v0.1. */
 public final class CharacterRuntime {
@@ -318,6 +319,11 @@ public final class CharacterRuntime {
         /** One owned native environment per module; published before its first carrier can execute. */
         public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                       NativeScriptAdapter adapter) {
+            return runNativeScript(work, request, adapter, ignored -> { });
+        }
+        public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
+                                                      NativeScriptAdapter adapter,
+                                                      Consumer<NativeScriptExecution.Output> output) {
             requireOwn(work); Objects.requireNonNull(request); Objects.requireNonNull(adapter);
             NativeScriptSession session;
             synchronized (monitor) {
@@ -338,7 +344,7 @@ public final class CharacterRuntime {
                 }
                 session = nativeScript;
             }
-            try { return NativeScriptExecution.start(work, session, request); }
+            try { return NativeScriptExecution.start(work, session, request, output); }
             catch (RuntimeException | Error failure) { session.requestClose(); throw failure; }
         }
         public List<Map<String, Object>> nativeScriptContexts() {

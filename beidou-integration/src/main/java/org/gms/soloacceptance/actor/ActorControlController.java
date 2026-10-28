@@ -4,10 +4,15 @@ import org.gms.model.dto.ResultBody;
 import org.gms.model.dto.SubmitBody;
 import org.gms.soloacceptance.AcceptanceAccess;
 import org.gms.soloacceptance.ObservationException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.util.Map;
 import java.util.UUID;
@@ -29,6 +35,7 @@ import java.util.UUID;
         havingValue = "true", matchIfMissing = false)
 public final class ActorControlController {
     private final ActorControlService actors;
+    private final RequestAttributeSecurityContextRepository streamSecurityContext = new RequestAttributeSecurityContextRepository();
 
     public ActorControlController(ActorControlService actors) {
         this.actors = actors;
@@ -70,8 +77,9 @@ public final class ActorControlController {
     public ResultBody<Map<String, Object>> operation(
             @PathVariable("id") String operationId,
             @RequestParam(name = "since_cursor", defaultValue = "0") long sinceCursor,
-            @RequestParam(name = "limit", defaultValue = "100") int limit) {
-        return ResultBody.success(actors.get(AcceptanceAccess.requireAdmin(), operationId, sinceCursor, limit));
+            @RequestParam(name = "limit", defaultValue = "100") int limit,
+            @RequestParam(name = "since_output", defaultValue = "0") long sinceOutput) {
+        return ResultBody.success(actors.get(AcceptanceAccess.requireAdmin(), operationId, sinceCursor, limit, sinceOutput));
     }
 
     @PostMapping("/script/run")
@@ -80,6 +88,21 @@ public final class ActorControlController {
         String owner = AcceptanceAccess.requireAdmin();
         requireData(request);
         return ResultBody.success(request, actors.scriptRun(owner, request.getRequestId(), request.getData()));
+    }
+
+    @PostMapping(value = "/script/stream", produces = "application/x-ndjson")
+    public ResponseEntity<StreamingResponseBody> scriptStream(
+            @RequestBody(required = false) SubmitBody<ActorScriptRequest> request,
+            @RequestParam(name = "since_output", defaultValue = "0") long sinceOutput,
+            HttpServletRequest servletRequest, HttpServletResponse servletResponse) {
+        String owner = AcceptanceAccess.requireAdmin();
+        requireData(request);
+        StreamingResponseBody stream = actors.scriptStream(owner, request.getRequestId(), request.getData(), sinceOutput);
+        // The native JWT filter authenticates only the initial dispatch. Keep that same
+        // request's identity available when Spring completes the async streaming response.
+        streamSecurityContext.saveContext(SecurityContextHolder.getContext(), servletRequest, servletResponse);
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/x-ndjson"))
+                .header("Cache-Control", "no-store").header("X-Accel-Buffering", "no").body(stream);
     }
 
     @PostMapping("/script/cancel")
