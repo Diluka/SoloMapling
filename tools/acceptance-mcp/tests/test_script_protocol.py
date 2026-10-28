@@ -35,7 +35,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tools["script_help"].annotations.read_only_hint)
         schema = tools["script_run"].input_schema
         self.assertIs(False, schema["additionalProperties"])
-        self.assertEqual(set(SCRIPT_ARGS), set(schema["properties"]))
+        self.assertEqual(set(SCRIPT_ARGS) | {"since_output"}, set(schema["properties"]))
         self.assertEqual({"session_id", "expected_generation", "request_id", "kind", "operation"}, set(schema["required"]))
         self.assertEqual("", schema["properties"]["source"]["default"])
         self.assertNotIn("environment", schema["properties"])
@@ -220,6 +220,21 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_official_sdk_cancel_reaches_independent_http_cancel(self) -> None:
         run_started, cancel_started, cleanup_complete = Event(), Event(), Event()
+        output_received = asyncio.Event()
+
+        def stream(request):
+            association = {"request_id": SCRIPT_ARGS["request_id"], "operation_id": "operation-script-fixture"}
+            yield {"type": "started", **association}
+            yield {"type": "output", **association, "seq": 1, "channel": "stdout",
+                   "text": "取消前的输出\n", "output_truncated": False}
+            run_started.set()
+            cleanup_complete.wait(3)
+            yield {"type": "result", "operation": script_operation(SCRIPT_ARGS["request_id"],
+                                                                       status="CANCELLED", closed=True)}
+
+        async def progress(value, total, message):
+            if json.loads(message)["type"] == "output":
+                output_received.set()
 
         def respond(request: dict):
             if request["path"] == RUN_PATH:
@@ -232,10 +247,12 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             return self.stub.default_response(request)
 
         self.stub.responder = respond
+        self.stub.stream_responder = stream
         async with self.stdio_client() as client:
-            task = asyncio.create_task(client.call_tool("script_run", deepcopy(SCRIPT_ARGS)))
+            task = asyncio.create_task(client.call_tool("script_run", deepcopy(SCRIPT_ARGS), progress_callback=progress))
             try:
                 self.assertTrue(await asyncio.to_thread(run_started.wait, 2))
+                await asyncio.wait_for(output_received.wait(), 2)
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
@@ -249,9 +266,21 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(response.is_error)
 
     async def test_lost_run_and_cleanup_responses_keep_original_request_unknown_without_replay(self) -> None:
-        self.stub.disconnect_requests = True
+        observed = []
+
+        def stream(request):
+            association = {"request_id": SCRIPT_ARGS["request_id"], "operation_id": "operation-script-fixture"}
+            yield {"type": "started", **association}
+            yield {"type": "output", **association, "seq": 1, "channel": "stdout",
+                   "text": "断线前的输出\n", "output_truncated": False}
+            self.stub.disconnect_requests = True
+
+        async def progress(value, total, message):
+            observed.append(json.loads(message))
+
+        self.stub.stream_responder = stream
         async with Client(build_server(self.stub.config())) as client:
-            response = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS))
+            response = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS), progress_callback=progress)
             help_response = await client.call_tool("script_help", {
                 "session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7,
             })
@@ -264,6 +293,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PASSWORD, response.model_dump_json())
         self.assertNotIn(TOKEN, response.model_dump_json())
         self.assertFalse(help_response.is_error)
+        self.assertEqual("断线前的输出\n", observed[-1]["text"])
         runs = [request for request in self.stub.requests if request["path"] == RUN_PATH]
         cancels = [request for request in self.stub.requests if request["path"] == CANCEL_PATH]
         self.assertEqual(1, len(runs))

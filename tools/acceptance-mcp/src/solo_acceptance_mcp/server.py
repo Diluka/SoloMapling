@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -123,7 +124,7 @@ class ExpectedContext(BaseModel):
 CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
 COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "expected_command_generation"})
 SCRIPT_RUN_REQUIRED = frozenset({"session_id", "expected_generation", "request_id", "kind", "operation"})
-SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"source", "parameters", "timeout_ms", "context_id", "options", "entry", "args"}
+SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"source", "parameters", "timeout_ms", "context_id", "options", "entry", "args", "since_output"}
 SCRIPT_HELP_REQUIRED = frozenset({"session_id", "expected_generation"})
 SCRIPT_HELP_ARGUMENTS = SCRIPT_HELP_REQUIRED
 
@@ -213,7 +214,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
                       "取消操作不等于结束NPC对话。game_act 支持普通聊天、已审NPC回复、背包移位，以及受控移动/停止、单次近战普通攻击、库存物品拾取/丢弃、普通HP/MP药剂使用和装备穿脱；实际能力以桥公告为准。"
                       "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
-                      "script_run 在同一角色运行体执行有期限的北斗脚本；按实际 script_help 选择 NPC、任务、门户、机关或独占事件的真实对象与原入口。"
+                      "script_run 在同一角色运行体执行有期限的北斗脚本，执行中通过MCP进度通知实时交付stdout/stderr，最终返回结果；按实际 script_help 选择真实北斗环境与原入口。"
                       "持久 context_id 用于后续回调或关闭，原生副作用按实际结果核验，不由工具返回成功推导玩法完成。"
                       "北斗脚本提供 executeCommand(commandText) 通用执行函数，与 game_command 共用原生handle；权限沿原生，RETURNED不代表具体命令效果。"
                       "game_command_help 查询实际原生命令目录，game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现。"
@@ -324,6 +325,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
 
     @server.tool(annotations=open_annotations)
     async def script_run(
+        ctx: Context,
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
         kind: Literal["npc", "quest", "portal", "reactor", "event"],
         operation: Literal["start", "invoke", "close"],
@@ -334,13 +336,21 @@ def build_server(config: BridgeConfig) -> MCPServer:
         options: dict[str, Any] = Field(default_factory=dict),
         entry: NativeScriptEntry | None = None,
         args: list[Any] = Field(default_factory=list),
+        since_output: Cursor = 0,
     ) -> CallToolResult:
-        """在当前角色运行体执行北斗脚本。kind 选择 script_help 公告的真实 NPC、任务、门户、机关或独占事件；start 加载原脚本和入口，invoke 沿原 context_id 执行回调或 source，close 收尾。source 默认空，parameters 为 JSON 参数，输出使用 console/print。executeCommand(commandText) 与 game_command 共用原生handle，权限依原生，RETURNED仅表示处理器返回。上下文可保留以继续回调，本次执行退出和最终资源释放分别核验；无法确认停止时返回未知。使用相同 request_id 和完整相同参数恢复结果，不重放未知请求。"""
+        """在当前角色运行体执行北斗脚本，通过MCP进度通知实时发送started/output/gap事件（message为JSON），最终返回执行结果。kind选择实际北斗环境，start创建上下文，invoke继续代码或入口，close收尾。输出事件带request_id/operation_id、seq、channel和text；since_output用于同请求恢复输出读取。source默认空，parameters为JSON参数；executeCommand沿原生权限。使用原request_id及相同执行参数恢复，本次执行结算和Context最终关闭分别核验。"""
+        notification_sequence = 0
+
+        async def forward(event: dict[str, Any]) -> None:
+            nonlocal notification_sequence
+            notification_sequence += 1
+            await ctx.report_progress(notification_sequence, message=json.dumps(event, ensure_ascii=False))
+
         try:
             data = await bridge.script_run(
                 session_id, expected_generation, request_id=request_id, kind=kind, operation=operation,
                 source=source, parameters=parameters, timeout_ms=timeout_ms, context_id=context_id,
-                options=options, entry=entry, args=args,
+                options=options, entry=entry, args=args, since_output=since_output, on_event=forward,
             )
             return result(data, is_error=data.get("status") != "SUCCEEDED")
         except BridgeError as failure:
@@ -356,11 +366,12 @@ def build_server(config: BridgeConfig) -> MCPServer:
 
     @server.tool(annotations=read_annotations)
     async def operation_get(
-        operation_id: Identifier, since_cursor: Cursor = 0, limit: Limit = 100,
+        operation_id: Identifier, since_cursor: Cursor = 0, limit: Limit = 100, since_output: Cursor = 0,
     ) -> CallToolResult:
-        """读取操作真实状态、角色会话和有界事件；读取成功不表示原生操作已成功。"""
+        """读取操作状态、角色会话、生命周期事件及脚本输出窗口；since_cursor和since_output分别推进两种游标。"""
         try:
-            return result(await bridge.operation_get(operation_id, since_cursor=since_cursor, limit=limit))
+            return result(await bridge.operation_get(operation_id, since_cursor=since_cursor, limit=limit,
+                                                     since_output=since_output))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 

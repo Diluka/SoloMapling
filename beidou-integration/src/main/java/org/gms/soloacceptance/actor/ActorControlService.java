@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.action.NativeActionService;
@@ -32,6 +33,8 @@ import soloMapling.game.script.nativeenv.NativeScriptResult;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -64,6 +67,7 @@ public final class ActorControlService {
     private static final ObjectMapper SCRIPT_JSON = new ObjectMapper()
             .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
     private static final long SCRIPT_CLEANUP_WAIT_MS = 3000;
+    private static final int SCRIPT_OUTPUT_EVENTS = 256;
     private final Object monitor = new Object();
     private final NativeActorBackend backend;
     private final int maxSessions;
@@ -464,8 +468,15 @@ public final class ActorControlService {
     /** Protocol history references the runtime's original work; scripts never enter the short-command lane. */
     private Map<String, Object> scriptInvocation(String owner, String requestId, ActorScriptRequest request,
                                                   boolean cancel) {
+        Operation operation = prepareScriptInvocation(owner, requestId, request, cancel, 0);
+        return awaitScript(operation, request.timeoutMs());
+    }
+
+    private Operation prepareScriptInvocation(String owner, String requestId, ActorScriptRequest request,
+                                               boolean cancel, long sinceOutput) {
         validateOwner(owner);
         validateRequestId(requestId);
+        if (sinceOutput < 0) throw error(HttpStatus.BAD_REQUEST, "invalid_script_output_cursor");
         NativeScriptRequest script = validatedScript(request);
         ScriptFingerprint fingerprint = new ScriptFingerprint(request.expectedGeneration(),
                 textDigest(script.source()), scriptParameterDigest(script.parameters()), script.timeoutMs(),
@@ -475,6 +486,9 @@ public final class ActorControlService {
         Session session;
         synchronized (monitor) {
             prior = duplicate(key, fingerprint);
+            if (sinceOutput > (prior == null ? 0 : prior.outputSequence)) {
+                throw error(HttpStatus.BAD_REQUEST, "script_output_cursor_ahead");
+            }
             session = prior == null ? ownedSession(owner, request.sessionId(), request.expectedGeneration()) : prior.session;
         }
         if (prior == null) {
@@ -501,6 +515,7 @@ public final class ActorControlService {
                         }
                         accepted = operation("SCRIPT", session);
                         accepted.nativeScriptOperation = script.operation();
+                        accepted.scriptRequestId = requestId;
                         requests.put(key, new RequestRecord(fingerprint, accepted.id));
                         if (cancel) requestCancellation(accepted);
                     } else accepted = null;
@@ -520,7 +535,68 @@ public final class ActorControlService {
                 if (!terminal(prior.status) && !prior.cancelRequested) requestCancellation(prior);
             }
         }
-        return awaitScript(prior, script.timeoutMs());
+        return prior;
+    }
+
+    /** Authentication and acceptance finish before HTTP headers are committed. */
+    public StreamingResponseBody scriptStream(String owner, String requestId, ActorScriptRequest request, long sinceOutput) {
+        Operation operation = prepareScriptInvocation(owner, requestId, request, false, sinceOutput);
+        return output -> streamScript(operation, sinceOutput, request.timeoutMs(), output);
+    }
+
+    private void streamScript(Operation operation, long sinceOutput, long timeoutMs, OutputStream output) throws IOException {
+        writeScriptEvent(output, Map.of("type", "started", "request_id", operation.scriptRequestId,
+                "operation_id", operation.id));
+        long cursor = sinceOutput;
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs + SCRIPT_CLEANUP_WAIT_MS);
+        while (true) {
+            List<Map<String, Object>> items;
+            Map<String, Object> gap = null;
+            Map<String, Object> finished = null;
+            synchronized (monitor) {
+                long oldest = operation.output.isEmpty() ? operation.outputSequence + 1 : (long) operation.output.getFirst().get("seq");
+                if (cursor < oldest - 1) {
+                    gap = Map.of("type", "gap", "request_id", operation.scriptRequestId, "operation_id", operation.id,
+                            "oldest_cursor", oldest, "latest_cursor", operation.outputSequence);
+                    cursor = oldest - 1;
+                }
+                long after = cursor;
+                items = operation.output.stream().filter(item -> (long) item.get("seq") > after).toList();
+                if (!items.isEmpty()) cursor = (long) items.getLast().get("seq");
+                if (terminal(operation.status)) finished = response(operation, 0, 100);
+                else if (System.nanoTime() >= deadline) {
+                    scriptAwaitExpired(operation);
+                    finished = response(operation, 0, 100);
+                } else if (items.isEmpty() && gap == null) {
+                    try { TimeUnit.NANOSECONDS.timedWait(monitor, deadline - System.nanoTime()); }
+                    catch (InterruptedException stopped) { Thread.currentThread().interrupt(); throw new IOException("script_stream_interrupted", stopped); }
+                    continue;
+                }
+            }
+            if (gap != null) writeScriptEvent(output, gap);
+            for (Map<String, Object> item : items) writeScriptEvent(output, item);
+            if (finished != null) {
+                writeScriptEvent(output, Map.of("type", "result", "operation", finished));
+                return;
+            }
+        }
+    }
+
+    private static void writeScriptEvent(OutputStream output, Map<String, Object> event) throws IOException {
+        output.write(SCRIPT_JSON.writeValueAsBytes(event));
+        output.write('\n');
+        output.flush();
+    }
+
+    private void scriptOutput(Operation operation, NativeScriptExecution.Output output) {
+        synchronized (monitor) {
+            operation.outputTruncated |= output.truncated();
+            operation.output.addLast(Map.of("type", "output", "request_id", operation.scriptRequestId,
+                    "operation_id", operation.id, "seq", ++operation.outputSequence,
+                    "channel", output.channel(), "text", output.text(), "output_truncated", output.truncated()));
+            while (operation.output.size() > SCRIPT_OUTPUT_EVENTS) operation.output.removeFirst();
+            monitor.notifyAll();
+        }
     }
 
     /** Reads the existing operation/work association; this is no second execution ledger. */
@@ -532,7 +608,8 @@ public final class ActorControlService {
     private void startNativeScript(Operation operation, NativeScriptRequest request) {
         ExecutionScope.WorkHandle exact = operation.work;
         try {
-            NativeScriptExecution execution = operation.session.execution.runNativeScript(exact, request);
+            NativeScriptExecution execution = operation.session.execution.runNativeScript(exact, request,
+                    output -> scriptOutput(operation, output));
             synchronized (monitor) {
                 operation.nativeScriptExecution = execution;
                 if (operation.cancelRequested) execution.cancel();
@@ -638,16 +715,20 @@ public final class ActorControlService {
                 catch (InterruptedException stopped) { interrupted = true; break; }
             }
             if (operation.work != null) {
-                if (!operation.cancelRequested) requestCancellation(operation);
-                operation.error = Map.of("reason", "script_cleanup_unverified");
-                if (operation.result.isEmpty()) operation.result = Map.of("engine_exited", false,
-                        "context_closed", false, "work_settled", false);
-                finish(operation, "INDETERMINATE", "script_cleanup_unverified");
+                scriptAwaitExpired(operation);
             }
         }
         if (interrupted) Thread.currentThread().interrupt();
         operation.session.execution.refresh();
         synchronized (monitor) { return response(operation, 0, 100); }
+    }
+
+    private void scriptAwaitExpired(Operation operation) {
+        if (!operation.cancelRequested) requestCancellation(operation);
+        operation.error = Map.of("reason", "script_cleanup_unverified");
+        if (operation.result.isEmpty()) operation.result = Map.of("engine_exited", false,
+                "context_closed", false, "work_settled", false);
+        finish(operation, "INDETERMINATE", "script_cleanup_unverified");
     }
 
     private static NativeScriptRequest validatedScript(ActorScriptRequest request) {
@@ -757,14 +838,24 @@ public final class ActorControlService {
     }
 
     public Map<String, Object> get(String owner, String operationId, long sinceCursor, int limit) {
+        return get(owner, operationId, sinceCursor, limit, 0);
+    }
+
+    public Map<String, Object> get(String owner, String operationId, long sinceCursor, int limit, long sinceOutput) {
         validateOwner(owner);
         validateWindow(sinceCursor, limit);
+        if (sinceOutput < 0) throw error(HttpStatus.BAD_REQUEST, "invalid_script_output_cursor");
         Operation operation;
         synchronized (monitor) {
             operation = ownedOperation(owner, operationId);
             if (sinceCursor > operation.sequence) throw error(HttpStatus.BAD_REQUEST, "operation_cursor_ahead");
+            if (sinceOutput > operation.outputSequence) throw error(HttpStatus.BAD_REQUEST, "script_output_cursor_ahead");
         }
-        return refreshedResponse(operation, sinceCursor, limit);
+        Map<String, Object> response = refreshedResponse(operation, sinceCursor, limit);
+        if ("SCRIPT".equals(operation.kind)) {
+            synchronized (monitor) { response.put("script_output", scriptOutputWindow(operation, sinceOutput)); }
+        }
+        return response;
     }
 
     public Map<String, Object> cancel(String owner, String requestId, String operationId) {
@@ -891,7 +982,9 @@ public final class ActorControlService {
                     "script_run", "script_help"));
             result.put("script_execution", Map.of("language", "javascript", "minimum_timeout_ms", 1,
                     "maximum_timeout_ms", 5000, "default_timeout_ms", 1000, "maximum_source_characters", 65536,
-                    "maximum_parameters_bytes", 16384, "execution_owner", "character_runtime"));
+                    "maximum_parameters_bytes", 16384, "execution_owner", "character_runtime",
+                    "streaming", Map.of("transport", "ndjson", "delivery", "mcp_progress", "cursor_argument", "since_output",
+                            "event_capacity", SCRIPT_OUTPUT_EVENTS, "maximum_stdout_bytes", 16384, "maximum_stderr_bytes", 16384)));
             result.put("native_environments", backend.nativeScriptEnvironments());
             result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
                     "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip"));
@@ -1923,7 +2016,18 @@ public final class ActorControlService {
         response.put("error", operation.error);
         response.put("session", sessionData);
         response.put("events", events);
+        if ("SCRIPT".equals(operation.kind)) response.put("script_output", scriptOutputWindow(operation, 0));
         return response;
+    }
+
+    private Map<String, Object> scriptOutputWindow(Operation operation, long sinceOutput) {
+        long oldest = operation.output.isEmpty() ? operation.outputSequence + 1 : (long) operation.output.getFirst().get("seq");
+        List<Map<String, Object>> items = operation.output.stream()
+                .filter(item -> (long) item.get("seq") > sinceOutput).toList();
+        long cursor = items.isEmpty() ? sinceOutput : (long) items.getLast().get("seq");
+        return Map.of("items", items, "next_cursor", cursor, "oldest_cursor", oldest,
+                "latest_cursor", operation.outputSequence, "cursor_expired", sinceOutput < oldest - 1,
+                "output_truncated", operation.outputTruncated);
     }
 
     private Operation duplicate(RequestKey key, Object fingerprint) {
@@ -2065,6 +2169,7 @@ public final class ActorControlService {
         final String kind;
         final Session session;
         final ArrayDeque<Map<String, Object>> events = new ArrayDeque<>();
+        final ArrayDeque<Map<String, Object>> output = new ArrayDeque<>();
         String status = "QUEUED";
         String step = "queued";
         boolean cancelRequested;
@@ -2075,6 +2180,9 @@ public final class ActorControlService {
         NativeInventoryActions.MoveHandle inventoryAction;
         NativeScriptExecution nativeScriptExecution;
         String nativeScriptOperation;
+        String scriptRequestId;
+        long outputSequence;
+        boolean outputTruncated;
         NativeBasicActions.Handle basicAction;
         CharacterRuntime.ModuleContext moduleContext;
         String actionEntryFailure;

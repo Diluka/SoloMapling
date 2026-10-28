@@ -21,6 +21,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import soloMapling.beidou.CharacterTestContext;
 
 import java.io.ByteArrayInputStream;
@@ -77,7 +78,7 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.act(null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
-                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
+                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100, 0)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
@@ -89,7 +90,7 @@ class ActorControlControllerTest {
 
         authenticate("reader", "ROLE_USER");
         assertEquals(HttpStatus.FORBIDDEN,
-                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
+                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100, 0)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         assertEquals(HttpStatus.FORBIDDEN,
@@ -120,8 +121,8 @@ class ActorControlControllerTest {
         when(service.close("operator-a", "close-request", closeData)).thenReturn(Map.of("status", "QUEUED"));
         assertEquals("close-request", controller.close(new SubmitBody<>("close-request", closeData)).getResponseId());
 
-        when(service.get("operator-a", "op-id", 12, 25)).thenReturn(Map.of("status", "RUNNING"));
-        assertEquals("RUNNING", controller.operation("op-id", 12, 25).getData().get("status"));
+        when(service.get("operator-a", "op-id", 12, 25, 0)).thenReturn(Map.of("status", "RUNNING"));
+        assertEquals("RUNNING", controller.operation("op-id", 12, 25, 0).getData().get("status"));
 
         when(service.cancel("operator-a", "cancel-request", "op-id")).thenReturn(Map.of("status", "CANCEL_REQUESTED"));
         var cancelled = controller.cancel("op-id", new SubmitBody<>("cancel-request", null));
@@ -129,7 +130,7 @@ class ActorControlControllerTest {
         assertEquals("CANCEL_REQUESTED", cancelled.getData().get("status"));
         verify(service).open("operator-a", "open-request", openData);
         verify(service).close("operator-a", "close-request", closeData);
-        verify(service).get("operator-a", "op-id", 12, 25);
+        verify(service).get("operator-a", "op-id", 12, 25, 0);
         verify(service).cancel("operator-a", "cancel-request", "op-id");
     }
 
@@ -468,6 +469,11 @@ class ActorControlControllerTest {
                 null, List.of(), "cm.getPlayer().getName()", Map.of(), 1000L);
         when(service.scriptRun("script-admin", "script-id", script)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
         assertEquals("SUCCEEDED", controller.scriptRun(new SubmitBody<>("script-id", script)).getData().get("status"));
+        StreamingResponseBody stream = output -> { };
+        when(service.scriptStream("script-admin", "script-id", script, 3)).thenReturn(stream);
+        var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3);
+        assertSame(stream, streamed.getBody());
+        assertEquals("application/x-ndjson", streamed.getHeaders().getContentType().toString());
         var help = new ActorScriptHelpRequest("session", 7L);
         when(service.scriptHelp("script-admin", help)).thenReturn(Map.of("native_environments", List.of("npc"), "contexts", List.of()));
         assertEquals(List.of("npc"), controller.scriptHelp(new SubmitBody<>("help-id", help)).getData().get("native_environments"));
@@ -476,6 +482,7 @@ class ActorControlControllerTest {
         when(service.scriptCancel("script-admin", "cancel-id", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
         assertEquals("cancel-id", controller.scriptCancel(new SubmitBody<>("cancel-id", cancel)).getResponseId());
         verify(service).scriptRun("script-admin", "script-id", script);
+        verify(service).scriptStream("script-admin", "script-id", script, 3);
         verify(service).scriptHelp("script-admin", help);
         verify(service).scriptCancel("script-admin", "cancel-id", cancel);
     }

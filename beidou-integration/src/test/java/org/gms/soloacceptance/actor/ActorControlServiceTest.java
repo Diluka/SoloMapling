@@ -33,6 +33,14 @@ import org.graalvm.polyglot.proxy.ProxyExecutable;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -3248,6 +3256,88 @@ class ActorControlServiceTest {
     }
 
     @Test
+    void scriptStreamDeliversOutputBeforeCompletionAndResumesTheSameExecutionAfterDisconnect() throws Exception {
+        ActorControlService service = service(4, 24, 64);
+        var opened = open(service, "stream-role-open"); executors.getFirst().runNext();
+        TransportNativeAdapter adapter = prepareNativeAdapter();
+        var request = scriptRequest(sessionId(opened), generation(opened),
+                "print('A😀'); waitForRelease(); console.error('B中'); throw new Error('after output');",
+                Map.of(), 5000L, new ScriptBinding("npc", "start", null, Map.of(), null, List.of()));
+        var stream = service.scriptStream("admin", "stream-run", request, 0);
+        ObjectMapper json = new ObjectMapper();
+        PipedInputStream input = new PipedInputStream(65536);
+        PipedOutputStream output = new PipedOutputStream(input);
+        var delivery = CompletableFuture.runAsync(() -> {
+            try (output) { stream.writeTo(output); }
+            catch (IOException disconnected) { /* The client deliberately disconnects after its first output. */ }
+        });
+        String operationId;
+        long cursor;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            var started = json.readTree(reader.readLine());
+            assertEquals("started", started.get("type").asText());
+            assertEquals("stream-run", started.get("request_id").asText());
+            operationId = started.get("operation_id").asText();
+            StringBuilder received = new StringBuilder();
+            do {
+                var first = json.readTree(reader.readLine());
+                assertEquals("output", first.get("type").asText());
+                assertEquals("stdout", first.get("channel").asText());
+                received.append(first.get("text").asText());
+                cursor = first.get("seq").asLong();
+            } while (!received.toString().contains("A😀"));
+            assertFalse(delivery.isDone(), "the client receives output while the guest is still blocked");
+            var inFlight = service.get("admin", operationId, 0, 100, 0);
+            assertEquals("RUNNING", inFlight.get("status"));
+            assertFalse(((List<?>) ((Map<?, ?>) inFlight.get("script_output")).get("items")).isEmpty());
+        } finally { adapter.release.countDown(); }
+        delivery.get(5, TimeUnit.SECONDS);
+
+        var replay = new ByteArrayOutputStream();
+        service.scriptStream("admin", "stream-run", request, cursor).writeTo(replay);
+        var events = replay.toString(StandardCharsets.UTF_8).lines().map(line -> {
+            try { return json.readTree(line); }
+            catch (IOException failed) { throw new AssertionError(failed); }
+        }).toList();
+        assertEquals(operationId, events.getFirst().get("operation_id").asText());
+        long receivedCursor = cursor;
+        assertTrue(events.stream().filter(event -> "output".equals(event.get("type").asText()))
+                .allMatch(event -> event.get("seq").asLong() > receivedCursor));
+        var terminal = events.getLast();
+        assertEquals("result", terminal.get("type").asText());
+        assertEquals("FAILED", terminal.get("operation").get("status").asText());
+        assertTrue(terminal.get("operation").get("result").get("stdout").asText().contains("A😀"));
+        assertTrue(terminal.get("operation").get("result").get("stderr").asText().contains("B中"));
+        assertTrue(terminal.get("operation").get("result").get("work_settled").asBoolean());
+        assertEquals(1, adapter.starts.get());
+    }
+
+    @Test
+    void outputRecoveryReportsItsBoundedWindowAndRejectsFutureCursorsBeforeStarting() throws Exception {
+        ActorControlService service = service(4, 24, 64);
+        var opened = open(service, "stream-window-open"); executors.getFirst().runNext();
+        TransportNativeAdapter adapter = prepareNativeAdapter();
+        var request = scriptRequest(sessionId(opened), generation(opened),
+                "for (var i=0;i<400;i++) print(i); 'done'", Map.of(), 5000L,
+                new ScriptBinding("npc", "start", null, Map.of(), null, List.of()));
+        assertEquals("script_output_cursor_ahead", assertThrows(ObservationException.class,
+                () -> service.scriptStream("admin", "stream-window", request, 1)).reason());
+        assertEquals(0, adapter.starts.get());
+        var completed = service.scriptRun("admin", "stream-window", request);
+        var window = (Map<?, ?>) completed.get("script_output");
+        assertEquals(256, ((List<?>) window.get("items")).size());
+        assertEquals(true, window.get("cursor_expired"));
+        var replay = new ByteArrayOutputStream();
+        service.scriptStream("admin", "stream-window", request, 0).writeTo(replay);
+        var lines = replay.toString(StandardCharsets.UTF_8).lines().toList();
+        assertEquals("gap", new ObjectMapper().readTree(lines.get(1)).get("type").asText());
+        long latest = ((Number) window.get("latest_cursor")).longValue();
+        var tail = service.get("admin", id(completed), 0, 100, latest);
+        assertEquals(List.of(), ((Map<?, ?>) tail.get("script_output")).get("items"));
+        assertEquals(1, adapter.starts.get());
+    }
+
+    @Test
     void nativeTransportRetainsOneRuntimeContextAndProjectsOpenInvocationAndExplicitCloseDifferently() throws Exception {
         ActorControlService service = service(4, 24, 64);
         var opened = open(service, "native-context-open"); executors.getFirst().runNext();
@@ -3304,7 +3394,7 @@ class ActorControlServiceTest {
         var opened = open(service, "native-loop-open"); executors.getFirst().runNext();
         TransportNativeAdapter adapter = prepareNativeAdapter();
         var environment = new ScriptBinding("npc", "start", null, Map.of(), null, List.of());
-        var request = scriptRequest(sessionId(opened), generation(opened), "entered(); while (true) {}", Map.of(), 5000L, environment);
+        var request = scriptRequest(sessionId(opened), generation(opened), "print('before cancel'); entered(); while (true) {}", Map.of(), 5000L, environment);
         var running = CompletableFuture.supplyAsync(() -> service.scriptRun("admin", "native-loop", request));
         assertTrue(adapter.entered.await(5, TimeUnit.SECONDS), () -> running.isDone() ? String.valueOf(running.join()) : "native guest did not enter");
         var nativeScope = execution(service, opened).moduleScope();
@@ -3317,6 +3407,8 @@ class ActorControlServiceTest {
         assertEquals(true, result(cancelled).get("engine_exited"));
         assertEquals(true, result(cancelled).get("context_closed"));
         assertEquals(true, result(cancelled).get("invocation_settled"));
+        assertTrue(result(cancelled).get("stdout").toString().contains("before cancel"));
+        assertFalse(((List<?>) ((Map<?, ?>) cancelled.get("script_output")).get("items")).isEmpty());
         assertEquals(id(cancelled), id(running.get(5, TimeUnit.SECONDS)));
         assertEquals(0, nativeScope.snapshot().acceptedWork());
         assertEquals(0, nativeScope.snapshot().runningBodies());
@@ -3478,6 +3570,7 @@ class ActorControlServiceTest {
         final AtomicInteger starts = new AtomicInteger();
         final AtomicInteger closes = new AtomicInteger();
         final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
         volatile NativeScriptRequest accepted;
         @Override public Object start(NativeScriptSession session, NativeScriptRequest request) throws Exception {
             accepted = request;
@@ -3487,6 +3580,11 @@ class ActorControlServiceTest {
             session.captureEngine(engine, "transport-test.js");
             engine.put("entered", (ProxyExecutable) values -> {
                 entered.countDown(); return null;
+            });
+            engine.put("waitForRelease", (ProxyExecutable) values -> {
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException stopped) { Thread.currentThread().interrupt(); }
+                return null;
             });
             engine.eval("var count = 0; function next(value) { return {count: ++count, value: value}; }");
             return Map.of("started", true);

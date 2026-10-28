@@ -111,10 +111,10 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `game_observe` | scope=world/scene/actor、scene_ref、limit；actor 另需 session_id/expected_generation，可带 since_cursor | 已加载场景或专用角色的只读快照与包窗口，不创建地图或角色 | world/scene 为 R1；actor 为 #70 包事件观察 |
 | `actor_open` | profile_id、可选 world/channel、request_id | 排队原生登录，返回 operation_id 与 session/session_generation | R2a |
 | `actor_close` | session_id、expected_generation、request_id | 排队正常离线，查询清理及持久化核验结果，保留 fixture | R2a |
-| `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
+| `operation_get` | operation_id、since_cursor、limit、since_output | 操作终态、实时 session、原生角色快照、生命周期事件及已保留脚本输出 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
 | `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
-| `script_run` | session_id、expected_generation、request_id、kind、operation；按操作传context_id/options/entry/args，可带source/parameters/timeout_ms | 同步返回SCRIPT结果、输出或错误及真实收尾 | 只执行北斗脚本，按真实入口绑定cm/qm/pi/rm/em |
+| `script_run` | session_id、expected_generation、request_id、kind、operation；按操作传context_id/options/entry/args，可带source/parameters/timeout_ms/since_output | 执行中发送MCP进度输出，结束返回SCRIPT结果、错误及真实收尾 | 北斗脚本的cm/qm/pi/rm/em；流协议见脚本执行参考 |
 | `script_help` | session_id、expected_generation | 同源native_environments、本模块contexts与容量 | 只读，不分配脚本工作或operation |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。

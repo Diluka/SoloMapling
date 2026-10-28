@@ -137,6 +137,8 @@ python3 beidou-integration/scripts/build.py --help
 
 ## #216 北斗脚本上下文
 
+- #247 的 `script_run` 使用原 operation 的有界输出窗口，经 `/script/stream` NDJSON 和 MCP progress 通知交付 `started/output/gap/result`；输出通道共用序号，每通道16KiB、窗口256条。`since_output` 用于原请求恢复和 `operation_get.script_output`，与生命周期及包游标分别使用。源码、SDK、宿主展示和实际部署结果分层留证，具体协议见 `docs/robot-runtime/script-execution.md`。
+
 - `kind` 选择npc/quest/portal/reactor/event，`operation` 为start/invoke/close。帮助与实际适配器说明同源，不为北斗每个Java方法另造同义函数。NPC/QM复用原管理器、精确CM/QM、Client缓存引擎和回调状态；门户和机关来自当前实际地图；事件使用实际Channel与同一受管Invocable创建角色自有原生EventManager，不替换或取消频道共享事件。
 - 每模块最多一个持久Context，后续调用使用原context_id及原模块代次。`invocation_settled/work_settled` 证明本次调用结算；`context_closed=false,context_state=OPEN` 可以是正常保留，最终关闭另核引擎、精确原生会话和调度资源真实释放。不得接管或清理外来、后继CM/QM，旧世界或旧模块不能续权。
 - 提前取消尚未启动的invoke/close只取消本次调用，不自动关闭原Context；检查点从原运行体按精确context_id投影现有事实，无法确认时标UNKNOWN，不能凭CANCELLED或work已结算编造context_closed=true。start未创建上下文的NOT_STARTED只描述本次新建尝试。

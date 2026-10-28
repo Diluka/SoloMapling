@@ -20,6 +20,7 @@
 | `source` | 默认空字符串，最多 65,536 个 UTF-16 单元；非空时在同一北斗引擎中执行代码片段 |
 | `parameters` | JSON 对象，默认 `{}`，以同名对象供本次脚本读取 |
 | `timeout_ms` | 整数 1～5,000，默认 1,000；覆盖本次环境准备、执行和结果转换 |
+| `since_output` | 输出游标，默认 0；同一原请求恢复时填写已收到的最后输出序号 |
 
 `options`、`args`、`parameters` 的输入预算由服务端统一裁决：按服务端规范化 JSON 的 UTF-8 编码计算，三根总量最多 16,384 字节，每个根的深度最多 16。客户端保留 JSON 类型、有限数值、有效 Unicode、节点数和深度检查，不再用自身重编码的字节数作第二次预算裁决。不同编码器可能将同一数值写为 `1e+20` 或 `1.0E20`，客户端编码长度不能用来推定服务端是否接受；超出服务端预算的请求明确拒绝，不进入原生执行。
 
@@ -30,6 +31,30 @@
 缺少 `kind/operation` 或提交旧 `environment` 字段时拒绝请求。脚本内仍可做参数运算、整理结果和语言输出，这些代码始终运行在选定的北斗上下文中。
 
 ## 输出和结果
+
+`script_run` 在执行过程中通过 MCP progress 通知发送增量输出，通知的 `message` 是 JSON 文本。官方 SDK 调用方传入 `progress_callback` 接收通知；客户端是否展示进度按实际宿主验收记录判断。后端使用 `POST /solo/acceptance/v1/script/stream?since_output=0` 的 NDJSON 响应，沿用原脚本请求信封与幂等记录。
+
+| `type` | 内容 |
+|---|---|
+| `started` | 本次 `request_id` 和原 `operation_id` |
+| `output` | `seq`、`channel`（stdout/stderr）、增量 `text` 和 `output_truncated`，以及请求与操作 ID |
+| `gap` | 有界窗口已失去部分输出时的 `oldest_cursor/latest_cursor` |
+| `result` | 最终 `operation`；MCP 工具响应返回这份原结果 |
+
+输出序号在同一 operation 内递增，两个通道共用顺序。`since_output` 与生命周期的 `since_cursor`、角色包的 `since_cursor` 分别使用。每个 operation 保留最近 256 个输出事件；通过 `operation_get(operation_id, since_output=…)` 的 `script_output` 读取已保留输出及 `next_cursor/oldest_cursor/latest_cursor/cursor_expired/output_truncated`。恢复流时使用完全相同的原请求和原 `request_id`，另带输出游标；断线后的执行状态及取消结果从原 operation 核对。
+
+```python
+import json
+
+async def receive_output(progress, total, message):
+    event = json.loads(message)
+    if event["type"] == "output":
+        print(event["text"], end="", flush=True)
+
+result = await client.call_tool(
+    "script_run", invocation, progress_callback=receive_output
+)
+```
 
 `console`、`print` 等语言输出按 UTF-8 收集到本次 `stdout/stderr`，保留分片写入的完整 Unicode 字符；每路最多 16,384 字节，超出设置 `output_truncated=true`。这是脚本语言输出，游戏聊天仍沿角色的原生字符集规则。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
 

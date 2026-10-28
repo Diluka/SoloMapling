@@ -8,10 +8,10 @@
 | `game_observe` | 观察 world、真实 scene_ref 或已打开角色的包事件窗口 | 只读，不加载地图或创建实例 |
 | `actor_open` | 为已配置的专用 profile 排队执行原生登录 | 可能创建专用 fixture、更新登录状态；必须有 request_id |
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
-| `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
+| `operation_get` | 查询操作、当前角色会话、生命周期事件及已保留脚本输出 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 | `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC 及运行体基本动作，当前源码包含十三动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
-| `script_run` | 按kind/operation在现有角色运行体执行北斗原脚本及后续代码，收集输出和JSON结果 | 必须有request_id；可保留上下文并产生实际游戏副作用 |
+| `script_run` | 按kind/operation执行北斗原脚本，实时发送输出并返回最终JSON结果 | 必须有request_id；可保留上下文并产生实际游戏副作用 |
 | `script_help` | 查询实际北斗环境、原入口、存活上下文与容量 | 只读；不创建脚本work或operation |
 | `game_command_help` | 查询独立管理指令的实际范围、参数和管理进程代次 | 只读；需启用 debug-commands-enabled |
 | `game_command` | 对已登记在线调试角色执行完整原生命令文本 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
@@ -96,15 +96,17 @@ enabled = true
 | `game_observe(scope="actor", session_id="…", expected_generation=1, since_cursor=0, limit=100)` | `POST /solo/acceptance/v1/actor/observe`，data 仅为这四个角色/窗口参数 |
 | `actor_open(profile_id="primary", request_id="open-unique-1")` | `POST /solo/acceptance/v1/actor/open`，data 为 profile_id 与可选 world/channel |
 | `actor_close(session_id="…", expected_generation=1, request_id="close-unique-1")` | `POST /solo/acceptance/v1/actor/close` |
-| `operation_get(operation_id="…", since_cursor=0, limit=100)` | `GET /solo/acceptance/v1/operation/{id}?since_cursor=0&limit=100` |
+| `operation_get(operation_id="…", since_cursor=0, limit=100, since_output=0)` | `GET /solo/acceptance/v1/operation/{id}?since_cursor=0&limit=100&since_output=0` |
 | `operation_cancel(operation_id="…", request_id="cancel-unique-1")` | `POST /solo/acceptance/v1/operation/{id}/cancel`，data 为空对象 |
 | `game_act(session_id="…", expected_generation=1, request_id="chat-unique-1", action="chat", parameters={"text":"实际原文"}, expected_context={"scene_ref":"…","runtime_generation":"…"})` | `POST /solo/acceptance/v1/actor/act`，请求 ID 只放外层信封 |
 | `game_act(…, action="npc_center_open", parameters={})` | 同一路由，固定原生中心入口，不接受 NPC 模板或脚本名 |
 | `game_act(…, action="npc_cancel", parameters={"dialogue_version":123})` | 同一路由，版本必须来自当前实际 actor 对话 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":123,"kind":"select","selection":0})` | 同一路由，只能选择当前完整 offer 中已审查的项目 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":124,"kind":"decline"})` | 同一路由，拒绝实际 type12 按钮，不带 selection |
-| `script_run(session_id="…", expected_generation=1, request_id="npc-start-unique-1", kind="npc", operation="start", options={"npc_id":1032110})` | `POST /solo/acceptance/v1/script/run`，data为角色目标及平铺kind/operation/context_id/options/entry/args/source/parameters/timeout_ms |
+| `script_run(session_id="…", expected_generation=1, request_id="npc-start-unique-1", kind="npc", operation="start", options={"npc_id":1032110}, since_output=0)` | `POST /solo/acceptance/v1/script/stream?since_output=0`，data为角色目标及平铺kind/operation/context_id/options/entry/args/source/parameters/timeout_ms |
 | `script_help(session_id="…", expected_generation=1)` | `POST /solo/acceptance/v1/script/help`，只读列实际环境与上下文，不占操作历史 |
+
+`script_run` 的中间输出经 MCP progress 通知交付，`message` 为带请求／操作ID的 JSON 事件。官方 SDK 调用 `client.call_tool(..., progress_callback=...)` 可在最终结果前接收 `started/output/gap`；完整事件字段和示例见[实时输出](../../docs/robot-runtime/script-execution.md#输出和结果)。`since_output` 默认0，恢复时使用原请求及已收到的最后输出序号；`operation_get.script_output` 提供保留窗口与缺失标记。
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
 
