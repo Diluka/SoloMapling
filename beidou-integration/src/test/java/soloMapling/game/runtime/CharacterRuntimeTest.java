@@ -369,6 +369,73 @@ class CharacterRuntimeTest {
     }
 
     @Test
+    void lateFactoryResultRetainsItsStoppedReferenceAndUsesOnlyTheOriginalRootCleanupWindow() {
+        Fixture fixture = manual();
+        var work = fixture.runtime.acceptOpeningWork();
+        AtomicReference<TestRole> late = new AtomicReference<>();
+        fixture.runtime.submitOpening(work, () -> {
+            var origin = fixture.runtime.reserveOrigin(work);
+            var stop = ExecutionScope.beginWorldStop();
+            fixture.runtime.beginClose(Optional.of(stop));
+            TestRole result = new TestRole(WorldEpoch.snapshot().token());
+            late.set(result);
+            assertSame(stop.stoppedEpoch(), result.characterRef().epoch());
+            assertNotSame(fixture.runtime.acceptedEpoch(), result.characterRef().epoch());
+
+            origin.adopt(result);
+            assertEquals(1, fixture.runtime.lifecycleScope().resources().snapshot().attached());
+            assertEquals(0, fixture.runtime.lifecycleScope().resources().snapshot().pending());
+            assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::bindAdoptedOrigin);
+            assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::observeOrigin);
+            assertSame(stop.stoppedEpoch(), result.characterRef().epoch());
+            assertFalse(fixture.runtime.originReleased());
+
+            var cleanup = fixture.runtime.acquireOriginCleanup();
+            assertSame(fixture.runtime.lifecycleScope(), cleanup.work().scope());
+            assertSame(fixture.runtime.acceptedEpoch(), cleanup.work().acceptedEpoch());
+            fixture.runtime.lifecycleScope().runTracked(cleanup.work(), () -> fixture.runtime.releaseOrigin(cleanup));
+            assertTrue(fixture.runtime.originReleased());
+        }, () -> {});
+        fixture.runQueued();
+        assertTrue(work.isSettled());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
+        assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+        assertEquals(1, late.get().releases.get());
+        assertFalse(late.get().online);
+        assertEquals(0, fixture.role.releases.get());
+    }
+
+    @Test
+    void lateFactoryResultAfterRestartRemainsOwnedButCannotBindOrBorrowTheNewWorldsCleanupWindow() {
+        Fixture fixture = manual();
+        var work = fixture.runtime.acceptOpeningWork();
+        AtomicReference<TestRole> late = new AtomicReference<>();
+        fixture.runtime.submitOpening(work, () -> {
+            var origin = fixture.runtime.reserveOrigin(work);
+            fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+            WorldEpoch.onWorldStarted();
+            TestRole result = new TestRole(WorldEpoch.snapshot().token());
+            late.set(result);
+
+            origin.adopt(result);
+            assertEquals(1, fixture.runtime.lifecycleScope().resources().snapshot().attached());
+            assertEquals(0, fixture.runtime.lifecycleScope().resources().snapshot().pending());
+            assertNotSame(fixture.runtime.acceptedEpoch(), result.characterRef().epoch());
+            assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::bindAdoptedOrigin);
+            assertThrows(RuntimeException.class, fixture.runtime::acquireOriginCleanup);
+            assertThrows(RuntimeException.class, origin::confirmAbsent);
+            assertFalse(fixture.runtime.originReleased());
+        }, () -> {});
+        fixture.runQueued();
+        assertTrue(work.isSettled());
+        assertEquals(1, fixture.runtime.lifecycleScope().resources().snapshot().outstanding());
+        assertNotEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(Duration.ZERO));
+        assertEquals(CharacterRuntime.State.CLOSING, fixture.runtime.snapshot().state());
+        assertEquals(0, late.get().releases.get());
+        assertTrue(late.get().online);
+    }
+
+    @Test
     void aNewWorldCannotRenewAnOldOriginCleanupWindowOrAnOldModuleContext() {
         Fixture fixture = opened();
         var context = fixture.runtime.context(fixture.mount("mcp", Set.of("chat")));
