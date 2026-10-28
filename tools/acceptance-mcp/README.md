@@ -12,6 +12,8 @@
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 | `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC及运行体基本动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
 
+基本调试入口按 [#200](https://github.com/Diluka/SoloMapling/issues/200) 逐片交付，后续同步脚本由 [#199](https://github.com/Diluka/SoloMapling/issues/199) 单独验收；能力公告只列实际已实现的工具、动作和观察范围。
+
 R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]`、三种动作 `chat/npc_center_open/npc_cancel`、增加 `npc_reply` 的四动作组合，或再增加 `inventory_move` 的五动作组合；五动作后端也可独立公告已实现的移动、停止、普攻及物品动作。顶层和 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅包含已审查路径的 `select/decline`；没有礼包 accept、任意 NPC、未审查选项、任意封包或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 `inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；此动作不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。

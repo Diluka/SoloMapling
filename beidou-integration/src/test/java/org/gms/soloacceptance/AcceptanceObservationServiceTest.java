@@ -76,7 +76,6 @@ class AcceptanceObservationServiceTest {
         Map<String, Object> result = observations.capabilities();
         assertEquals(List.of("game_capabilities", "game_observe"), result.get("enabled_tools"));
         assertEquals(List.of(), result.get("actions"));
-        assertEquals(List.of(), result.get("recipes"));
         assertEquals(true, result.get("server_online"));
         Map<?, ?> source = assertInstanceOf(Map.class, result.get("source"));
         assertEquals("test-revision", source.get("soloGitRevision"));

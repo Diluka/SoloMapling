@@ -27,7 +27,6 @@ CAPABILITIES = {
     "enabled_tools": ["game_capabilities", "game_observe"],
     "source": {"available": True, "soloGitRevision": "a" * 40, "beidouRevision": "b" * 40},
     "actions": [],
-    "recipes": [],
 }
 SCENE_CONTEXT = {
     "scene_ref": "scene-fixture-1",

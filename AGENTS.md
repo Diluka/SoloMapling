@@ -72,7 +72,7 @@ python3 beidou-integration/scripts/build.py --help
 - 可以用 MCP 验证从上游迁入的机器人行为。先记录实际请求、场景/角色/运行代次、回复及正常规则，再为确认问题建立独立缺陷 Issue；修复后重跑同一场景，保留修复前后证据，验收完成即关闭。
 - 新的角色写路径先在临时库或一致副本验证，再按已授权的备份和部署冒烟流程使用真实库。使用专用原生测试账号/角色，不能接管普通玩家、提升 GM/webadmin，或把环境模板复制改 ID 当作真实持久角色。
 - 操作已排队、原生动作完成和游戏目标达成分别记录。MCP 超时/取消不等于后台停止；开关角色、NPC、队伍和任务副作用必须以实际后态验证，不能以原生方法的 void 返回作证。
-- 每次能力变化同步更新工具说明、接口/配置文档和相关 `AGENTS.md`。实际能力以 `game_capabilities` 为准；工作区配置、官方 SDK 协议调用、宿主原生工具加载及真实客户端玩法验收分别留证。
+- 每次能力变化同步更新工具说明、接口/配置文档和相关 `AGENTS.md`。能力公告只维护已实现的工具、动作和观察范围，基本调试入口按 #200 逐片交付，后续同步脚本由 #199 单独验收。实际能力以 `game_capabilities` 为准；工作区配置、官方 SDK 协议调用、宿主原生工具加载及真实客户端玩法验收分别留证。
 - R2a 的原生角色控制需同时启用 `solomapling.acceptance.enabled` 与 `actors-enabled`，并在本地配置专用 `actor-profiles`。MCP 仅接收 profile ID，不接收账号密码或任意角色 ID；账号使用 `mcp_` 前缀且无 GM/webadmin。`AcceptanceClient` 直接继承北斗 `Client`，不登记为环境 bot。
 - 原生登录前同时准备 Server 的账号缓存和目标 World 的原生角色视图。同 JVM 停启世界会保留前者并重建后者；验收需包含停启后相同 CID 重登、保存退出和旧场景代次失效，不能只验证首次启动。
 - `actor_open`、`actor_close`、`operation_cancel` 必须携带调用方生成的请求 ID；写请求超时不盲目重放，按原 ID 与 operation/session 检查点恢复。操作受理不等于成功；关闭以原生清理和已声明范围内的持久字段核验为准，失败保留 fixture 和 quarantine。
