@@ -108,6 +108,55 @@ final class AcceptanceActorExecution {
         requireModule().recordResult(work, result);
     }
 
+    record ModuleControlFacts(String runtimeId, String rootState, long generation, String state) { }
+
+    ModuleControlFacts moduleControlFacts() {
+        CharacterRuntime.Snapshot state = runtime.snapshot();
+        CharacterRuntime.ModuleSnapshot attached = state.modules().stream()
+                .filter(entry -> entry.instanceId().equals(moduleInstance)).findFirst().orElse(null);
+        return new ModuleControlFacts(state.runtimeId(), state.state().name(),
+                attached == null ? moduleGeneration : attached.generation(),
+                attached == null ? "UNLOADED" : attached.state().name());
+    }
+
+    void requireModuleControl(long expectedGeneration, String operation) {
+        ModuleControlFacts current = moduleControlFacts();
+        if (current.generation() != expectedGeneration) {
+            throw new ObservationException(HttpStatus.CONFLICT, "actor_module_generation_mismatch");
+        }
+        String required = "pause".equals(operation) ? "ACTIVE" : "SUSPENDED";
+        if (!"BOUND".equals(current.rootState()) || !required.equals(current.state())) {
+            throw new ObservationException(HttpStatus.CONFLICT,
+                    "pause".equals(operation) ? "actor_module_not_pauseable" : "actor_module_not_resumeable");
+        }
+        try { runtime.lifecycleScope().requireActive(); }
+        catch (ExecutionScope.Invalid inactive) {
+            WorldEpoch.State world = WorldEpoch.snapshot();
+            if (!world.active() || world.token() != runtime.acceptedEpoch()) {
+                throw new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_world_offline");
+            }
+            throw new ObservationException(HttpStatus.CONFLICT, "actor_module_control_unavailable");
+        }
+    }
+
+    CharacterRuntime.ModuleStop pauseModule(long expectedGeneration) {
+        requireModuleControl(expectedGeneration, "pause");
+        CharacterRuntime.ModuleStop stopped = runtime.stop(requireModule().reference(), CharacterRuntime.StopMode.PAUSE);
+        refreshDiagnostics();
+        return stopped;
+    }
+
+    ModuleControlFacts resumeModule(long expectedGeneration) {
+        requireModuleControl(expectedGeneration, "resume");
+        // Resuming grants fresh control. Revalidate the trusted native source immediately
+        // before activation, rather than treating the cached BOUND/SUSPENDED state as authority.
+        observeOrigin();
+        CharacterRuntime.ModuleRef resumed = runtime.activate(requireModule().reference());
+        moduleGeneration = resumed.generation();
+        refreshDiagnostics();
+        return moduleControlFacts();
+    }
+
     Map<String, Object> observeOrigin() {
         try {
             Map<String, Object> facts = new LinkedHashMap<>(runtime.observeOrigin());

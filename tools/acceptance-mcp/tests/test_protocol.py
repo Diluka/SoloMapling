@@ -10,7 +10,8 @@ import unittest
 from mcp import Client
 
 from solo_acceptance_mcp.server import build_server
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS, run_smoke
+from solo_acceptance_mcp.smoke import (IMPLEMENTED_TOOLS, LEGACY_IMPLEMENTED_TOOLS,
+                                      require_capabilities, run_smoke)
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN
 
 
@@ -20,6 +21,29 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
+
+    def test_module_control_capabilities_require_its_own_metadata_and_preserve_legacy_subsets(self) -> None:
+        capabilities = deepcopy(CAPABILITIES)
+        capabilities.update(implementation_round="R2a", enabled_tools=sorted(IMPLEMENTED_TOOLS), actions=["chat"])
+        module = {
+            "operations": ["pause", "resume"], "target": "session_mcp_control",
+            "expected_module_generation_required": True, "pause_preserves_native_dialogue": True,
+            "cancellation": "continues_after_acceptance", "completion": "host_module_lifecycle",
+        }
+        capabilities["actor_control"] = {"actions": ["chat"], "module_control": module}
+        self.assertEqual(sorted(IMPLEMENTED_TOOLS), require_capabilities(
+            capabilities, sorted(IMPLEMENTED_TOOLS), actors=True, module_control=True))
+        for key in module:
+            invalid = deepcopy(capabilities)
+            invalid["actor_control"]["module_control"].pop(key)
+            with self.subTest(missing=key), self.assertRaises(RuntimeError):
+                require_capabilities(invalid, sorted(IMPLEMENTED_TOOLS))
+        legacy = deepcopy(capabilities)
+        legacy["enabled_tools"] = sorted(LEGACY_IMPLEMENTED_TOOLS)
+        legacy["actor_control"].pop("module_control")
+        self.assertEqual(sorted(LEGACY_IMPLEMENTED_TOOLS), require_capabilities(legacy, sorted(IMPLEMENTED_TOOLS)))
+        with self.assertRaises(RuntimeError):
+            require_capabilities(legacy, sorted(IMPLEMENTED_TOOLS), module_control=True)
 
     async def test_implemented_tools_keep_observation_read_only_and_bounded(self) -> None:
         async with Client(build_server(self.stub.config())) as client:

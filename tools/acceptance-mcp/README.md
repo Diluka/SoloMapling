@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、中心及有限回复，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现八个工具，实际后端是否已开启角色控制、模块暂停/恢复、聊天、中心及有限回复，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -8,6 +8,7 @@
 | `game_observe` | 观察 world、真实 scene_ref 或已打开角色的包事件窗口 | 只读，不加载地图或创建实例 |
 | `actor_open` | 为已配置的专用 profile 排队执行原生登录 | 可能创建专用 fixture、更新登录状态；必须有 request_id |
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
+| `actor_control` | 暂停或恢复自己会话内固定的 MCP 控制模块 | 保留角色与既有 NPC 对话；必须有 request_id 和当前模块代次 |
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 | `game_act` | 在真实 actor 场景中排队 `chat`、`npc_center_open`、`npc_cancel` 或 `npc_reply` | 写操作；必须有 request_id 和实际 expected_context |
@@ -67,6 +68,7 @@ enabled = true
 | `game_observe(scope="actor", session_id="…", expected_generation=1, since_cursor=0, limit=100)` | `POST /solo/acceptance/v1/actor/observe`，data 仅为这四个角色/窗口参数 |
 | `actor_open(profile_id="primary", request_id="open-unique-1")` | `POST /solo/acceptance/v1/actor/open`，data 为 profile_id 与可选 world/channel |
 | `actor_close(session_id="…", expected_generation=1, request_id="close-unique-1")` | `POST /solo/acceptance/v1/actor/close` |
+| `actor_control(session_id="…", expected_generation=1, expected_module_generation=2, operation="pause", request_id="pause-unique-1")` | `POST /solo/acceptance/v1/actor/module/control`，request_id 仅放外层信封 |
 | `operation_get(operation_id="…", since_cursor=0, limit=100)` | `GET /solo/acceptance/v1/operation/{id}?since_cursor=0&limit=100` |
 | `operation_cancel(operation_id="…", request_id="cancel-unique-1")` | `POST /solo/acceptance/v1/operation/{id}/cancel`，data 为空对象 |
 | `game_act(session_id="…", expected_generation=1, request_id="chat-unique-1", action="chat", parameters={"text":"实际原文"}, expected_context={"scene_ref":"…","runtime_generation":"…"})` | `POST /solo/acceptance/v1/actor/act`，请求 ID 只放外层信封 |
@@ -77,11 +79,15 @@ enabled = true
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
 
-四种写调用都要求调用方提供 `request_id`，它是原生信封的 `requestId`。客户端成功和 HTTP/传输错误都会保留该 ID。HTTP `401` 最多刷新一次 JWT 并重发同一信封；超时或连接错误不会自动重放写请求。写请求结果未知时返回 `outcome_unknown=true`、`retryable=false`，应先查询已有操作，或明确使用原请求 ID 恢复，不换新 ID 盲重试。无效参数在发 HTTP 前拒绝。
+所有写调用都要求调用方提供 `request_id`，它是原生信封的 `requestId`。客户端成功和 HTTP/传输错误都会保留该 ID。HTTP `401` 最多刷新一次 JWT 并重发同一信封；超时或连接错误不会自动重放写请求。写请求结果未知时返回 `outcome_unknown=true`、`retryable=false`，应先查询已有操作，或明确使用原请求 ID 恢复，不换新 ID 盲重试。无效参数在发 HTTP 前拒绝。
 
 `actor_open` 只按后端明确配置的 profile 工作，可选 world/channel 必须符合后端 profile。打开返回 `QUEUED` 只表示已受理；查询到 `SUCCEEDED`、`observed_outcome=native_actor_online`、原生在线和实际场景身份后才确认登录。已关闭 session 的旧打开请求必须返回原操作，不能重新创建角色。
 
 `actor_close` 同样可能先排队。需查询到原生关闭结果、`native_cleanup_verified=true` 和 `persisted_state_verified=true`，才能确认保存与离线。`operation_cancel` 仅请求取消；不能把 `CANCEL_REQUESTED` 当作已经停止或已清理。
+
+`actor_control` 是 MCP 外层的受控生命周期入口，只接受该会话自己的固定 `mcp-control` 模块，当前 `operation` 为 `pause/resume`。`expected_generation` 仍表示角色会话代次，`expected_module_generation` 来自最近的 `actor.runtime.module.generation` 或 `session.runtime.module.generation`；它们不能互换，也不接收 runtime/CID、模块类名、代码或 `expected_context`。额外字段、非严格正整数代次和其他操作均在 HTTP 前安全拒绝。只有后端 `enabled_tools` 包含 `actor_control`，并公告 `actor_control.module_control` 的固定目标、代次、对话保留和完成契约时，才表示该能力可用；旧两项、六项、七项后端仍可执行原有验收。
+
+控制操作返回 `kind=MODULE_CONTROL/module_operation=pause|resume`，沿原请求 ID 与 `operation_get` 轮询。暂停成功需 `observed_outcome=actor_module_paused`、`module_state=SUSPENDED`、`module_control_complete=true` 和 `module_drained=true`；恢复成功为 `actor_module_resumed`、`module_state=ACTIVE`，并返回新的模块代次。受理、停止输入和真实排空不是同一事实，`QUEUED/CANCEL_REQUESTED` 不能当作暂停成功。暂停保留原生角色、根宿主/lane和已打开CM，角色观察及外部 `actor_close` 继续可达；恢复由外层接收，不依赖已暂停模块。已受理的生命周期收尾不会因取消自动回滚，结果按后端事实记录；旧代次或并发冲突保持409，结果未知不盲重放。卸载、重挂、移动和其他动作不由本轮 `pause/resume` 自动获得。
 
 `game_act` 的 schema 将动作与参数分支关联：chat 只能有 `text`，中心打开必须 `{}`，取消只能有正的严格 long `dialogue_version`。回复分支由 `kind` 进一步区分：select 必须附严格整数 `selection`（0～2147483647），decline 不带 selection，两者都须有正的严格 long 版本；accept 明确拒绝。场景对象仅有 `scene_ref/runtime_generation`；顶层及嵌套多余字段都安全拒绝，不回显非法值。聊天文本按 Java UTF-16 单元计算1～127的长度，拒绝全空白及首字符 `@`、`/`，保留提交原文而不 trim。客户端不猜测角色编码；后端按原生字符集严格编码，中文 GBK 无法表示的字符会失败，不静默替换成问号。`!` 仍按普通角色的原生规则处理。
 
@@ -111,7 +117,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、七工具读写注解，以及官方 SDK 的真实 stdio 正反例。
+测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、八工具读写注解，以及官方 SDK 的真实 stdio 正反例。
 
 实际后端的只读检查不打开角色：
 
@@ -121,7 +127,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
   --output /absolute/evidence/mcp-observation.json
 ```
 
-它检查客户端七工具及桥当前合法的两项、六项或七项开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色控制已通过。
+它检查客户端八工具及桥当前合法的两项、六项、七项或八项开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色控制已通过。
 
 ## 显式目标的原生角色验收
 
@@ -162,7 +168,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
   --output /absolute/evidence/actor-events.json
 ```
 
-目标、profile 和证据路径均必填，地址必须与配置完全一致；`page-limit` 默认为1，范围1～500。先检查客户端七工具、actor scope 及实际解码/游标能力，再正常打开角色，核对角色、会话、运行代次和当前真实场景。它按包序号分页，拒绝同会话最新序号回退，确认同游标重读保持已见前缀、尾页及空页游标正确。未来游标探针使用 `Long.MAX_VALUE`，避免正常新包到达使“上一尾页+1”变成合法游标。脚本查找实际 type4、ticker=true 的系统公告；正文可以为空，不匹配固定欢迎语。
+目标、profile 和证据路径均必填，地址必须与配置完全一致；`page-limit` 默认为1，范围1～500。先检查客户端八工具、actor scope 及实际解码/游标能力，再正常打开角色，核对角色、会话、运行代次和当前真实场景。它按包序号分页，拒绝同会话最新序号回退，确认同游标重读保持已见前缀、尾页及空页游标正确。未来游标探针使用 `Long.MAX_VALUE`，避免正常新包到达使“上一尾页+1”变成合法游标。脚本查找实际 type4、ticker=true 的系统公告；正文可以为空，不匹配固定欢迎语。
 
 随后正常保存退出，验证旧会话不能再读取正文；同一原生 CID 以新会话重新打开后，旧会话仍被拒绝，最后再次正常退出。每页及负向探针的证据逐步保存，失败不会覆写为通过；写结果未知、畸形收据和中断恢复沿用生命周期 CLI 的处理。
 
@@ -221,3 +227,22 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
 每步记录实际包、版本、可信路径和当前offer，验证隐藏61～68/999、未审项目3、旧版和已消费版被拒；同原ID重放不得多发包或前进，最终完整窗口核对全部NPC序号，避免迟到重复。重新打开的点击间隔继续按500ms加实际缓存时钟周期再加1ms等待，拒绝或未知结果都不盲重试，并正常关闭已知角色。
 
 公开快照前后比较地图/场景/位置、等级经验、金币、三种券、背包和任务，保存重开不要求完全相同 x/y。`claim_marker_verified_via_cli=false` 与 `return_location_storage_verified_via_cli=false` 明确保留：固定“新人福利礼包”领取标记和持久返回位置由独立数据库审计补证，CLI没有新增查询任意扩展键或数据库能力。通过本项不代表 accept、领取收益、目的地选择、付费出行或真实客户端已验收。
+
+## 显式目标的 MCP 模块暂停／恢复验收
+
+[#145](https://github.com/Diluka/SoloMapling/issues/145) 的源码实现范围为固定 `mcp-control` 模块的暂停和恢复，实际交付状态以 Issue 及后端 capabilities 为准。先在隔离副本验证，再按正常备份部署流程复验：
+
+```bash
+.venv/bin/python -m solo_acceptance_mcp.actor_control_smoke \
+  --config /absolute/private/solo-acceptance.validation.json \
+  --profile primary \
+  --expected-base-url http://explicitly-verified-isolated-address:8686 \
+  --expected-revision FIXED_40_CHARACTER_SOURCE_REVISION \
+  --output /absolute/evidence/new-module-control-run.json
+```
+
+配置、profile、显式目标和新的证据路径均必填；`--expected-revision` 可选，提供时必须精确匹配实际 clean 构建。SDK 子进程显式绑定调用方自身的工具源码，使用其他工作树已锁定虚拟环境时不会误加载其 editable 源码，也不转发整个进程环境。
+
+流程沿官方 stdio 登录后打开原生中心首屏，记录宿主与当前模块代次；pause 的真实完成必须是模块 `SUSPENDED` 且 `module_drained=true`。暂停后继续读取 actor／包窗口，核对角色、根宿主／lane和原生对话保留，普通聊天与 NPC 取消均明确拒绝且没有相应新包。resume 必须得到新的模块代次并保留同一宿主和角色，再观察、发送一条带随机标记的中文聊天并独立匹配真实自身回声，最后正常取消 NPC、关闭根宿主、同 CID 存档重开并再次关闭。
+
+原 ID 重放只能恢复既有结果，不能再次暂停已恢复模块；新请求携带旧模块代次应拒绝。每次写入前保存原 ID 和两类代次，结果未知不自动重放控制；已知角色仍可通过独立根关闭清理，模块控制未知和关闭未知分别留在 `module_recovery` 与 `recovery`，清理成功不抹掉失败。报告不把操作受理、取消请求或 Future 完成当成真实排空，不把本轮通过扩展为卸载重挂、生产自主或完整角色控制已完成。

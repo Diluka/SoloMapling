@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from mcp import Client, StdioServerParameters
 
-from solo_acceptance_mcp.smoke import require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS, require_capabilities
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 
 
@@ -130,6 +130,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
             config = self.stub.write_config(Path(directory) / "private.json", timeout=timeout)
             params = StdioServerParameters(
                 command=sys.executable, args=["-m", "solo_acceptance_mcp", "--config", str(config)], cwd=root,
+                env={"PYTHONPATH": str(root / "src")},
             )
             async with Client(params, read_timeout_seconds=10) as client:
                 yield client
@@ -137,11 +138,11 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
     def action_requests(self) -> list[dict]:
         return [request for request in self.stub.requests if request["path"] == ACT_PATH]
 
-    async def test_stdio_registers_exactly_seven_tools_with_explicit_chat_mutation_annotations(self) -> None:
+    async def test_stdio_registers_exactly_eight_tools_with_explicit_chat_mutation_annotations(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
             caps = await client.call_tool("game_capabilities", {})
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(IMPLEMENTED_TOOLS, set(tools))
         annotations = tools["game_act"].annotations
         self.assertFalse(annotations.read_only_hint)
         self.assertFalse(annotations.destructive_hint)
@@ -397,22 +398,22 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_capability_helper_accepts_only_complete_supported_backend_tool_subsets(self) -> None:
         for enabled in [OBSERVATION_TOOLS, OBSERVATION_TOOLS | ACTOR_TOOLS, TOOLS]:
             with self.subTest(enabled=enabled):
-                self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(TOOLS)))
+                self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(IMPLEMENTED_TOOLS)))
                 if "game_act" in enabled:
-                    self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(TOOLS), chat=True))
+                    self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(IMPLEMENTED_TOOLS), chat=True))
                 else:
                     with self.assertRaises(RuntimeError):
-                        require_capabilities(capabilities(enabled), sorted(TOOLS), chat=True)
+                        require_capabilities(capabilities(enabled), sorted(IMPLEMENTED_TOOLS), chat=True)
         for enabled in [OBSERVATION_TOOLS | {"game_act"}, OBSERVATION_TOOLS | {"actor_open"},
                         TOOLS - {"actor_close"}, TOOLS | {"recipe_run"}]:
             with self.subTest(enabled=enabled), self.assertRaises(RuntimeError):
-                require_capabilities(capabilities(enabled), sorted(TOOLS))
+                require_capabilities(capabilities(enabled), sorted(IMPLEMENTED_TOOLS))
         for field in ["actions", "actor_control"]:
             for value in [None, [], {}, ["npc"]]:
                 invalid = capabilities(TOOLS)
                 invalid[field] = value
                 with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
-                    require_capabilities(invalid, sorted(TOOLS))
+                    require_capabilities(invalid, sorted(IMPLEMENTED_TOOLS))
 
     async def test_stdio_backend_with_chat_disabled_is_not_promoted_by_the_registered_game_act_tool(self) -> None:
         old_capabilities = capabilities(OBSERVATION_TOOLS | ACTOR_TOOLS)
@@ -423,7 +424,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with self.stdio_client() as client:
             names = [tool.name for tool in (await client.list_tools()).tools]
             response = await client.call_tool("game_capabilities", {})
-        self.assertEqual(TOOLS, set(names))
+        self.assertEqual(IMPLEMENTED_TOOLS, set(names))
         self.assertEqual(old_capabilities, response.structured_content)
         self.assertNotIn("game_act", require_capabilities(response.structured_content, names, actors=True))
         self.assertEqual([], response.structured_content["actions"])

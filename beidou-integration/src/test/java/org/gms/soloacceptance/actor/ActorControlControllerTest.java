@@ -70,6 +70,8 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.act(null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
+                assertThrows(ObservationException.class, () -> controller.controlModule(null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
@@ -81,6 +83,8 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.act(null)).status());
+        assertEquals(HttpStatus.FORBIDDEN,
+                assertThrows(ObservationException.class, () -> controller.controlModule(null)).status());
         verifyNoInteractions(service);
     }
 
@@ -173,8 +177,58 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.BAD_REQUEST,
                 assertThrows(ObservationException.class, () -> controller.act(new SubmitBody<>("request", null))).status());
         assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ObservationException.class, () -> controller.controlModule(null)).status());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ObservationException.class, () -> controller.controlModule(new SubmitBody<>("request", null))).status());
+        assertEquals(HttpStatus.BAD_REQUEST,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
         verifyNoInteractions(service);
+    }
+
+    @Test
+    void moduleControlDelegatesTheOwnedSessionAndOuterRequestId() {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("operator-a", "ROLE_ADMIN");
+        var data = new ActorModuleControlRequest("session-id", 7L, 2L, "pause");
+        Map<String, Object> receipt = Map.of("kind", "MODULE_CONTROL", "status", "RUNNING");
+        when(service.controlModule("operator-a", "module-request", data)).thenReturn(receipt);
+        var response = controller.controlModule(new SubmitBody<>("module-request", data));
+        assertEquals(20000, response.getCode());
+        assertEquals("module-request", response.getResponseId());
+        assertSame(receipt, response.getData());
+        verify(service).controlModule("operator-a", "module-request", data);
+        verifyNoMoreInteractions(service);
+    }
+
+    @Test
+    void moduleControlDtoRejectsUnknownTargetsAndJacksonCoercionEvenWhenTheHostIsLenient() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        String input = "{\"session_id\":\"session-id\",\"expected_generation\":7,\"expected_module_generation\":2,\"operation\":\"pause\"}";
+        assertEquals(new ActorModuleControlRequest("session-id", 7L, 2L, "pause"),
+                mapper.readValue(input, ActorModuleControlRequest.class));
+        for (String field : List.of("expected_generation", "expected_module_generation")) {
+            for (String value : List.of("1.0", "\"2\"", "true", "9223372036854775808")) {
+                ObjectNode body = (ObjectNode) mapper.readTree(input);
+                body.set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorModuleControlRequest.class), field + "=" + value);
+            }
+        }
+        for (String field : List.of("session_id", "operation")) {
+            for (String value : List.of("1", "true", "[]", "{}")) {
+                ObjectNode body = (ObjectNode) mapper.readTree(input);
+                body.set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorModuleControlRequest.class), field + "=" + value);
+            }
+        }
+        for (String target : List.of("runtime_id", "character_id", "module_class", "script", "expected_context")) {
+            ObjectNode body = (ObjectNode) mapper.readTree(input);
+            body.put(target, "not-an-allowed-target");
+            assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorModuleControlRequest.class), target);
+        }
+        for (String body : List.of("[]", "true", "\"pause\"")) {
+            assertThrows(Exception.class, () -> mapper.readValue(body, ActorModuleControlRequest.class));
+        }
     }
 
     @Test

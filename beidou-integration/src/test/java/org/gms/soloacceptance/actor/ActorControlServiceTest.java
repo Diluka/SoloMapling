@@ -1798,6 +1798,242 @@ class ActorControlServiceTest {
         verify(chatDispatch, times(1)).execute(any(), any());
     }
 
+    @Test
+    void modulePauseAndResumePreserveTheRootRoleAndDialogueAndInvalidateTheOldContext() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareChat(service);
+        Map<String, Object> dialogue = Map.of("active", true, "dialogue_version", 37L);
+        when(backend.snapshot(handle)).thenReturn(Map.of("character_id", 73, "logged_in_world", true,
+                "persisted", true, "packet_events", List.of(), "dialogue", dialogue));
+        var opened = open(service, "module-open");
+        executors.getFirst().runNext();
+        var online = service.get("admin", id(opened), 0, 100);
+        AcceptanceActorExecution execution = execution(service, opened);
+        var oldContext = execution.moduleContext();
+        String runtimeId = (String) runtimeView(online).get("id");
+        long oldGeneration = moduleGeneration(online);
+
+        var paused = service.controlModule("admin", "module-pause", moduleRequest(opened, oldGeneration, "pause"));
+        assertEquals("MODULE_CONTROL", paused.get("kind"));
+        assertEquals("pause", paused.get("module_operation"));
+        assertEquals("SUCCEEDED", paused.get("status"));
+        assertEquals("actor_module_paused", result(paused).get("observed_outcome"));
+        assertEquals("SUSPENDED", result(paused).get("module_state"));
+        assertEquals(true, result(paused).get("module_drained"));
+        assertEquals(true, result(paused).get("module_control_complete"));
+        assertEquals("BOUND", runtimeView(paused).get("state"));
+        assertEquals(runtimeId, runtimeView(paused).get("id"));
+        assertEquals(dialogue, actor(paused).get("dialogue"));
+        assertSame(handle, execution.adoptedHandle());
+        assertEquals(1, execution.scope().snapshot().outstandingResources());
+        assertTrue(executors.getFirst().queue.isEmpty());
+        assertNull(operationWork(service, paused));
+        assertEquals("actor_not_actable", assertThrows(ObservationException.class,
+                () -> service.act("admin", "paused-chat", chatRequest(opened, "暂停不再输入"))).reason());
+        verify(backend, never()).close(any(), any());
+
+        var resumed = service.controlModule("admin", "module-resume", moduleRequest(opened, oldGeneration, "resume"));
+        assertEquals("SUCCEEDED", resumed.get("status"));
+        assertEquals("actor_module_resumed", result(resumed).get("observed_outcome"));
+        assertEquals("ACTIVE", result(resumed).get("module_state"));
+        assertTrue(moduleGeneration(resumed) > oldGeneration);
+        assertEquals(oldGeneration, result(resumed).get("previous_module_generation"));
+        assertEquals(runtimeId, runtimeView(resumed).get("id"));
+        assertSame(handle, execution.adoptedHandle());
+        assertThrows(CharacterRuntime.Invalid.class, oldContext::acceptWork);
+        assertEquals(dialogue, actor(resumed).get("dialogue"));
+        var chat = service.act("admin", "resumed-chat", chatRequest(opened, "恢复后正常发送"));
+        executors.getFirst().runNext();
+        assertEquals("SUCCEEDED", service.get("admin", id(chat), 0, 100).get("status"));
+        assertEquals(id(paused), id(service.controlModule("admin", "module-pause", moduleRequest(opened, oldGeneration, "pause"))));
+        assertEquals("SUSPENDED", result(service.get("admin", id(paused), 0, 100)).get("module_state"));
+        var closed = service.close("admin", "module-close", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(closed), 0, 100).get("status"));
+    }
+
+    @Test
+    void pauseWaitsForTheOriginalPhysicalCarrierAndCancellationDoesNotResumeIt() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        prepareNpc(service);
+        var opened = open(service, "pause-queued-open");
+        executors.getFirst().runNext();
+        long moduleGeneration = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        var queued = service.act("admin", "pause-queued-npc", npcRequest(opened, "npc_center_open", null));
+        ExecutionScope.WorkHandle original = operationWork(service, queued);
+        var paused = service.controlModule("admin", "pause-queued", moduleRequest(opened, moduleGeneration, "pause"));
+        assertEquals("RUNNING", paused.get("status"));
+        assertEquals("STOPPING", ((Map<?, ?>) runtimeView(paused).get("module")).get("state"));
+        assertFalse(original.isSettled());
+        assertEquals(1, executors.getFirst().queue.size());
+        assertEquals("actor_module_control_in_progress", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "resume-too-early", moduleRequest(opened, moduleGeneration, "resume"))).reason());
+        assertEquals("CANCEL_REQUESTED", service.cancel("admin", "cancel-pause", id(paused)).get("status"));
+
+        executors.getFirst().runNext();
+        var finished = service.get("admin", id(paused), 0, 100);
+        assertTrue(original.isSettled());
+        assertEquals("SUCCEEDED", finished.get("status"));
+        assertEquals(true, result(finished).get("module_drained"));
+        assertEquals(true, result(finished).get("cancel_too_late"));
+        assertEquals("SUSPENDED", result(finished).get("module_state"));
+        assertEquals("CANCELLED", service.get("admin", id(queued), 0, 100).get("status"));
+        verify(backend, never()).npcCenterOpen(any());
+        verify(backend, never()).close(any(), any());
+    }
+
+    @Test
+    void moduleControlsValidateOwnerGenerationsStateAndDeduplicateBeforeReapplying() {
+        ActorControlService service = service(4, 30, 64);
+        var opened = open(service, "controls-validation-open");
+        executors.getFirst().runNext();
+        long module = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        for (String operation : java.util.Arrays.asList(null, "unload", "attach", "handler")) {
+            assertEquals("invalid_actor_module_control", assertThrows(ObservationException.class,
+                    () -> service.controlModule("admin", "invalid-module", moduleRequest(opened, module, operation))).reason());
+        }
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
+                () -> service.controlModule("other", "wrong-owner", moduleRequest(opened, module, "pause"))).status());
+        assertEquals("stale_actor_session", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "wrong-session", new ActorModuleControlRequest(
+                        sessionId(opened), generation(opened) + 1, module, "pause"))).reason());
+        assertEquals("actor_module_generation_mismatch", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "wrong-module", moduleRequest(opened, module + 1, "pause"))).reason());
+        assertEquals("actor_module_not_resumeable", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "active-resume", moduleRequest(opened, module, "resume"))).reason());
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+
+        var request = moduleRequest(opened, module, "pause");
+        var paused = service.controlModule("admin", "one-module-pause", request);
+        assertEquals(id(paused), id(service.controlModule("admin", "one-module-pause", request)));
+        assertEquals("request_id_conflict", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "one-module-pause", moduleRequest(opened, module, "resume"))).reason());
+        assertEquals("actor_module_not_pauseable", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "second-pause", request)).reason());
+        var resumed = service.controlModule("admin", "one-module-resume", moduleRequest(opened, module, "resume"));
+        assertEquals("actor_module_generation_mismatch", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "old-module-new-request", request)).reason());
+        assertEquals(id(resumed), id(service.controlModule("admin", "one-module-resume", moduleRequest(opened, module, "resume"))));
+    }
+
+    @Test
+    void moduleControlsUseOnlyUnreservedHistoryAndNeverConsumeTheFirstCloseSlot() throws Exception {
+        ActorControlService service = service(4, 4, 64);
+        var opened = open(service, "module-history-open");
+        executors.getFirst().runNext();
+        long module = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        var paused = service.controlModule("admin", "module-history-pause", moduleRequest(opened, module, "pause"));
+        var resumed = service.controlModule("admin", "module-history-resume", moduleRequest(opened, module, "resume"));
+        assertNull(operationWork(service, paused));
+        assertNull(operationWork(service, resumed));
+        assertEquals("actor_history_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "module-history-full", moduleRequest(opened, moduleGeneration(resumed), "pause"))).reason());
+        assertTrue(executors.getFirst().queue.isEmpty());
+        var closed = service.close("admin", "module-history-close", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(closed), 0, 100).get("status"));
+        assertEquals(4, service.publicCapabilities().get("operation_history_size"));
+    }
+
+    @Test
+    void resumeRejectsAnAlreadyLostNativeSourceBeforeAcceptingOrGrantingANewGeneration() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        var opened = open(service, "module-lost-source-open");
+        executors.getFirst().runNext();
+        long module = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        var pauseRequest = moduleRequest(opened, module, "pause");
+        var pause = service.controlModule("admin", "module-lost-source-pause", pauseRequest);
+        AcceptanceActorExecution execution = execution(service, opened);
+        when(backend.isCurrent(handle)).thenReturn(false);
+
+        ObservationException rejected = assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "module-lost-source-resume", moduleRequest(opened, module, "resume")));
+        assertEquals(HttpStatus.GONE, rejected.status());
+        assertEquals("stale_actor_session", rejected.reason());
+        assertEquals("SUSPENDED", execution.moduleControlFacts().state());
+        assertEquals(module, execution.moduleControlFacts().generation());
+        assertEquals(2, service.publicCapabilities().get("operation_history_size"));
+        var retained = service.controlModule("admin", "module-lost-source-pause", pauseRequest);
+        assertEquals(id(pause), id(retained));
+        assertEquals("SUCCEEDED", retained.get("status"));
+        assertEquals("LOST", session(retained).get("state"));
+        assertEquals("actor_module_paused", result(retained).get("observed_outcome"));
+        verify(backend, never()).close(any(), any());
+    }
+
+    @Test
+    void resumeReadFailureDoesNotMarkTheRoleLostOrCreateAModuleGenerationOrRequestRecord() throws Exception {
+        ActorControlService service = service(4, 30, 64);
+        var opened = open(service, "module-unavailable-source-open");
+        executors.getFirst().runNext();
+        long module = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        service.controlModule("admin", "module-unavailable-source-pause", moduleRequest(opened, module, "pause"));
+        AcceptanceActorExecution execution = execution(service, opened);
+        when(backend.isCurrent(handle)).thenThrow(new IllegalStateException("private native read failure"));
+
+        ObservationException unavailable = assertThrows(ObservationException.class,
+                () -> service.controlModule("admin", "module-unavailable-source-resume", moduleRequest(opened, module, "resume")));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, unavailable.status());
+        assertEquals("actor_observation_unavailable", unavailable.reason());
+        assertEquals("SUSPENDED", execution.moduleControlFacts().state());
+        assertEquals(module, execution.moduleControlFacts().generation());
+        assertEquals(2, service.publicCapabilities().get("operation_history_size"));
+        doReturn(true).when(backend).isCurrent(handle);
+        var visible = service.get("admin", id(opened), 0, 100);
+        assertEquals("OPEN", session(visible).get("state"));
+        assertEquals(module, moduleGeneration(visible));
+        var resumed = service.controlModule("admin", "module-unavailable-source-resume", moduleRequest(opened, module, "resume"));
+        assertEquals("SUCCEEDED", resumed.get("status"));
+        assertTrue(moduleGeneration(resumed) > module);
+        verify(backend, never()).close(any(), any());
+    }
+
+    @Test
+    void closeSupersedesAnUnfinishedPauseWithoutClaimingThatTheUnloadedModuleWasPaused() {
+        ActorControlService service = service(4, 30, 64);
+        prepareNpc(service);
+        var opened = open(service, "module-superseded-open");
+        executors.getFirst().runNext();
+        long module = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        service.act("admin", "module-superseded-npc", npcRequest(opened, "npc_center_open", null));
+        var pause = service.controlModule("admin", "module-superseded-pause", moduleRequest(opened, module, "pause"));
+        assertEquals("RUNNING", pause.get("status"));
+        var close = service.close("admin", "module-superseded-close", closeRequest(opened));
+        executors.getFirst().drain();
+        var stopped = service.get("admin", id(pause), 0, 100);
+        assertEquals("CANCELLED", stopped.get("status"));
+        assertEquals("actor_module_control_superseded", result(stopped).get("observed_outcome"));
+        assertEquals("UNLOADED", result(stopped).get("module_state"));
+        assertEquals("SUCCEEDED", service.get("admin", id(close), 0, 100).get("status"));
+        verify(backend, never()).npcCenterOpen(any());
+        verify(backend, times(1)).close(eq(handle), any());
+    }
+
+    @Test
+    void aCompletedPauseKeepsItsFactualOutcomeAfterTheExternalOwnerClosesTheSuspendedRole() {
+        ActorControlService service = service(4, 30, 64);
+        var opened = open(service, "module-paused-close-open");
+        executors.getFirst().runNext();
+        long module = moduleGeneration(service.get("admin", id(opened), 0, 100));
+        var pause = service.controlModule("admin", "module-paused-close-pause", moduleRequest(opened, module, "pause"));
+        assertEquals("SUCCEEDED", pause.get("status"));
+        var close = service.close("admin", "module-paused-close", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(close), 0, 100).get("status"));
+        var retained = service.controlModule("admin", "module-paused-close-pause", moduleRequest(opened, module, "pause"));
+        assertEquals("SUCCEEDED", retained.get("status"));
+        assertEquals("SUSPENDED", result(retained).get("module_state"));
+        assertEquals("CLOSED", session(retained).get("state"));
+    }
+
+    private static ActorModuleControlRequest moduleRequest(Map<String, Object> operation, long moduleGeneration, String control) {
+        return new ActorModuleControlRequest(sessionId(operation), generation(operation), moduleGeneration, control);
+    }
+
+    private static long moduleGeneration(Map<String, Object> operation) {
+        return ((Number) ((Map<?, ?>) runtimeView(operation).get("module")).get("generation")).longValue();
+    }
+
     private Map<String, Object> actOrRecover(ActorControlService service, String requestId, ActorActRequest request) {
         try {
             return service.act("admin", requestId, request);

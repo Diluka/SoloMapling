@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from solo_acceptance_mcp.actor_events_smoke import require_packet_capability
-from solo_acceptance_mcp.smoke import require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS, require_capabilities
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests import test_chat_protocol as chat_protocol
 from tests.test_actor_events_smoke import PACKET_CAPABILITIES
@@ -100,10 +100,10 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
     def parameters(action: str, version: int = 29) -> dict:
         return {"text": "普通聊天协议桩"} if action == "chat" else {"dialogue_version": version} if action == "npc_cancel" else {}
 
-    async def test_npc_seven_tools_action_schema_and_tagged_parameter_branches_are_explicit(self) -> None:
+    async def test_npc_eight_tools_action_schema_and_tagged_parameter_branches_are_explicit(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(TOOLS | {"actor_control"}, set(tools))
         schema = tools["game_act"].input_schema
         self.assertIs(False, schema.get("additionalProperties"))
         self.assertEqual(set(self.args), set(schema["required"]))
@@ -321,16 +321,16 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
                   npc_capabilities(actions=["chat"], npc_decoder=False), npc_capabilities()]
         for value in values:
             with self.subTest(actions=value["actions"]):
-                self.assertEqual(sorted(value["enabled_tools"]), require_capabilities(value, sorted(TOOLS)))
+                self.assertEqual(sorted(value["enabled_tools"]), require_capabilities(value, sorted(IMPLEMENTED_TOOLS)))
                 if "game_act" in value["enabled_tools"]:
-                    self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(TOOLS), actors=True, chat=True))
+                    self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(IMPLEMENTED_TOOLS), actors=True, chat=True))
         for invalid_actions in [["chat", "npc_center_open", "npc_cancel", "npc_select"], ["chat", "chat"]]:
             with self.subTest(actions=invalid_actions), self.assertRaises(RuntimeError):
-                require_capabilities(npc_capabilities(actions=invalid_actions), sorted(TOOLS))
+                require_capabilities(npc_capabilities(actions=invalid_actions), sorted(IMPLEMENTED_TOOLS))
         mismatched = npc_capabilities()
         mismatched["actor_control"]["actions"] = ["chat"]
         with self.assertRaises(RuntimeError):
-            require_capabilities(mismatched, sorted(TOOLS))
+            require_capabilities(mismatched, sorted(IMPLEMENTED_TOOLS))
 
     async def test_npc_capabilities_add_only_type_four_decoder_and_preserve_original_packet_types(self) -> None:
         async with self.stdio_client() as client:

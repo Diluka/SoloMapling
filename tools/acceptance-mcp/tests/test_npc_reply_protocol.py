@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from solo_acceptance_mcp.actor_events_smoke import require_packet_capability
-from solo_acceptance_mcp.smoke import require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS, require_capabilities
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests.test_actor_events_smoke import PACKET_CAPABILITIES
@@ -63,10 +63,10 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
 
-    async def test_reply_seven_tools_schema_binds_four_actions_and_two_strict_kind_branches(self) -> None:
+    async def test_reply_eight_tools_schema_binds_four_actions_and_two_strict_kind_branches(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS, set(tools))
+        self.assertEqual(TOOLS | {"actor_control"}, set(tools))
         tool = tools["game_act"]
         self.assertFalse(tool.annotations.read_only_hint)
         self.assertFalse(tool.annotations.destructive_hint)
@@ -283,15 +283,15 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
                   npc_capabilities(actions=["chat"], npc_decoder=False), npc_capabilities(), reply_capabilities()]
         for value in values:
             with self.subTest(actions=value["actions"]):
-                self.assertEqual(sorted(value["enabled_tools"]), require_capabilities(value, sorted(TOOLS)))
+                self.assertEqual(sorted(value["enabled_tools"]), require_capabilities(value, sorted(IMPLEMENTED_TOOLS)))
                 if "game_act" in value["enabled_tools"]:
-                    self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(TOOLS), actors=True, chat=True))
+                    self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(IMPLEMENTED_TOOLS), actors=True, chat=True))
         for actions in [ACTIONS + ["npc_accept"], ACTIONS + ["npc_reply"], ["chat", "npc_reply"]]:
             invalid = reply_capabilities()
             invalid["actions"] = actions
             invalid["actor_control"]["actions"] = actions[:]
             with self.subTest(actions=actions), self.assertRaises(RuntimeError):
-                require_capabilities(invalid, sorted(TOOLS))
+                require_capabilities(invalid, sorted(IMPLEMENTED_TOOLS))
 
     async def test_reply_capabilities_preserve_type_four_and_twelve_and_only_select_decline_kinds(self) -> None:
         async with self.stdio_client() as client:

@@ -113,6 +113,7 @@ public final class ActorControlService {
         }
         for (Session session : draining) {
             synchronized (session.submissionMonitor) {
+                refreshModuleControl(session);
                 session.execution.beginDrain(stop);
                 NativeActorHandle exactHandle = session.execution.adoptedHandle();
                 boolean cleanup;
@@ -228,6 +229,7 @@ public final class ActorControlService {
         }
         if (prior != null) return refreshedResponse(prior, 0, 100);
         synchronized (session.submissionMonitor) {
+            refreshModuleControl(session);
             Operation accepted;
             NativeActorHandle exactHandle;
             synchronized (monitor) {
@@ -369,6 +371,100 @@ public final class ActorControlService {
         return refreshedResponse(prior, 0, 100);
     }
 
+    /** External lifecycle input remains reachable while the fixed MCP module is suspended. */
+    public Map<String, Object> controlModule(String owner, String requestId, ActorModuleControlRequest request) {
+        validateOwner(owner);
+        validateRequestId(requestId);
+        if (request == null || request.sessionId() == null
+                || !request.sessionId().matches("[A-Za-z0-9_.-]{1,128}")
+                || request.expectedGeneration() == null || request.expectedGeneration() < 1) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
+        }
+        if (request.expectedModuleGeneration() == null || request.expectedModuleGeneration() < 1
+                || request.operation() == null || !List.of("pause", "resume").contains(request.operation())) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_actor_module_control");
+        }
+        RequestKey key = new RequestKey("MODULE_CONTROL", owner, request.sessionId(), requestId);
+        Operation prior;
+        Session session;
+        synchronized (monitor) {
+            prior = duplicate(key, request);
+            session = prior == null ? ownedSession(owner, request.sessionId(), request.expectedGeneration()) : prior.session;
+        }
+        if (prior != null) return refreshedResponse(prior, 0, 100);
+        synchronized (session.submissionMonitor) {
+            refreshModuleControl(session);
+            synchronized (monitor) {
+                prior = duplicate(key, request);
+                if (prior != null) return response(prior, 0, 100);
+                requireAccepting();
+                requireActionSession(session, null);
+                if (session.moduleControlOperation != null) {
+                    throw error(HttpStatus.CONFLICT, "actor_module_control_in_progress");
+                }
+            }
+            // Trusted host checks run without the service lock. The submission lock serializes
+            // module transitions with external close and world-stop admission.
+            if ("resume".equals(request.operation())) {
+                refreshActor(session);
+                synchronized (monitor) {
+                    requireAccepting();
+                    requireActionSession(session, null);
+                }
+            }
+            session.execution.requireModuleControl(request.expectedModuleGeneration(), request.operation());
+            Operation accepted;
+            synchronized (monitor) {
+                requireAccepting();
+                requireActionSession(session, null);
+                if (operations.size() + reservedFirstCloses() + 1 > maxHistory
+                        || requests.size() + reservedFirstCloses() + 1 > maxHistory) {
+                    throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
+                }
+                accepted = operation("MODULE_CONTROL", session);
+                accepted.moduleOperation = request.operation();
+                accepted.expectedModuleGeneration = request.expectedModuleGeneration();
+                session.moduleControlOperation = accepted;
+                requests.put(key, new RequestRecord(request, accepted.id));
+                running(accepted, "actor_module_" + request.operation() + "_started");
+                if ("pause".equals(request.operation())) cancelUndispatchedActions(session);
+            }
+            try {
+                if ("pause".equals(request.operation())) {
+                    CharacterRuntime.ModuleStop stop = session.execution.pauseModule(request.expectedModuleGeneration());
+                    synchronized (monitor) {
+                        accepted.moduleStop = stop;
+                        accepted.step = "actor_module_pause_draining";
+                        event(accepted, accepted.step);
+                    }
+                    refreshModuleControl(session);
+                } else {
+                    AcceptanceActorExecution.ModuleControlFacts facts = session.execution.resumeModule(request.expectedModuleGeneration());
+                    synchronized (monitor) {
+                        if (!sameWorld(session) || !"OPEN".equals(session.state)
+                                || !"BOUND".equals(facts.rootState()) || !"ACTIVE".equals(facts.state())
+                                || facts.generation() <= accepted.expectedModuleGeneration) {
+                            throw error(HttpStatus.CONFLICT, "actor_module_control_unverified");
+                        }
+                        accepted.result = moduleControlResult(accepted, facts, "actor_module_resumed", true);
+                        finish(accepted, "SUCCEEDED", "actor_module_resumed");
+                        session.moduleControlOperation = null;
+                    }
+                }
+            } catch (Throwable failure) {
+                synchronized (monitor) {
+                    accepted.error = Map.of("reason", safeReason(failure, "actor_module_control_unverified"));
+                    accepted.result = Map.of("observed_outcome", "actor_module_control_unverified",
+                            "module_control_complete", false, "cancel_too_late", accepted.cancelRequested);
+                    accepted.moduleStop = null;
+                    finish(accepted, "INDETERMINATE", "actor_module_control_unverified");
+                    if (session.moduleControlOperation == accepted) session.moduleControlOperation = null;
+                }
+            }
+            return refreshedResponse(accepted, 0, 100);
+        }
+    }
+
     public Map<String, Object> get(String owner, String operationId, long sinceCursor, int limit) {
         validateOwner(owner);
         validateWindow(sinceCursor, limit);
@@ -423,6 +519,8 @@ public final class ActorControlService {
             if (handle == null) throw error(HttpStatus.GONE, "stale_actor_session");
             generation = worldGeneration;
         }
+
+        refreshModuleControl(session);
 
         Map<String, Object> actor = null;
         Map<String, Object> events = null;
@@ -500,8 +598,12 @@ public final class ActorControlService {
             boolean sameRuntime = timingGeneration != null && live() && timingGeneration.equals(worldGeneration);
             if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
+            result.put("enabled_tools", List.of("actor_open", "actor_close", "actor_control", "operation_get", "operation_cancel", "game_act"));
             result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply"));
+            result.put("module_control", Map.of("operations", List.of("pause", "resume"),
+                    "target", "session_mcp_control", "expected_module_generation_required", true,
+                    "pause_preserves_native_dialogue", true, "cancellation", "continues_after_acceptance",
+                    "completion", "host_module_lifecycle"));
             result.put("npc_dialogue", AcceptanceClient.nativeDialogueCapabilities());
             result.put("maximum_pending_actions_per_session", MAX_PENDING_ACTIONS);
             result.put("actor_executor_queue_capacity", EXECUTOR_QUEUE_CAPACITY);
@@ -1005,6 +1107,7 @@ public final class ActorControlService {
     }
 
     private Map<String, Object> refreshedResponse(Operation operation, long cursor, int limit) {
+        refreshModuleControl(operation.session);
         refreshActor(operation.session);
         synchronized (monitor) {
             return response(operation, cursor, limit);
@@ -1041,7 +1144,7 @@ public final class ActorControlService {
 
     private Operation operation(String kind, Session session) {
         Operation operation = new Operation("op-" + UUID.randomUUID(), kind, session);
-        if (!"CLOSE".equals(kind)) {
+        if (!"CLOSE".equals(kind) && !"MODULE_CONTROL".equals(kind)) {
             try {
                 operation.work = "OPEN".equals(kind) ? session.execution.acceptOpeningWork() : session.execution.acceptWork();
                 if ("ACTION".equals(kind)) operation.moduleContext = session.execution.moduleContext();
@@ -1178,6 +1281,7 @@ public final class ActorControlService {
             operation.moduleContext = null;
             monitor.notifyAll();
         }
+        refreshModuleControl(operation.session);
     }
 
     private static void closeReleasedLane(Session session) {
@@ -1216,6 +1320,53 @@ public final class ActorControlService {
             }
             monitor.notifyAll();
         }
+        refreshModuleControl(session);
+    }
+
+    /** A projection of the host's exact stop; it owns no second work handle or physical queue. */
+    private void refreshModuleControl(Session session) {
+        Operation operation;
+        CharacterRuntime.ModuleStop stop;
+        synchronized (monitor) {
+            operation = session.moduleControlOperation;
+            if (operation == null || terminal(operation.status) || operation.moduleStop == null) return;
+            stop = operation.moduleStop;
+        }
+        if (!stop.complete()) return;
+        AcceptanceActorExecution.ModuleControlFacts facts = session.execution.moduleControlFacts();
+        session.execution.refresh();
+        synchronized (monitor) {
+            if (session.moduleControlOperation != operation || operation.moduleStop != stop || terminal(operation.status)) return;
+            if (stop.failure() != null) {
+                operation.error = Map.of("reason", "actor_module_control_unverified");
+                operation.result = moduleControlResult(operation, facts, "actor_module_control_unverified", false);
+                finish(operation, "INDETERMINATE", "actor_module_control_unverified");
+            } else if ("OPEN".equals(session.state) && "BOUND".equals(facts.rootState())
+                    && "SUSPENDED".equals(facts.state()) && facts.generation() == operation.expectedModuleGeneration) {
+                operation.result = moduleControlResult(operation, facts, "actor_module_paused", true);
+                finish(operation, "SUCCEEDED", "actor_module_paused");
+            } else {
+                operation.result = moduleControlResult(operation, facts, "actor_module_control_superseded", true);
+                operation.error = Map.of("reason", "actor_module_control_superseded");
+                finish(operation, "CANCELLED", "actor_module_control_superseded");
+            }
+            operation.moduleStop = null;
+            session.moduleControlOperation = null;
+        }
+    }
+
+    private Map<String, Object> moduleControlResult(Operation operation, AcceptanceActorExecution.ModuleControlFacts facts,
+                                                   String outcome, boolean complete) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("observed_outcome", outcome);
+        result.put("runtime_id", facts.runtimeId());
+        result.put("previous_module_generation", operation.expectedModuleGeneration);
+        result.put("module_generation", facts.generation());
+        result.put("module_state", facts.state());
+        result.put("module_control_complete", complete);
+        if ("pause".equals(operation.moduleOperation)) result.put("module_drained", true);
+        result.put("cancel_too_late", operation.cancelRequested);
+        return result;
     }
 
     private void releaseFinalized(Session session) {
@@ -1239,7 +1390,8 @@ public final class ActorControlService {
     }
 
     private void requestCancellation(Operation operation) {
-        operation.session.execution.cancel(operation.work);
+        if (operation.moduleContext != null) operation.moduleContext.cancel(operation.work);
+        else operation.session.execution.cancel(operation.work);
         operation.cancelRequested = true;
         operation.status = "CANCEL_REQUESTED";
         operation.step = "cancellation_requested";
@@ -1296,6 +1448,7 @@ public final class ActorControlService {
         response.put("operation_id", operation.id);
         response.put("kind", operation.kind);
         if (operation.action != null) response.put("action", operation.action);
+        if (operation.moduleOperation != null) response.put("module_operation", operation.moduleOperation);
         response.put("status", operation.status);
         response.put("step", operation.step);
         response.put("session_id", session.id);
@@ -1429,6 +1582,7 @@ public final class ActorControlService {
         ExecutionScope.WorldStopTicket stopRetryTicket;
         boolean firstCloseReserved = true;
         int pendingActions;
+        Operation moduleControlOperation;
         Session(String id, long generation, String owner, String profile, String runtimeGeneration, WorldEpoch.Token admittedEpoch,
                 NativeActorBackend backend, ExecutorService executor) {
             this.id = id;
@@ -1452,6 +1606,9 @@ public final class ActorControlService {
         ExecutionScope.WorkHandle work;
         NativeActionService.ActionHandle chatAction;
         CharacterRuntime.ModuleContext moduleContext;
+        CharacterRuntime.ModuleStop moduleStop;
+        String moduleOperation;
+        long expectedModuleGeneration;
         String chatEntryFailure;
         String action;
         long sequence;

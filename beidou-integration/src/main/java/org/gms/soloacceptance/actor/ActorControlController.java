@@ -66,6 +66,14 @@ public final class ActorControlController {
         return ResultBody.success(request, actors.act(owner, request.getRequestId(), request.getData()));
     }
 
+    @PostMapping("/actor/module/control")
+    public ResultBody<Map<String, Object>> controlModule(
+            @RequestBody(required = false) SubmitBody<ActorModuleControlRequest> request) {
+        String owner = AcceptanceAccess.requireAdmin();
+        requireData(request);
+        return ResultBody.success(request, actors.controlModule(owner, request.getRequestId(), request.getData()));
+    }
+
     @GetMapping("/operation/{id}")
     public ResultBody<Map<String, Object>> operation(
             @PathVariable("id") String operationId,

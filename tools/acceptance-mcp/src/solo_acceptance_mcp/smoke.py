@@ -20,11 +20,18 @@ CONTEXT_FIELDS = (
 OBSERVATION_TOOLS = frozenset({"game_capabilities", "game_observe"})
 ACTOR_TOOLS = frozenset({"actor_open", "actor_close", "operation_get", "operation_cancel"})
 ACTOR_IMPLEMENTED_TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS
-IMPLEMENTED_TOOLS = ACTOR_IMPLEMENTED_TOOLS | {"game_act"}
+LEGACY_IMPLEMENTED_TOOLS = ACTOR_IMPLEMENTED_TOOLS | {"game_act"}
+IMPLEMENTED_TOOLS = LEGACY_IMPLEMENTED_TOOLS | {"actor_control"}
+MODULE_CONTROL_CAPABILITY = {
+    "operations": ["pause", "resume"], "target": "session_mcp_control",
+    "expected_module_generation_required": True, "pause_preserves_native_dialogue": True,
+    "cancellation": "continues_after_acceptance", "completion": "host_module_lifecycle",
+}
 
 
-def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False, chat: bool = False) -> list[str]:
-    """The seven-tool client accepts only the implemented R1, R2a, or chat subset."""
+def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False,
+                         chat: bool = False, module_control: bool = False) -> list[str]:
+    """The eight-tool client preserves older backend subsets without enabling missing tools."""
     if len(names) != len(set(names)) or set(names) != IMPLEMENTED_TOOLS:
         raise RuntimeError("MCP 工具清单与当前已实现接口不一致。")
     enabled = capabilities.get("enabled_tools")
@@ -34,7 +41,7 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         or not isinstance(enabled, list)
         or any(not isinstance(name, str) for name in enabled)
         or len(enabled) != len(set(enabled))
-        or set(enabled) not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, IMPLEMENTED_TOOLS)
+        or set(enabled) not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, LEGACY_IMPLEMENTED_TOOLS, IMPLEMENTED_TOOLS)
     ):
         raise RuntimeError("实际验收桥没有返回合法的已开放能力。")
     expected_round = "R2a" if ACTOR_TOOLS <= set(enabled) else "R1"
@@ -42,6 +49,10 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         raise RuntimeError("验收桥迭代版本与实际开放工具不一致。")
     if actors and not ACTOR_TOOLS <= set(enabled):
         raise RuntimeError("当前验收桥没有开放原生角色控制，未执行写操作。")
+    if module_control and "actor_control" not in enabled:
+        raise RuntimeError("当前验收桥没有开放 MCP 模块控制，未执行写操作。")
+    if "actor_control" in enabled:
+        require_module_control_capability(capabilities)
     actions = capabilities.get("actions", [])
     if "game_act" in enabled:
         control = capabilities.get("actor_control")
@@ -66,6 +77,15 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
     ):
         raise RuntimeError("实际验收桥没有有效的源码身份。")
     return sorted(enabled)
+
+
+def require_module_control_capability(capabilities: dict[str, Any]) -> dict[str, Any]:
+    control = capabilities.get("actor_control")
+    value = control.get("module_control") if isinstance(control, dict) else None
+    if (not isinstance(value, dict) or any(type(value.get(key)) is not type(expected)
+            or value[key] != expected for key, expected in MODULE_CONTROL_CAPABILITY.items())):
+        raise RuntimeError("MCP 模块控制能力缺少实际目标、代次或排空契约。")
+    return value
 
 
 def require_generation(snapshot: dict[str, Any]) -> str:
@@ -96,13 +116,20 @@ def first_scene(world: dict[str, Any]) -> dict[str, Any]:
     return require_scene_context(scenes["items"][0])
 
 
-async def run_smoke(config_path: Path, *, limit: int = 25) -> dict[str, Any]:
-    config = load_config(config_path)
-    params = StdioServerParameters(
+def stdio_server_parameters(config_path: Path) -> StdioServerParameters:
+    # The SDK does not inherit PYTHONPATH. Bind the child to the same source as
+    # this caller even when an isolated worktree reuses an existing locked venv.
+    return StdioServerParameters(
         command=sys.executable,
         args=["-m", "solo_acceptance_mcp", "--config", str(config_path.resolve())],
         cwd=Path(__file__).resolve().parents[2],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parents[1])},
     )
+
+
+async def run_smoke(config_path: Path, *, limit: int = 25) -> dict[str, Any]:
+    config = load_config(config_path)
+    params = stdio_server_parameters(config_path)
     failure: RuntimeError | None = None
     report: dict[str, Any] = {}
     async with Client(params, read_timeout_seconds=config.timeout_seconds * 4 + 5) as client:

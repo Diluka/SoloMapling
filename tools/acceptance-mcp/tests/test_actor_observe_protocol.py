@@ -87,14 +87,15 @@ class ActorObserveProtocolTests(unittest.IsolatedAsyncioTestCase):
                 command=sys.executable,
                 args=["-m", "solo_acceptance_mcp", "--config", str(config)],
                 cwd=Path(__file__).resolve().parents[1],
+                env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
             )
             async with Client(params, read_timeout_seconds=10) as client:
                 yield client
 
-    async def test_stdio_lists_only_seven_tools_and_keeps_observation_read_only(self) -> None:
+    async def test_stdio_lists_only_eight_tools_and_keeps_observation_read_only(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS | {"game_act"}, set(tools))
+        self.assertEqual(TOOLS | {"game_act", "actor_control"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
             self.assertTrue(tool.annotations.idempotent_hint, name)

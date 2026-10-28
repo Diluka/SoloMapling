@@ -211,6 +211,16 @@ def validate_action_request(session_id: str, expected_generation: int, request_i
     validate_chat_action(action, parameters, expected_context)
 
 
+def validate_actor_control_request(session_id: str, expected_generation: int,
+                                   expected_module_generation: int, operation: str, request_id: str) -> None:
+    validate_identifier(session_id, "session_id")
+    validate_integer(expected_generation, "expected_generation", 1, MAX_LONG)
+    validate_integer(expected_module_generation, "expected_module_generation", 1, MAX_LONG)
+    validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+    if not isinstance(operation, str) or operation not in {"pause", "resume"}:
+        raise BridgeError("INVALID_ARGUMENTS", "operation 只支持固定 MCP 控制模块的 pause 或 resume。")
+
+
 class BridgeClient:
     MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
@@ -297,6 +307,17 @@ class BridgeClient:
             "/solo/acceptance/v1/actor/close",
             {"session_id": session_id, "expected_generation": expected_generation}, request_id,
         )
+
+    async def actor_control(
+        self, session_id: str, expected_generation: int, *, expected_module_generation: int,
+        operation: str, request_id: str,
+    ) -> dict[str, Any]:
+        validate_actor_control_request(session_id, expected_generation, expected_module_generation,
+                                       operation, request_id)
+        return await self._mutation("/solo/acceptance/v1/actor/module/control", {
+            "session_id": session_id, "expected_generation": expected_generation,
+            "expected_module_generation": expected_module_generation, "operation": operation,
+        }, request_id)
 
     async def act(
         self, session_id: str, expected_generation: int, *, request_id: str,

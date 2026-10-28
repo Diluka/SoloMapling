@@ -12,7 +12,8 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
-from .bridge import BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, MAX_INT, load_config, validate_action_request
+from .bridge import (BridgeClient, BridgeConfig, BridgeError, ConfigurationError, MAX_LONG, MAX_INT,
+                     load_config, validate_action_request, validate_actor_control_request)
 
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$", strict=True)]
@@ -59,6 +60,7 @@ class ExpectedContext(BaseModel):
 
 
 CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
+CONTROL_ARGUMENTS = frozenset({"session_id", "expected_generation", "expected_module_generation", "operation", "request_id"})
 
 
 class AcceptanceMCPServer(MCPServer):
@@ -74,6 +76,8 @@ class AcceptanceMCPServer(MCPServer):
                 ] + [{"properties": {"action": {"const": "npc_reply"}, "parameters": {"oneOf": [
                     {"$ref": "#/$defs/NpcSelectParameters"}, {"$ref": "#/$defs/NpcDeclineParameters"},
                 ]}}}]}]}
+            elif tool.name == "actor_control":
+                tool.input_schema = {**tool.input_schema, "additionalProperties": False}
         return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
@@ -85,6 +89,14 @@ class AcceptanceMCPServer(MCPServer):
             try:
                 # Reject raw input safely before SDK model errors can echo values.
                 validate_action_request(**arguments)
+            except BridgeError as failure:
+                return result(failure.public_data(), is_error=True)
+        elif name == "actor_control":
+            if set(arguments) != CONTROL_ARGUMENTS:
+                return result({"error": {"code": "INVALID_ARGUMENTS", "message": "actor_control 参数缺失或包含额外字段。", "retryable": False}},
+                              is_error=True)
+            try:
+                validate_actor_control_request(**arguments)
             except BridgeError as failure:
                 return result(failure.public_data(), is_error=True)
         return await super().call_tool(name, arguments, context)
@@ -113,7 +125,8 @@ def build_server(config: BridgeConfig) -> MCPServer:
         version=__version__,
         instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
-                      "取消操作不等于结束NPC对话。game_act 支持 chat、中心打开、版本绑定取消及有限 npc_reply select/decline；实际能力以桥公告为准，不开放礼包accept、任意NPC、未审查选项、移动或通关工具。"),
+                      "取消操作不等于结束NPC对话。actor_control 仅暂停或恢复自己会话中的固定 MCP 控制模块。"
+                      "game_act 支持 chat、中心打开、版本绑定取消及有限 npc_reply select/decline；实际能力以桥公告为准，不开放礼包accept、任意NPC、未审查选项、移动或通关工具。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -175,6 +188,20 @@ def build_server(config: BridgeConfig) -> MCPServer:
         """排队正常退出专用角色，可能触发原生队伍/副本离开；仅在清理与存档核实后确认关闭。"""
         try:
             return result(await bridge.actor_close(session_id, expected_generation, request_id=request_id))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=cleanup_annotations)
+    async def actor_control(
+        session_id: Identifier, expected_generation: Generation, expected_module_generation: Generation,
+        operation: Literal["pause", "resume"], request_id: RequestId,
+    ) -> CallToolResult:
+        """暂停或恢复自己会话内固定的 MCP 控制模块；先按 capabilities 确认开放，查询 operation_get 核真实排空和新模块代次。暂停保留角色和既有NPC对话，不代表角色退出。"""
+        try:
+            return result(await bridge.actor_control(
+                session_id, expected_generation, expected_module_generation=expected_module_generation,
+                operation=operation, request_id=request_id,
+            ))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 

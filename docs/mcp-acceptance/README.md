@@ -1,6 +1,8 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天和 #75 中心首屏/取消已完成隔离及实际部署验收；#110 无收益 NPC 回复也已完成隔离及实际部署验收。** #117 共享上下文已完成完整构建、CI、隔离及实际部署验收并关闭。该轮已验收交付源码为 `8f8ebf485c719b868d5ba7ab4a6950632bfff730`（[PR #130](https://github.com/Diluka/SoloMapling/pull/130)）；#63、#67～#70、#72、限频验收修正 #74、#75 和 #110 已关闭。已部署七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply`，回复仅开放 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。#110 仅开放已审查的有限菜单选择/拒绝；礼包接受、完整城镇菜单、付费出行、SocialBot 回复、移动和 recipe 仍待后续，宿主原生工具加载与真实客户端玩法分别记录。每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**已交付：原生角色登录/退出和存档、包事件、普通聊天、中心首屏/取消及有限无收益 NPC 回复，以及 #139 的同一 CharacterRuntime 首环。** 原有七工具与 `game_act` 的 `chat/npc_center_open/npc_cancel/npc_reply` 已分别实际验收，回复仅开放已审 select/decline。本次源码增加 #145 的第八工具 `actor_control`，仅控制自身会话固定 MCP 模块的 pause/resume；它的隔离/实际部署状态以对应 Issue 和运行时 `actor_control.module_control` 为准，客户端列出工具不代表旧后端已开放。
+
+完整单角色控制按[里程碑与实施叶](full-character-control.md)持续推进。礼包接受、完整菜单/付费出行、SocialBot 回复、移动、战斗、物品及其他动作逐叶验收后才公告；`implementation_round` 保留 `R2a`，不能凭轮次或单个样例推导完整能力。当前宿主工具目录、官方SDK协议、后端实际能力和真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -27,7 +29,7 @@ solomapling:
 
 `allow-create` 默认 `false`；开启后允许通过北斗原生服务创建缺少的专用账号、角色，并完成首次登录条款初始化，不提升 GM/webadmin。已有账号须为未封禁的普通账号、目标角色须为 GM 0；账号已在线或被其他客户端占用时拒绝接管。新角色沿原生新手创建和出生规则进入游戏，R2a 不提供调级或传送。
 
-关闭 `actors-enabled` 时，后端只开放 R1 两项观察工具；客户端可列出七工具，不代表后端角色接口或任何动作已经开启。
+关闭 `actors-enabled` 时，后端只开放 R1 两项观察工具；客户端可列出八工具，不代表后端角色接口、模块控制或任何动作已经开启。
 
 ## 与二代、PQ 共享基础
 
@@ -101,7 +103,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 工具接口与后续草案
 
-下表区分已部署能力和后续设计。已部署七工具包括 `game_act` 的四种动作，npc_reply仅支持已审查的select/decline。角色/动作接口须开启双开关，其他 NPC、移动和 recipe 不注册空能力。
+下表区分既有交付、#145新增模块控制与后续设计。实际后端是否开放须核 capabilities；game_act 仍为四种动作，npc_reply仅支持已审查select/decline。角色/模块接口须开启双开关，其他NPC、移动和recipe不注册空能力。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -109,6 +111,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `game_observe` | scope=world/scene/actor、scene_ref、limit；actor 另需 session_id/expected_generation，可带 since_cursor | 已加载场景或专用角色的只读快照与包窗口，不创建地图或角色 | world/scene 为 R1；actor 为 #70 包事件观察 |
 | `actor_open` | profile_id、可选 world/channel、request_id | 排队原生登录，返回 operation_id 与 session/session_generation | R2a |
 | `actor_close` | session_id、expected_generation、request_id | 排队正常离线，查询清理及持久化核验结果，保留 fixture | R2a |
+| `actor_control` | session_id、expected_generation、expected_module_generation、operation、request_id | 外层控制自身MCP模块pause/resume，投影真实排空与新模块代次，保留根角色与CM | #145，按capabilities和验收记录开启 |
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
 | `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | chat/中心首屏/取消/npc_reply已部署，reply仅select/decline |

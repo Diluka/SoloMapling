@@ -13,16 +13,16 @@ import json
 import math
 import os
 from pathlib import Path
-import sys
 import tempfile
 import time
 from typing import Any
 from uuid import uuid4
 
-from mcp import Client, StdioServerParameters
+from mcp import Client
 
 from .bridge import BridgeConfig, PROFILE_IDENTIFIER, load_config, validate_identifier
-from .smoke import CONTEXT_FIELDS, require_capabilities, require_generation, require_scene_context
+from .smoke import (CONTEXT_FIELDS, require_capabilities, require_generation, require_scene_context,
+                    stdio_server_parameters)
 
 
 TERMINAL = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "INDETERMINATE"})
@@ -88,7 +88,7 @@ class ActorAcceptance:
         self.opening: dict[str, Any] | None = None
         self.closing: dict[str, Any] | None = None
         self.actioning: dict[str, Any] | None = None
-        self.unknown_write: dict[str, str] | None = None
+        self.unknown_write: dict[str, Any] | None = None
         self.unknown_action_write: dict[str, str] | None = None
         self.report: dict[str, Any] = {
             "passed": False, "transport": "stdio", "profile_id": profile,
@@ -129,9 +129,13 @@ class ActorAcceptance:
 
     def prepare_write(self, name: str, args: dict[str, Any], *, business: bool | None = None) -> None:
         if business is None:
-            business = name == "actor_open" or name == "game_act" and args.get("action") != "npc_cancel"
+            business = name in {"actor_open", "actor_control"} or name == "game_act" and args.get("action") != "npc_cancel"
         check(not business or "evidence_error" not in self.report, "EVIDENCE_UNAVAILABLE_BEFORE_WRITE")
         self.unknown_write = {"tool": name, "request_id": args.get("request_id")}
+        if name == "actor_control":
+            self.unknown_write.update({key: args.get(key) for key in (
+                "session_id", "expected_generation", "expected_module_generation", "operation",
+            )})
         self.report["requests"].append(dict(self.unknown_write))
         self.save()
         if business and "evidence_error" in self.report:
@@ -159,8 +163,9 @@ class ActorAcceptance:
         check(isinstance(value, dict), "MCP_CALL_FAILED")
         if write:
             check(value.get("request_id") == request_id, "WRITE_REQUEST_ID_MISMATCH")
-            kind = {"actor_open": "OPEN", "actor_close": "CLOSE", "game_act": "ACTION"}.get(name, value.get("kind"))
-            check(kind in {"OPEN", "CLOSE", "ACTION"}, "OPERATION_KIND_INVALID")
+            kind = {"actor_open": "OPEN", "actor_close": "CLOSE", "game_act": "ACTION",
+                    "actor_control": "MODULE_CONTROL"}.get(name, value.get("kind"))
+            check(kind in {"OPEN", "CLOSE", "ACTION", "MODULE_CONTROL"}, "OPERATION_KIND_INVALID")
             # A reply is only a recoverable receipt after its operation and session
             # identity have been validated. Keep the request key on malformed replies.
             self.operation(value, kind)
@@ -168,11 +173,16 @@ class ActorAcceptance:
                 check(value["session_id"] == args["session_id"]
                       and value["session_generation"] == args["expected_generation"]
                       and value.get("action") == args["action"], "ACTION_RECEIPT_IDENTITY_MISMATCH")
+            elif name == "actor_control":
+                check(value["session_id"] == args["session_id"]
+                      and value["session_generation"] == args["expected_generation"]
+                      and value.get("module_operation") == args["operation"],
+                      "MODULE_CONTROL_RECEIPT_IDENTITY_MISMATCH")
         if "operation_id" in value:
             check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
             self.report["operations"].append({
                 key: value.get(key) for key in [
-                    "operation_id", "kind", "action", "status", "session_id", "session_generation",
+                    "operation_id", "kind", "action", "module_operation", "status", "session_id", "session_generation",
                     "profile_id", "runtime_generation", "cancel_requested",
                 ]
             })
@@ -186,6 +196,8 @@ class ActorAcceptance:
         check(value.get("kind") == kind and value.get("profile_id") == self.profile, "OPERATION_IDENTITY_MISMATCH")
         if kind == "ACTION":
             check(value.get("action") in {"chat", "npc_center_open", "npc_cancel", "npc_reply"}, "OPERATION_ACTION_INVALID")
+        elif kind == "MODULE_CONTROL":
+            check(value.get("module_operation") in {"pause", "resume"}, "MODULE_CONTROL_OPERATION_INVALID")
         check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
         if operation_id is not None:
             check(value["operation_id"] == operation_id, "OPERATION_ID_MISMATCH")
@@ -209,6 +221,8 @@ class ActorAcceptance:
                   and value["session_generation"] == receipt["session_generation"], "OPERATION_SESSION_CHANGED")
             if kind == "ACTION":
                 check(value["action"] == receipt["action"], "OPERATION_ACTION_CHANGED")
+            elif kind == "MODULE_CONTROL":
+                check(value["module_operation"] == receipt["module_operation"], "MODULE_CONTROL_OPERATION_CHANGED")
             if value["status"] in TERMINAL:
                 return value
             check(time.monotonic() < deadline, "OPERATION_TIMEOUT")
@@ -388,11 +402,7 @@ async def run_actor_acceptance(
     config_path: Path, config: BridgeConfig, acceptance: ActorAcceptance,
 ) -> dict[str, Any]:
     """Run one acceptance workflow with the shared recovery journal and cleanup boundary."""
-    params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "solo_acceptance_mcp", "--config", str(config_path.resolve())],
-        cwd=Path(__file__).resolve().parents[2],
-    )
+    params = stdio_server_parameters(config_path)
     try:
         async with Client(params, read_timeout_seconds=config.timeout_seconds * 4 + 5) as client:
             try:

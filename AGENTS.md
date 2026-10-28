@@ -47,6 +47,9 @@ python3 beidou-integration/scripts/build.py --help
 
 ## MCP 迭代与问题闭环
 
+- 用户已设定持续目标里程碑 #8「MCP：完整控制单角色」，范围和最终验收为 #144，实施索引见 `docs/mcp-acceptance/full-character-control.md`。新 MCP 实施叶纳入该里程碑，保留原生父子关系；原共享任务不复制或整体重挂，按实际提供者设置 blocked_by。代码、测试、隔离、实际部署分别通过后逐叶关闭，不能仅完成拆单或局部功能就将里程碑标为完成。
+- #140 已拆 #145 暂停/恢复、#146 卸载/重挂、#147 模块不可用时外部根关闭。#145 的源码增加受限第八工具 `actor_control`，只接收自己session和期望模块代次的pause/resume，经外层ActorControlService投影同一宿主真实生命周期；既有四种game_act动作范围不变，实际部署状态按对应Issue/capabilities，不提前将候选公告为上线。
+- pause 不占用模块scope中的伪work或另建队列来等自己；消费唯一ModuleStop的真实排空，SUSPENDED后才能成功。resume入口保留在MCP外层，先核当前原生来源再激活新代次；旧Context/旧预备动作不续权。根角色/Client/lane/CM保持，首次close历史和执行预留不被模块控制吃掉。后端能力、SDK stdio和当前宿主新工具加载分别留证，候选验证须绑定候选工作树src，不能误导入根main旧包。
 - M1按#79/#139/#140采用统一角色运行体与MCP首个控制模块，按小闭环扩展协议。`soloMapling.game.runtime` 的宿主/模块协议与机制测试属于运行体工作；MCP模块及来源/外部适配由MCP工作接入。首轮不交付生产自主练级、巡逻或刷怪模块，机制测试替身不等于自治能力。
 - 运行体在OPEN前拥有根scope、唯一角色lane和原生来源资源。`RoleBinding`保留AcceptanceClient账号/lease/保存与BotClient/BotRegistry的身份差异；挂载MCP不能改变角色来源。角色资源在adopt时唯一登记，来源释放前核精确根scope/cleanup attempt，不能从另一scope借同identity的permit调用原生退出。
 - 模块scope/Grant与宿主根资源分开；暂停/卸载只排空自己的工作，不登出角色或关闭lane。生命周期hook本身也要退出，不能因动作work已空就提前宣布卸载；根关闭在所有模块真正结束后才退出角色。恢复创建新模块执行代次，旧Context不能复活。
@@ -93,6 +96,7 @@ python3 beidou-integration/scripts/build.py --help
 - GitHub CLI 的写操作始终显式指定 `--repo Diluka/SoloMapling`，避免 Fork 网络的默认目标指向上游；本机可另用 `gh repo set-default Diluka/SoloMapling`。
 - 原版更新正常合并并保留历史，不使用 rebase、强制推送或 hard reset。插件改进按功能审查，记录来源提交；插件仓库另起历史，不直接整树合并其平台和宿主改动。
 - 创建工作分支前先检查本地改动并以 `git pull --ff-only` 对齐自己的远端基线。
+- 部署根工作树 `sources/SoloMapling` 固定为 `main`，不承载开发 WIP；功能在独立工作树开发并先对齐最新 `origin/main`。开发与隔离验收通过后正常合入主分支，再将根工作树快进对齐 `main`、从主分支完整构建和部署；不能用未合并分支产物直接替代正式部署来源。
 - Issues/Milestone 跟踪工作与验收；仅在对应证据齐全时关闭。PR 只开到自己的仓库，用户已授权代理验收后自行合并。
 - 不擅自删除远程仓库。旧方案本地清理应先确认修改与恢复点，且不得波及游戏数据和备份。
 

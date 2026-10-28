@@ -87,3 +87,14 @@ actor 观察结果的 `actor.runtime` 和操作响应的 `session.runtime` 投�
 部署继续使用根目录 `build.sh` 验证后的镜像、本地只读配置与原北斗数据；不得为接入模块另挂 JAR、改用环境变量覆盖业务配置或另建实际角色库。独立实验使用临时库/一致副本，候选通过后沿正常保存、一致备份、切换和实际短流程回归推进；真实玩家活动单独归因。运行源码身份核对构建报告和 capabilities，不能把工作树代码或测试替身当成已部署能力。
 
 本轮 MCP 迁移以原 `a09cec866649d97b2d0ac071c6a06faec0e24d90` 的外部契约与来源行为为基线，组合运行体 `24a36509929e4d2179bdefc22b95293f8c34b1a9` 的协议；后续修正及最终运行源码身份以构建报告、capabilities 和 Issue 证据核对，不把本页基线当当前部署版本。
+
+
+## MCP 模块暂停与恢复
+
+[#145](https://github.com/Diluka/SoloMapling/issues/145) 在外层增加受限 `actor_control`：`POST /solo/acceptance/v1/actor/module/control` 接收自身 session、既有会话 expected_generation、期望 module generation、request_id 和 pause/resume。根宿主/角色/CID、固定模块类型与实例由该session唯一解析，不接受任意模块或角色接管。新操作沿正常JWT/admin与owner校验；接口详细字段见[工具契约](../../tools/acceptance-mcp/README.md)。
+
+resume 的接收入口不放在已暂停模块的 Context 内。pause 直接消费宿主唯一 ModuleStop，`MODULE_CONTROL` 只投影已有生命周期及真实排空，不在模块scope制造一个会等待自身的伪work或第二队列。SUSPENDED、实际hook/body/carrier退出与受理分别表达；resume先核当前原生来源，再激活为新代次。旧Context/预备动作不能恢复资格。
+
+原生角色、Client、root资源、唯一lane与CM/QM属于根来源，暂停仍可观察；暂停不dispose、登出或撤回已发生结果。未完成pause被root close接管时准确记录被取代，已确认暂停事实仍保留；首次close预留继续有效。unload/attach与复杂失败分别由#146/#147推进，不从#145推导完成。
+
+后端capabilities公告、官方SDK新stdio进程列出/调用第八工具、当前Codex宿主目录实际刷新是三项检查。候选验证显式绑定候选工作树src；生产从已合并main启动。不能将SDK通过或cap返回八工具误称宿主目录已热加载。
