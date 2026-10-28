@@ -83,8 +83,6 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.scriptRun(null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
-                assertThrows(ObservationException.class, () -> controller.scriptHelp(null)).status());
-        assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.scriptCancel(null)).status());
 
         authenticate("reader", "ROLE_USER");
@@ -96,8 +94,6 @@ class ActorControlControllerTest {
                 assertThrows(ObservationException.class, () -> controller.act(null)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.scriptRun(null)).status());
-        assertEquals(HttpStatus.FORBIDDEN,
-                assertThrows(ObservationException.class, () -> controller.scriptHelp(null)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.scriptCancel(null)).status());
         verifyNoInteractions(service);
@@ -468,15 +464,11 @@ class ActorControlControllerTest {
                 null, List.of(), "cm.getPlayer().getName()", Map.of(), 1000L);
         when(service.scriptRun("script-admin", "script-id", script)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
         assertEquals("SUCCEEDED", controller.scriptRun(new SubmitBody<>("script-id", script)).getData().get("status"));
-        var help = new ActorScriptHelpRequest("session", 7L);
-        when(service.scriptHelp("script-admin", help)).thenReturn(Map.of("native_environments", List.of("npc"), "contexts", List.of()));
-        assertEquals(List.of("npc"), controller.scriptHelp(new SubmitBody<>("help-id", help)).getData().get("native_environments"));
         var cancel = new ActorScriptCancelRequest("session", 7L, "script-id", script.kind(), script.operation(),
                 script.contextId(), script.options(), script.entry(), script.args(), script.source(), script.parameters(), script.timeoutMs());
         when(service.scriptCancel("script-admin", "cancel-id", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
         assertEquals("cancel-id", controller.scriptCancel(new SubmitBody<>("cancel-id", cancel)).getResponseId());
         verify(service).scriptRun("script-admin", "script-id", script);
-        verify(service).scriptHelp("script-admin", help);
         verify(service).scriptCancel("script-admin", "cancel-id", cancel);
     }
 
@@ -555,7 +547,7 @@ class ActorControlControllerTest {
     }
 
     @Test
-    void nativeScriptJsonRejectsCollectionTypeCoercionAndKeepsOnlyNativeHelp() throws Exception {
+    void nativeScriptJsonRejectsCollectionTypeCoercion() throws Exception {
         ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         for (String field : List.of("context_id", "entry")) {
             for (String value : List.of("1", "true", "{}", "[]")) {
@@ -571,13 +563,6 @@ class ActorControlControllerTest {
                 body.set(field, mapper.readTree(value));
                 assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorScriptRequest.class), field + "=" + value);
             }
-        }
-        ActorScriptHelpRequest help = mapper.readValue("{\"session_id\":\"session\",\"expected_generation\":7}", ActorScriptHelpRequest.class);
-        assertEquals(new ActorScriptHelpRequest("session", 7L), help);
-        for (String field : List.of("names", "environment", "source", "functions")) {
-            ObjectNode body = (ObjectNode) mapper.valueToTree(help);
-            body.set(field, mapper.readTree("[]"));
-            assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorScriptHelpRequest.class), field);
         }
     }
 

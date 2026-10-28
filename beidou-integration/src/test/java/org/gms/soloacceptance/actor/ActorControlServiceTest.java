@@ -3024,27 +3024,6 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void scriptHelpOnlyDescribesTheActualNativeBindingsAndRequiresTheOwnedCurrentRole() {
-        ActorControlService service = service(4, 20, 64);
-        var opened = open(service, "script-help-open");
-        executors.getFirst().runNext();
-        var descriptors = List.<Map<String, Object>>of(Map.of("kind", "npc", "globals", List.of("cm")));
-        when(backend.nativeScriptEnvironments()).thenReturn(descriptors);
-        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened)));
-        assertEquals("javascript", help.get("language"));
-        assertEquals(descriptors, help.get("native_environments"));
-        assertEquals(List.of(), help.get("contexts"));
-        assertEquals(1, help.get("maximum_contexts_per_module"));
-        assertFalse(help.containsKey("functions"));
-        assertFalse(help.containsKey("unavailable"));
-        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class, () -> service.scriptHelp("other-admin",
-                new ActorScriptHelpRequest(sessionId(opened), generation(opened)))).status());
-        assertEquals(HttpStatus.GONE, assertThrows(ObservationException.class, () -> service.scriptHelp("admin",
-                new ActorScriptHelpRequest(sessionId(opened), generation(opened) + 1))).status());
-        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
-    }
-
-    @Test
     void malformedScriptInputsAreRejectedBeforeTakingHistoryOrScopeCapacity() throws Exception {
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "script-validation-open");
@@ -3185,10 +3164,6 @@ class ActorControlServiceTest {
             var recovered = service.scriptRun("admin", target, request);
             assertEquals(id(cancelled), id(recovered));
             assertEquals(result(cancelled), result(recovered));
-            var contexts = (List<?>) service.scriptHelp("admin",
-                    new ActorScriptHelpRequest(sessionId(opened), generation(opened))).get("contexts");
-            assertEquals(contextId, ((Map<?, ?>) contexts.getFirst()).get("context_id"));
-            assertEquals("OPEN", ((Map<?, ?>) contexts.getFirst()).get("context_state"));
             var read = service.scriptRun("admin", target + "-read", scriptRequest(sessionId(opened), generation(opened),
                     "count", Map.of(), 5000L, new ScriptBinding("npc", "invoke", contextId, Map.of(), null, List.of())));
             assertEquals("SUCCEEDED", read.get("status"));
@@ -3268,11 +3243,7 @@ class ActorControlServiceTest {
         assertEquals(id(started), id(service.scriptRun("admin", "native-start", request)));
         assertEquals(1, adapter.starts.get());
         String contextId = (String) result(started).get("context_id");
-        var help = service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened)));
-        assertFalse(help.containsKey("functions"));
-        assertEquals(descriptors, help.get("native_environments"));
         assertEquals(descriptors, service.publicCapabilities().get("native_environments"));
-        assertEquals(1, ((List<?>) help.get("contexts")).size());
         var invoke = new ScriptBinding("npc", "invoke", contextId, Map.of(), "next", List.of(7));
         var reply = service.scriptRun("admin", "native-reply", scriptRequest(sessionId(opened), generation(opened),
                 "", Map.of(), 5000L, invoke));
@@ -3290,7 +3261,6 @@ class ActorControlServiceTest {
         assertEquals(true, result(closed).get("context_closed"));
         assertEquals(1, adapter.closes.get());
         assertEquals(0, execution(service, opened).moduleScope().snapshot().outstandingResources());
-        assertEquals(List.of(), service.scriptHelp("admin", new ActorScriptHelpRequest(sessionId(opened), generation(opened))).get("contexts"));
         var restarted = service.scriptRun("admin", "native-after-close",
                 scriptRequest(sessionId(opened), generation(opened), "42", Map.of(), 5000L, environment));
         assertEquals("SUCCEEDED", restarted.get("status"));

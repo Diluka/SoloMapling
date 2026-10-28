@@ -89,3 +89,7 @@ solomapling:
 - [Cosmic 原始说明](Cosmic_README.md)
 
 这些资料描述原版 Cosmic 集成环境。北斗集成的构建、配置与验收以本项目说明为准。
+
+### MCP 开发技能
+
+随源码使用[游戏交互](skills/solomapling-game-interaction/SKILL.md)、[脚本调试](skills/solomapling-script-debug/SKILL.md)和[机器人验收](skills/solomapling-bot-testing/SKILL.md)三个技能。各自的 `references/` 收录使用说明；接口直接查源码和匹配构建产物，命令目录通过已有只读管理查询定位。

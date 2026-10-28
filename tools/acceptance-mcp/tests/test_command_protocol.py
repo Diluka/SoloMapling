@@ -4,7 +4,7 @@ import asyncio
 from copy import deepcopy
 import time
 import unittest
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from mcp import Client
 
@@ -14,7 +14,6 @@ from tests import test_chat_protocol as chat_protocol
 from tests.helpers import BridgeStub, PASSWORD, TOKEN, envelope
 
 
-HELP_PATH = "/solo/acceptance/v1/command/help"
 COMMAND_PATH = "/solo/acceptance/v1/command/execute"
 COMMAND_GENERATION = "command-process-fixture"
 
@@ -28,12 +27,6 @@ class CommandProtocolStub(BridgeStub):
 
     def default_response(self, request: dict) -> tuple[int, object]:
         path = urlsplit(request["path"]).path
-        if path == HELP_PATH:
-            return 200, envelope({
-                "command_generation": COMMAND_GENERATION, "commands": ["time", "help", "item"],
-                "command_details": [{"name": "time", "rank": 0, "description": "原生时间命令"},
-                                    {"name": "item", "rank": 2, "description": "原生物品命令"}],
-            })
         if path == COMMAND_PATH:
             invoked = None if self.status == "RUNNING" else self.status in {"UNKNOWN", "RETURNED"}
             returned = None if self.status == "RUNNING" else self.status == "RETURNED"
@@ -60,16 +53,10 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
     def command_requests(self) -> list[dict]:
         return [request for request in self.stub.requests if request["path"] == COMMAND_PATH]
 
-    async def test_stdio_registers_two_independent_tools_with_strict_text_schema(self) -> None:
+    async def test_stdio_registers_independent_command_with_strict_text_schema(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         self.assertEqual(chat_protocol.REGISTERED_TOOLS, set(tools))
-        help_tool = tools["game_command_help"]
-        self.assertTrue(help_tool.annotations.read_only_hint)
-        self.assertTrue(help_tool.annotations.idempotent_hint)
-        self.assertFalse(help_tool.annotations.destructive_hint)
-        self.assertEqual({"command"}, set(help_tool.input_schema["properties"]))
-        self.assertIs(False, help_tool.input_schema["additionalProperties"])
         command_tool = tools["game_command"]
         self.assertFalse(command_tool.annotations.read_only_hint)
         self.assertTrue(command_tool.annotations.destructive_hint)
@@ -88,27 +75,19 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RETURNED", command_tool.description)
         self.assertEqual([], self.stub.requests)
 
-    async def test_help_and_command_use_native_routes_jwt_and_original_envelope(self) -> None:
+    async def test_command_uses_native_route_jwt_and_original_envelope(self) -> None:
         async with self.stdio_client() as client:
-            values = [await client.call_tool("game_command_help", {}),
-                      await client.call_tool("game_command_help", {"command": "item"}),
-                      await client.call_tool("game_command", self.args)]
-        for value in values:
-            self.assertFalse(value.is_error)
-            self.assertNotIn(PASSWORD, value.model_dump_json())
-            self.assertNotIn(TOKEN, value.model_dump_json())
-        self.assertEqual(COMMAND_GENERATION, values[1].structured_content["command_generation"])
-        self.assertEqual(["time", "help", "item"], values[1].structured_content["commands"])
-        help_requests = [request for request in self.stub.requests if request["path"].startswith(HELP_PATH)]
-        self.assertEqual([HELP_PATH, HELP_PATH + "?command=item"], [request["path"] for request in help_requests])
-        self.assertTrue(all(request["method"] == "GET" for request in help_requests))
+            value = await client.call_tool("game_command", self.args)
+        self.assertFalse(value.is_error)
+        self.assertNotIn(PASSWORD, value.model_dump_json())
+        self.assertNotIn(TOKEN, value.model_dump_json())
         self.assertEqual(1, len(self.command_requests()))
         request = self.command_requests()[0]
         self.assertEqual("POST", request["method"])
         self.assertEqual("Bearer " + TOKEN + "-1", request["headers"]["authorization"])
         self.assertEqual({"requestId": self.args["request_id"],
                           "data": {key: value for key, value in self.args.items() if key != "request_id"}}, request["body"])
-        self.assertEqual(self.args["request_id"], values[2].structured_content["request_id"])
+        self.assertEqual(self.args["request_id"], value.structured_content["request_id"])
         self.assertEqual(1, self.stub.login_count)
 
     async def test_any_command_name_prefix_and_spacing_are_forwarded_verbatim(self) -> None:
@@ -153,29 +132,6 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(TOKEN, response.model_dump_json())
         self.assertEqual([], self.stub.requests)
 
-    async def test_help_accepts_any_name_and_encodes_it_as_one_query_value(self) -> None:
-        names = ["shutdown", "Give", "@give", "time & mode?/中文"]
-        async with Client(build_server(self.stub.config())) as client:
-            for name in names:
-                response = await client.call_tool("game_command_help", {"command": name})
-                self.assertFalse(response.is_error)
-                self.assertEqual(COMMAND_GENERATION, response.structured_content["command_generation"])
-        self.assertEqual([HELP_PATH + "?command=" + quote(name, safe="") for name in names],
-                         [request["path"] for request in self.stub.requests if request["path"].startswith(HELP_PATH)])
-
-    async def test_help_rejects_invalid_or_extra_arguments_without_echo_or_http(self) -> None:
-        private = PASSWORD + TOKEN + "private-help-input"
-        cases = [{"command": value} for value in [True, 1, [], {}, "", " \t", "x" * (MAX_COMMAND_CHARACTERS + 1),
-                                                  {"private": private}, "\ud800"]]
-        cases.extend([{"command": "item", "profile_id": private}, {"request_id": private}])
-        async with Client(build_server(self.stub.config())) as client:
-            for index, arguments in enumerate(cases):
-                with self.subTest(case=index):
-                    response = await client.call_tool("game_command_help", arguments)
-                    self.assertTrue(response.is_error)
-                    self.assertEqual("INVALID_ARGUMENTS", response.structured_content["error"]["code"])
-                    self.assertNotIn(private, response.model_dump_json())
-        self.assertEqual([], self.stub.requests)
 
     async def test_statuses_and_native_return_facts_do_not_infer_success_or_deduplicate_locally(self) -> None:
         statuses = ["RUNNING", "FAILED", "REJECTED", "UNKNOWN", "RETURNED"]
