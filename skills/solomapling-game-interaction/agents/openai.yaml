@@ -1,0 +1,4 @@
+interface:
+  display_name: "SoloMapling 游戏交互"
+  short_description: "观察专用角色，执行游戏动作与原生命令，查阅随附源码并核对实际结果。"
+  default_prompt: "使用 $solomapling-game-interaction 完成这次游戏观察或操作，并核对实际反馈和收尾。"

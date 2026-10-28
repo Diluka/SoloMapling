@@ -352,10 +352,7 @@ public final class CharacterRuntime {
             synchronized (monitor) { session = nativeScript; }
             return session == null ? List.of() : List.of(session.describe());
         }
-        public Map<String, Object> nativeScriptHelp() {
-            synchronized (monitor) { requireActive(this, null); }
-            return Map.of("contexts", nativeScriptContexts(), "maximum_contexts_per_module", 1);
-        }
+
         public ExecutionScope.WorkHandle acceptWork() {
             synchronized (monitor) {
                 requireActive(this, null);

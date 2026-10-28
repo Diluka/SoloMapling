@@ -40,15 +40,7 @@ executeCommand("@time");
 Unicode字符，拒绝非字符串、全空白、不成对surrogate和多余字段。脚本调用及HTTP/MCP
 输入仍分别受到各自已有的总输入预算约束。
 
-`game_command_help()` 只供MCP按需查询实际启用的原生命令目录，
-`game_command_help(command="time")` 查询原生命令名称、rank和description。目录来自
-现有registeredCommands，不是桥的支持列表；普通角色不能执行高rank命令不等于服务端
-没有注册它。帮助不会作为函数注入脚本。
-
-| 工具 | HTTP入口 |
-| --- | --- |
-| game_command_help | GET /solo/acceptance/v1/command/help，可选command名称 |
-| game_command | POST /solo/acceptance/v1/command/execute，requestId放信封外层，其余字段放data |
+命令查阅由[游戏交互技能](../../skills/solomapling-game-interaction/SKILL.md)提供。其脚本复用正常管理员鉴权，调用北斗已有的只读 `POST /command/v1/getCommandListFromDB`，取得语法、权限、启停与处理类映射；参数和副作用直接查处理类及语言资源。独立执行使用 `POST /solo/acceptance/v1/command/execute`，requestId 放信封外层，其余字段放 data；管理代次从 capabilities 取得。
 
 源码默认关闭独立MCP命令工具，在本地application.yml保留原配置并开启：
 

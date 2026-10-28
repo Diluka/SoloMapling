@@ -2,7 +2,7 @@
 
 新增 #207 独立管理指令入口的配置、参数和恢复规则见[管理指令说明](commands.md)。该入口直接复用原生服务，与角色运行体解耦；实际启用和部署状态以 `debug_commands` 能力公告及 #207 验收记录为准。
 
-**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。`script_run`、`script_help` 与 #207 两项独立管理工具合计十一工具；当前脚本工具只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗原脚本及真实上下文，已删除独立纯JS模式和environment参数。实际开放项始终以 `game_capabilities` 和 `script_help` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。`script_run` 与通用原生命令执行工具合计九工具；当前脚本工具只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗原脚本及真实上下文，已删除独立纯JS模式和environment参数。实际开放项始终以 `game_capabilities` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -103,7 +103,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 当前工具接口
 
-下表列出角色、动作和脚本工具；加上 #207 的两个独立管理工具，当前客户端共十一工具，实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关；管理工具另需其专用开关。
+下表列出角色、动作和脚本工具；加上独立命令执行工具，当前客户端共九工具，实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关；管理工具另需其专用开关。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -115,7 +115,6 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
 | `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
 | `script_run` | session_id、expected_generation、request_id、kind、operation；按操作传context_id/options/entry/args，可带source/parameters/timeout_ms/since_output | 执行中发送MCP进度输出，结束返回SCRIPT结果、错误及真实收尾 | 北斗脚本的cm/qm/pi/rm/em；流协议见脚本执行参考 |
-| `script_help` | session_id、expected_generation | 同源native_environments、本模块contexts与容量 | 只读，不分配脚本工作或operation |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。
 
@@ -375,9 +374,9 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 
 一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱。背包移位由 #164 交付，其余八动作由 PR #208 实现，各层验收与实际开放范围分别核对对应证据。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。本轮脚本基础保留这十三动作，不把它们注册为脚本函数。
 
-`script_run` 和 `script_help` 只服务于北斗脚本执行。调用方直接传 `kind/operation` 和相应上下文选择，加载现有原文件并沿真实对象执行；非空source片段在同一北斗引擎运行，使用parameters读取JSON，以console/print输出并返回可序列化结果。独立纯JS模式及旧environment字段已删除，缺少kind/operation不会回退。
+`script_run` 只服务于北斗脚本执行。调用方直接传 `kind/operation` 和相应上下文选择，加载现有原文件并沿真实对象执行；非空source片段在同一北斗引擎运行，使用parameters读取JSON，以console/print输出并返回可序列化结果。独立纯JS模式及旧environment字段已删除，缺少kind/operation不会回退。
 
-`script_help(session_id, expected_generation)` 返回实际 `native_environments/contexts/maximum_contexts_per_module`，不维护names或纯函数目录，也不为每个既有Java方法重造同义函数。现有game_act和管理工具保留，完整行为模块、共享事实/事件及直接动作迁移仍在各自任务推进。
+环境与方法由[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航源码，实际开放项由 capabilities 公告；上下文标识和状态来自执行结果。现有动作和通用命令执行保留。
 
 脚本沿CharacterRuntime当前模块代次和原scope/work执行，不占角色短lane。本次调用真实结算后可以保留OPEN Context，最终关闭及原生调度资源释放另核，不以Future或请求返回替代。调用流程见[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，公共约定见[脚本执行参考](../robot-runtime/script-execution.md)，真实来源见[北斗脚本上下文](../robot-runtime/beidou-script-environment.md)。各层验收按对应Issue分别留证。
 
@@ -392,7 +391,7 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 | R2b 普通聊天与回复 | #70/#72/#74 已完成隔离/部署验收并关闭，SocialBot 往返仍待后续 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
 | R2c NPC 对话 | #75 已部署验收；#110无收益select/decline已完成隔离及实际部署验收，accept/完整菜单出行由#112/#113推进 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
 | 一期基本操作 #200 | 移动与停止、普通攻击、拾取丢弃、物品使用、背包移位和穿脱逐片交付 | 固定场景分别核验指令、真实结果、停止或取消及必要存档，复用同一宿主与原生规则 |
-| 北斗脚本 #216 | script_run执行原脚本与真实上下文，script_help同源说明；独立纯JS模式已移除 | 参数/输出/结果、连续回调、期限/取消及本次工作结算与最终Context/调度资源释放分别核验 |
+| 北斗脚本 #216 | script_run执行原脚本与真实上下文，技能导航源码；独立纯JS模式已移除 | 参数/输出/结果、连续回调、期限/取消及本次工作结算与最终Context/调度资源释放分别核验 |
 | R5 组队协作验收 | 多actor分工、真人保留角色、单个PQ阶段和逐步扩展 | 一真人与合法bot编制逐阶段验证；双队/双频道隔离、同时站位、掉线补位与失败恢复；每种PQ独立留证 |
 
 组队协作依赖[组队任务计划 #13](https://github.com/Diluka/SoloMapling/issues/13)及[团队协作内核 #14](https://github.com/Diluka/SoloMapling/issues/14)，按对应任务与实际阶段独立验收。基本操作通过、脚本调用成功与 PQ 通关分别记录，不能互相替代。
@@ -467,4 +466,4 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 
 ## #200 其余基本操作
 
-PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，脚本基础随后增加两工具，#207 再增加两项独立管理工具，当前客户端共十一工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。#216 原生脚本环境不增减这些直接动作，也不把它们逐项迁移为同义脚本函数。
+PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，脚本与通用命令各保留一个执行工具，当前客户端共九工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。#216 原生脚本环境不增减这些直接动作，也不把它们逐项迁移为同义脚本函数。

@@ -142,11 +142,6 @@ final class AcceptanceActorExecution {
         requireModule().recordResult(work, result);
     }
 
-    Map<String, Object> scriptHelp() {
-        try { return requireModule().scriptHelp(); }
-        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
-    }
-
     NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request) {
         return runNativeScript(work, request, ignored -> { });
     }

@@ -16,7 +16,7 @@ from . import __version__
 from .bridge import (
     BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT, MAX_COMMAND_CHARACTERS,
     SCRIPT_MAX_SOURCE_UNITS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
-    validate_command_help, validate_command_request, validate_script_help, validate_script_run,
+    validate_command_request, validate_script_run,
 )
 
 
@@ -125,15 +125,13 @@ CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "
 COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "expected_command_generation"})
 SCRIPT_RUN_REQUIRED = frozenset({"session_id", "expected_generation", "request_id", "kind", "operation"})
 SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"source", "parameters", "timeout_ms", "context_id", "options", "entry", "args", "since_output"}
-SCRIPT_HELP_REQUIRED = frozenset({"session_id", "expected_generation"})
-SCRIPT_HELP_ARGUMENTS = SCRIPT_HELP_REQUIRED
 
 
 class AcceptanceMCPServer(MCPServer):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name in {"game_command", "game_command_help", "script_run", "script_help"}:
+            if tool.name in {"game_command", "script_run"}:
                 tool.input_schema = {**tool.input_schema, "additionalProperties": False}
             if tool.name == "game_act":
                 tool.input_schema = {**tool.input_schema, "additionalProperties": False, "allOf": [{"oneOf": [
@@ -162,28 +160,19 @@ class AcceptanceMCPServer(MCPServer):
                 validate_action_request(**arguments)
             except BridgeError as failure:
                 return result(failure.public_data(), is_error=True)
-        elif name in {"game_command", "game_command_help"}:
+        elif name == "game_command":
             try:
-                if name == "game_command":
-                    if set(arguments) != COMMAND_ARGUMENTS:
-                        raise BridgeError("INVALID_ARGUMENTS", "game_command 参数缺失或包含额外字段。")
-                    validate_command_request(**arguments)
-                else:
-                    if set(arguments) - {"command"}:
-                        raise BridgeError("INVALID_ARGUMENTS", "game_command_help 只接受可选 command。")
-                    validate_command_help(**arguments)
+                if set(arguments) != COMMAND_ARGUMENTS:
+                    raise BridgeError("INVALID_ARGUMENTS", "game_command 参数缺失或包含额外字段。")
+                validate_command_request(**arguments)
             except BridgeError as failure:
                 return result(failure.public_data(), is_error=True)
-        elif name in {"script_run", "script_help"}:
-            required, allowed, validator = (
-                (SCRIPT_RUN_REQUIRED, SCRIPT_RUN_ARGUMENTS, validate_script_run)
-                if name == "script_run" else (SCRIPT_HELP_REQUIRED, SCRIPT_HELP_ARGUMENTS, validate_script_help)
-            )
-            if not required <= set(arguments) or set(arguments) - allowed:
-                return result({"error": {"code": "INVALID_ARGUMENTS", "message": name + " 参数缺失或包含额外字段。",
+        elif name == "script_run":
+            if not SCRIPT_RUN_REQUIRED <= set(arguments) or set(arguments) - SCRIPT_RUN_ARGUMENTS:
+                return result({"error": {"code": "INVALID_ARGUMENTS", "message": "script_run 参数缺失或包含额外字段。",
                                          "retryable": False}}, is_error=True)
             try:
-                validator(**arguments)
+                validate_script_run(**arguments)
             except BridgeError as failure:
                 return result(failure.public_data(), is_error=True)
         return await super().call_tool(name, arguments, context)
@@ -214,10 +203,10 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
                       "取消操作不等于结束NPC对话。game_act 支持普通聊天、已审NPC回复、背包移位，以及受控移动/停止、单次近战普通攻击、库存物品拾取/丢弃、普通HP/MP药剂使用和装备穿脱；实际能力以桥公告为准。"
                       "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
-                      "script_run 在同一角色运行体执行有期限的北斗脚本，执行中通过MCP进度通知实时交付stdout/stderr，最终返回结果；按实际 script_help 选择真实北斗环境与原入口。"
+                      "script_run 在同一角色运行体执行有期限的北斗脚本，执行中通过MCP进度通知实时交付stdout/stderr，最终返回结果；根据能力公告及随源码技能选择真实北斗环境与原入口。"
                       "持久 context_id 用于后续回调或关闭，原生副作用按实际结果核验，不由工具返回成功推导玩法完成。"
                       "北斗脚本提供 executeCommand(commandText) 通用执行函数，与 game_command 共用原生handle；权限沿原生，RETURNED不代表具体命令效果。"
-                      "game_command_help 查询实际原生命令目录，game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现。"
+                      "game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现；命令及脚本用法通过随源码技能查阅。"
                       "权限沿原生检查；RETURNED仅表示原生处理器返回，不证明命令执行成功或产生玩法效果。"),
         log_level="WARNING",
         lifespan=lifespan,
@@ -244,20 +233,12 @@ def build_server(config: BridgeConfig) -> MCPServer:
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
-    @server.tool(annotations=read_annotations)
-    async def game_command_help(command: CommandText | None = None) -> CallToolResult:
-        """查询实际注册的原生命令目录、说明和权限等级；省略 command 列出目录，指定名称查询该命令。目录存在不代表当前角色获准执行。"""
-        try:
-            return result(await bridge.command_help(command))
-        except BridgeError as failure:
-            return result(failure.public_data(), is_error=True)
-
     @server.tool(annotations=destructive_annotations)
     async def game_command(
         profile_id: ProfileId, request_id: RequestId, command: CommandText,
         expected_command_generation: Identifier,
     ) -> CallToolResult:
-        """对已登记在线 profile 原样执行完整原生命令文本，与脚本 executeCommand 共用实现，不按命令名筛选。语法和 GM 权限沿原生检查。RETURNED只证明原生void处理器已返回，权限拒绝也可能正常返回，实际效果须读取反馈或状态确认。先从帮助/能力取得 command_generation 作为 expected_command_generation，并提供 request_id；同ID同参数恢复原结果。超时或UNKNOWN只用原ID和原代次恢复，不换ID或刷新代次重发。"""
+        """对已登记在线 profile 原样执行完整原生命令文本，与脚本 executeCommand 共用实现，不按命令名筛选。语法和 GM 权限沿原生检查。RETURNED只证明原生void处理器已返回，权限拒绝也可能正常返回，实际效果须读取反馈或状态确认。先从能力公告取得 command_generation 作为 expected_command_generation，并提供 request_id；同ID同参数恢复原结果。超时或UNKNOWN只用原ID和原代次恢复，不换ID或刷新代次重发。"""
         try:
             return result(await bridge.command(profile_id, request_id=request_id, command=command,
                                                expected_command_generation=expected_command_generation))
@@ -353,14 +334,6 @@ def build_server(config: BridgeConfig) -> MCPServer:
                 options=options, entry=entry, args=args, since_output=since_output, on_event=forward,
             )
             return result(data, is_error=data.get("status") != "SUCCEEDED")
-        except BridgeError as failure:
-            return result(failure.public_data(), is_error=True)
-
-    @server.tool(annotations=read_annotations)
-    async def script_help(session_id: Identifier, expected_generation: Generation) -> CallToolResult:
-        """查询当前角色运行体实际北斗脚本种类、原生对象、入口及 contexts。说明来自实际适配器，不为已有 Java API 编造同义函数；实际开放范围以后端结果为准。"""
-        try:
-            return result(await bridge.script_help(session_id, expected_generation))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 

@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 import re
 from typing import Any, Awaitable, Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -252,10 +252,6 @@ def _validate_script_json(value: Any, label: str) -> None:
         raise BridgeError("INVALID_ARGUMENTS", label + " 必须是可序列化的有限 JSON 值。") from None
 
 
-def validate_script_help(session_id: str, expected_generation: int) -> None:
-    validate_script_target(session_id, expected_generation)
-
-
 def validate_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
     if not isinstance(action, str) or action not in ACTION_NAMES:
         raise BridgeError("INVALID_ARGUMENTS", "action 必须是已实现的受控角色动作；实际开放项以 game_capabilities 为准。")
@@ -355,11 +351,6 @@ def validate_command_text(command: str) -> None:
         raise BridgeError("INVALID_ARGUMENTS", "command 必须是有效的 Unicode 字符串。") from None
 
 
-def validate_command_help(command: str | None = None) -> None:
-    if command is not None:
-        validate_command_text(command)
-
-
 def validate_command_request(profile_id: str, request_id: str, command: str,
                              expected_command_generation: str) -> None:
     validate_identifier(profile_id, "profile_id", PROFILE_IDENTIFIER)
@@ -394,12 +385,6 @@ class BridgeClient:
 
     async def capabilities(self) -> dict[str, Any]:
         return await self._authorized_request("GET", "/solo/acceptance/v1/capabilities")
-
-    async def command_help(self, command: str | None = None) -> dict[str, Any]:
-        path = "/solo/acceptance/v1/command/help"
-        if command is not None:
-            path += "?command=" + quote(command, safe="")
-        return await self._authorized_request("GET", path)
 
     async def command(
         self, profile_id: str, *, request_id: str, command: str,
@@ -642,13 +627,6 @@ class BridgeClient:
                 await request
             except (BridgeError, asyncio.CancelledError):
                 pass
-
-    async def script_help(self, session_id: str, expected_generation: int) -> dict[str, Any]:
-        return await self._authorized_request(
-            "POST", "/solo/acceptance/v1/script/help", {"requestId": str(uuid4()), "data": {
-                "session_id": session_id, "expected_generation": expected_generation,
-            }},
-        )
 
     async def operation_get(
         self, operation_id: str, *, since_cursor: int = 0, limit: int = 100, since_output: int = 0,

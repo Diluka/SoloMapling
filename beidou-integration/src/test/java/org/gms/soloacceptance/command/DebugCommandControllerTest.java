@@ -57,16 +57,12 @@ class DebugCommandControllerTest {
     }
 
     @Test
-    void bothEndpointsRequireAdministratorBeforeLookingAtInputsOrService() {
+    void executionRequiresAdministratorBeforeLookingAtInputsOrService() {
         DebugCommandService service = mock(DebugCommandService.class);
         DebugCommandController controller = new DebugCommandController(service);
         assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ObservationException.class,
-                () -> controller.help(null)).status());
-        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ObservationException.class,
                 () -> controller.execute(null)).status());
         authenticate("reader", "ROLE_USER");
-        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
-                () -> controller.help("give")).status());
         assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
                 () -> controller.execute(null)).status());
         verifyNoInteractions(service);

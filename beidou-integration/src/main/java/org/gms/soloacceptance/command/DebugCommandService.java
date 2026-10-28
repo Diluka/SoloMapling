@@ -62,7 +62,7 @@ public final class DebugCommandService {
     public Map<String, Object> publicCapabilities() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("enabled", true);
-        result.put("enabled_tools", List.of("game_command_help", "game_command"));
+        result.put("enabled_tools", List.of("game_command"));
         result.put("generic_command", true);
         result.put("command_dispatcher", "CommandsExecutor.handle");
         result.put("command_outcome", "UNREPORTED");
@@ -78,18 +78,6 @@ public final class DebugCommandService {
         result.put("character_counting", "unicode_code_points");
         result.put("native_permissions", "unchanged_client_character_permissions");
         result.put("completion", "RETURNED means only native handler returned; inspect native feedback and game state");
-        return Collections.unmodifiableMap(result);
-    }
-
-    public Map<String, Object> help(String command) {
-        Map<String, Object> result = new LinkedHashMap<>(publicCapabilities());
-        try {
-            result.putAll(NativeCommandExecutor.describeCommands(command));
-        } catch (IllegalArgumentException unknown) {
-            throw invalid("native_command_not_registered");
-        } catch (RuntimeException unavailable) {
-            throw new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "native_command_catalog_unavailable");
-        }
         return Collections.unmodifiableMap(result);
     }
 

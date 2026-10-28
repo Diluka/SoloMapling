@@ -123,4 +123,4 @@ MCP 观察要从同一个宿主和原生来源读取，不建立另一份角色�
 
 [统一脚本入口](script-execution.md)让MCP在当前角色运行体内执行北斗脚本，直接指定 `kind/operation` 和真实上下文选择。独立纯JS模式及外层 `environment` 已移除；运行体继续消费原模块scope/work，在短命令lane之外执行，持久Context、本次调用和最终资源释放分别核验。
 
-[#216的北斗脚本上下文](beidou-script-environment.md)复用真实 `cm/qm/pi/rm/em`、原文件和原生Java API。NPC/任务保留原管理器状态；门户、机关及角色自有事件使用独占引擎，避免单角色取消关闭共享环境。`script_help` 从同一适配描述列环境及存活上下文。现有动作和管理入口保留，完整EIM、共享能力与行为模块按后续任务验收；源码、CI、隔离和实际交付结果分别记录。
+[#216的北斗脚本上下文](beidou-script-environment.md)复用真实 `cm/qm/pi/rm/em`、原文件和原生Java API。NPC/任务保留原管理器状态；门户、机关及角色自有事件使用独占引擎，避免单角色取消关闭共享环境。[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际适配器和原生源码，执行结果保留上下文标识与状态。现有动作和管理入口保留，完整EIM、共享能力与行为模块按后续任务验收；源码、CI、隔离和实际交付结果分别记录。

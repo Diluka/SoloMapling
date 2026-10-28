@@ -92,11 +92,9 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 错误可附有界 `error={message,line,column}`，无法定位时行列为 `null`。外层 operation 使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`；脚本失败设置 MCP `is_error=true`，同时保留已收集输出、首个已知脚本错误和真实收尾标记。
 
-## 帮助
+## 接口查阅
 
-`script_help(session_id, expected_generation)` 只读返回 `schema_version/language/native_environments/contexts/maximum_contexts_per_module`。`native_environments` 与实际适配器说明同源，列出对象类型、选择参数、原入口和所有权；`contexts` 列当前模块的存活上下文。它不创建脚本工作或 operation。
-
-帮助不再接收 `names`，不返回已移除的纯函数 `functions/unavailable` 目录，也不为北斗每个已有 Java 方法另造一套同义函数。
+[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)提供源码导航和连续调用说明。五类环境的 `descriptor()` 同时服务实际 capabilities；对象方法、父类和返回类型直接查北斗源码，生成方法可查匹配构建产物。`script_run` 返回精确 `context_id`、上下文状态和本次结算，原请求及 operation 用于恢复；每模块最多一个持久上下文。
 
 ## 归属、取消和真实收尾
 
@@ -108,7 +106,7 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 MCP handler 中断通过独立 `/script/cancel` 请求转发到后端，携带原请求 ID 及完整相同的类型、操作、上下文、脚本、参数和期限。取消先到时留下已结算取消检查点，迟到 run 不执行；变参仍冲突。已发生的原生副作用不会撤回，未知结果不换新 ID 自动重放。
 
-提前取消尚未启动的 `invoke/close` 只结算本次调用，不自动关闭它指向的已有 Context。检查点按原 `context_id` 记录当时读到的上下文事实；已有环境保持 `OPEN` 时，不能据 `CANCELLED` 或 `invocation_settled/work_settled` 推导其已关闭。无法确认上下文时返回 `context_state=UNKNOWN`，不宣称已清理；当前状态可通过 `script_help.contexts` 核对，并在需要时显式 `close`。提前取消 `start` 的 `NOT_STARTED` 只表示该次新上下文没有创建。
+提前取消尚未启动的 `invoke/close` 只结算本次调用，不自动关闭它指向的已有 Context。检查点按原 `context_id` 记录当时读到的上下文事实；已有环境保持 `OPEN` 时，不能据 `CANCELLED` 或 `invocation_settled/work_settled` 推导其已关闭。无法确认上下文时返回 `context_state=UNKNOWN`，不宣称已清理；调用方保留原上下文 ID，按原请求或 operation 恢复本次证据，并在需要时显式 `close`。提前取消 `start` 的 `NOT_STARTED` 只表示该次新上下文没有创建。
 
 已取消的 MCP 请求按协议不再返回工具响应。使用相同 `request_id` 和完整原参数恢复原 operation，或用已知 `operation_id` 查询。脚本专用 HTTP 预算至少为执行期限加 5 秒，宿主工具期限另留通信与收尾余量。
 

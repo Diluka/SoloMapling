@@ -105,14 +105,6 @@ public final class ActorControlController {
                 .header("Cache-Control", "no-store").header("X-Accel-Buffering", "no").body(stream);
     }
 
-    @PostMapping("/script/help")
-    public ResultBody<Map<String, Object>> scriptHelp(
-            @RequestBody(required = false) SubmitBody<ActorScriptHelpRequest> request) {
-        String owner = AcceptanceAccess.requireAdmin();
-        requireData(request);
-        return ResultBody.success(request, actors.scriptHelp(owner, request.getData()));
-    }
-
     @PostMapping("/script/cancel")
     public ResultBody<Map<String, Object>> scriptCancel(
             @RequestBody(required = false) SubmitBody<ActorScriptCancelRequest> request) {
