@@ -10,7 +10,7 @@ description: 在附带源码的 SoloMapling 工作区查阅北斗脚本 API，�
 ## 按任务读取说明书
 
 - 查询对象方法、继承、返回类型或现有脚本：读[源码导航](references/source-navigation.md)。只查资料时完成查阅即可。
-- 启动、继续、关闭或恢复一次脚本调用：读[执行与收尾](references/execution.md)。
+- 启动、继续、关闭或恢复一次脚本调用，以及查阅或调用已装配的模块共享函数：读[执行与收尾](references/execution.md)。
 - 在脚本里执行原生命令：读[脚本命令](references/commands.md)。
 - 需要打开专用角色、观察实际场景或使用直接动作：配合[游戏交互技能](../solomapling-game-interaction/SKILL.md)。
 

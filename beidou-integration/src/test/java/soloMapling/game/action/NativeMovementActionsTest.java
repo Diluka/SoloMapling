@@ -22,6 +22,8 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleDefinition;
+import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 
@@ -102,8 +104,9 @@ class NativeMovementActionsTest {
         var open = runtime.acceptOpeningWork();
         runtime.submitOpening(open, () -> { runtime.reserveOrigin(open).adopt(binding); runtime.bindAdoptedOrigin(); }, () -> { });
         lane.all();
-        var ref = runtime.mount(new RuntimeModule.Spec("movement-test","move",Set.of("movement"),
-                new ExecutionScope.Limits(16,2,16,2)), new RuntimeModule() {},true);
+        var definition = new ModuleDefinition<Void, RuntimeModule>("movement-test", Set.of(), Set.of("movement"),
+                new ExecutionScope.Limits(16, 2, 16, 2), config -> {}, config -> new RuntimeModule() {}, List.of());
+        var ref = runtime.mount(definition, new ModuleSelection<>("move", null, true)).reference();
         context = runtime.context(ref); scene = new GameContext.SceneRef(actor,map,null,null);
     }
 

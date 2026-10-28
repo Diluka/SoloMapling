@@ -96,6 +96,12 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 [脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)提供源码导航和连续调用说明。五类环境的 `descriptor()` 同时服务实际 capabilities；对象方法、父类和返回类型直接查北斗源码，生成方法可查匹配构建产物。`script_run` 返回精确 `context_id`、上下文状态和本次结算，原请求及 operation 用于恢复；每模块最多一个持久上下文。
 
+## 模块函数命名空间
+
+当前受管北斗引擎提供 `modules.help()` 和 `modules.call(name, args)`，后者的 `args` 为 JSON 对象。Java `ModuleContext.help()` / `call()` 与它们消费同一目录，帮助来自实际装配的模块声明，调用按当前精确实例和执行代次解析。当前没有业务导出预装时，目录返回空列表；具体声明、返回和错误语义见[机器人模块参考](modules.md#共享函数声明与调用)。
+
+`modules` 绑定在原 `kind/operation` 选定的北斗上下文中。`cm/qm/pi/rm/em` 的对象来源和适用范围，以及 `executeCommand` 的现有命令行为保持原契约。模块定义、装配与受管执行见[机器人模块参考](modules.md)。
+
 ## 归属、取消和真实收尾
 
 `CharacterRuntime.ModuleContext.runNativeScript` 消费调用模块已接纳的原 `ExecutionScope.WorkHandle`。每模块最多保留一个原生脚本上下文；上下文和原生调度资源登记在同一 scope，长执行不占角色短命令 lane，不另建角色宿主、动作队列或物理工作账本。

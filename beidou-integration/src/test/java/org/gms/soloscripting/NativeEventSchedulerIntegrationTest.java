@@ -26,6 +26,8 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleDefinition;
+import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
@@ -215,8 +217,9 @@ class NativeEventSchedulerIntegrationTest {
             var work = runtime.acceptOpeningWork();
             runtime.submitOpening(work, () -> { runtime.reserveOrigin(work).adopt(role); runtime.bindAdoptedOrigin(); }, () -> {});
             work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            context = runtime.context(runtime.mount(new RuntimeModule.Spec("native-event-test", "event", Set.of("event"),
-                    new ExecutionScope.Limits(16, 2, 16, 2)), new RuntimeModule() {}, true));
+            var definition = new ModuleDefinition<Void, RuntimeModule>("native-event-test", Set.of(), Set.of("event"),
+                    new ExecutionScope.Limits(16, 2, 16, 2), config -> {}, config -> new RuntimeModule() {}, List.of());
+            context = runtime.context(runtime.mount(definition, new ModuleSelection<>("event", null, true)).reference());
         }
         NativeScriptResult call(String operation, String id, String source, Map<String, Object> parameters) throws Exception {
             return context.runNativeScript(context.acceptWork(), new NativeScriptRequest("event", operation, id,

@@ -51,6 +51,12 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 原脚本全局变量沿同一引擎保留，本次 `parameters` 随调用更新。将所需字段投影为 JSON，原生对象和函数不能直接作为最终 JSON 结果传出。
 
+## 模块共享函数
+
+在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。没有业务导出预装时，目录可以为空。
+
+函数缺失或提供者暂停、停用时正常返回 `UNAVAILABLE`；按实际结果选择后续流程。函数声明、装配与结果契约见[机器人模块参考](../../../docs/robot-runtime/modules.md#共享函数声明与调用)。北斗原有 `cm/qm/pi/rm/em` 方法继续按[源码导航](source-navigation.md)查阅。
+
 ## 实时读取执行输出
 
 `script_run` 执行期间通过 MCP progress 通知发送 `started/output/gap`，`message` 是 JSON 文本。首条消息包含本次 `request_id` 和 `operation_id`；输出消息包含 `seq/channel/text/output_truncated`。官方 Python SDK 使用 `progress_callback` 接收：

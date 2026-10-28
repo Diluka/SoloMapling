@@ -14,6 +14,7 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RuntimeEvents;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -88,9 +89,10 @@ final class AcceptanceActorExecution {
     void bindActor(NativeActorHandle exactHandle) {
         if (adoptedHandle() != exactHandle) throw unverified();
         runtime.bindAdoptedOrigin();
-        McpControlModule attached = new McpControlModule(moduleInstance);
-        module = attached;
-        CharacterRuntime.ModuleRef reference = runtime.mount(attached.spec(), attached, true);
+        CharacterRuntime.MountedModule<McpControlModule> mounted = runtime.mount(
+                McpControlModule.DEFINITION, new ModuleSelection<>(moduleInstance, Map.of(), true));
+        module = mounted.instance();
+        CharacterRuntime.ModuleRef reference = mounted.reference();
         runtime.context(reference); // Mounting without an active context is not OPEN success.
         moduleGeneration = reference.generation();
         refreshDiagnostics();
@@ -270,6 +272,8 @@ final class AcceptanceActorExecution {
         if (selected != null) moduleGeneration = selected.generation();
         attached.put("generation", moduleGeneration);
         attached.put("state", selected == null ? moduleGeneration == 0 ? "NOT_ATTACHED" : "UNLOADED" : selected.state().name());
+        attached.put("slots", selected == null
+                ? McpControlModule.DEFINITION.slots().stream().sorted().toList() : selected.slots());
         if (selected != null && selected.scope() != null) {
             ExecutionScope.ScopeSnapshot scope = selected.scope();
             attached.put("scope", Map.of("state", scope.state().name(), "accepted_work", scope.acceptedWork(),
@@ -278,6 +282,8 @@ final class AcceptanceActorExecution {
                     "unload_complete", scope.unloadComplete()));
         }
         info.put("module", java.util.Collections.unmodifiableMap(attached));
+        info.put("slots", state.slots().stream().map(slot -> Map.<String, Object>of(
+                "id", slot.id(), "capacity", slot.capacity(), "occupants", slot.occupants())).toList());
         info.put("lane", Map.of("pending", state.lane().pending(), "ordinary", state.lane().ordinary(),
                 "cleanup", state.lane().cleanup(), "closed", state.lane().closed()));
         RuntimeEvents.Window window = runtime.events();

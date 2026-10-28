@@ -16,6 +16,8 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleSelection;
+import soloMapling.game.runtime.ModuleSlots;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeEvents;
 
@@ -59,11 +61,11 @@ class McpControlModuleTest {
 
     @Test
     void theModuleDeclaresOnlyItsControlsAndCannotOperateBeforeHostActivation() {
-        McpControlModule inactive = new McpControlModule("primary");
-        assertEquals("mcp-control", inactive.spec().typeId());
-        assertEquals("primary", inactive.spec().instanceId());
-        assertEquals(Set.of("chat", "interaction", "inventory", "movement", "combat"), inactive.spec().controls());
-        assertEquals(new ExecutionScope.Limits(16, 2, 16, 2), inactive.spec().limits());
+        McpControlModule inactive = McpControlModule.DEFINITION.factory().apply(Map.of());
+        assertEquals("mcp-control", McpControlModule.DEFINITION.typeId());
+        assertEquals(Set.of(ModuleSlots.CONTROLLER), McpControlModule.DEFINITION.slots());
+        assertEquals(Set.of("chat", "interaction", "inventory", "movement", "combat"), McpControlModule.DEFINITION.controls());
+        assertEquals(new ExecutionScope.Limits(16, 2, 16, 2), McpControlModule.DEFINITION.limits());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::context).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::acceptWork).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::reference).reason());
@@ -207,8 +209,8 @@ class McpControlModuleTest {
             runtime.bindAdoptedOrigin();
         }, () -> {});
         await(open);
-        module = new McpControlModule("primary");
-        runtime.mount(module.spec(), module, true);
+        module = runtime.mount(McpControlModule.DEFINITION,
+                new ModuleSelection<>("primary", Map.of(), true)).instance();
     }
 
     private void closeRoot() throws Exception {

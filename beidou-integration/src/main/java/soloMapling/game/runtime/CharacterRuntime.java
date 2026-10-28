@@ -16,10 +16,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletableFuture;
@@ -40,6 +42,9 @@ public final class CharacterRuntime {
     private final CompletableFuture<Void> modulesDrained = new CompletableFuture<>();
     private final Map<String, ModuleEntry> modules = new LinkedHashMap<>();
     private final Map<String, ModuleContext> controlOwners = new LinkedHashMap<>();
+    private final Map<String, SlotSpec> slotSpecs = ModuleSlots.standard();
+    private final Map<String, Set<String>> slotOwners = new LinkedHashMap<>();
+    private final Map<String, ModuleEntry> functionOwners = new LinkedHashMap<>();
     private volatile CharacterCommandLane lane;
     private volatile State state = State.OPENING;
     private volatile RoleBinding binding;
@@ -68,14 +73,16 @@ public final class CharacterRuntime {
     }
 
     public enum State { OPENING, BOUND, CLOSING, CLOSED }
-    public enum ModuleState { MOUNTED, ACTIVE, STOPPING, SUSPENDED, FAILED, UNLOADED }
+    public enum ModuleState { INITIALIZING, MOUNTED, ACTIVE, STOPPING, SUSPENDED, FAILED, UNLOADED }
     public enum StopMode { PAUSE, UNLOAD }
     public record ModuleSnapshot(String typeId, String instanceId, long generation, boolean enabled,
                                  ModuleState state, List<String> controls, String reason,
-                                 ExecutionScope.ScopeSnapshot scope, int runningHooks) { }
+                                 ExecutionScope.ScopeSnapshot scope, int runningHooks, List<String> slots) { }
+    public record SlotSnapshot(String id, int capacity, List<String> occupants) { }
+    public record MountedModule<M extends RuntimeModule>(ModuleRef reference, M instance) { }
     public record Snapshot(String runtimeId, String epoch, State state, String originKind, Integer characterId,
                            List<ModuleSnapshot> modules, ExecutionScope.ScopeSnapshot rootScope,
-                           CharacterCommandLane.Snapshot lane, String failure) { }
+                           CharacterCommandLane.Snapshot lane, String failure, List<SlotSnapshot> slots) { }
 
     public static final class Invalid extends RuntimeException {
         private final String reason;
@@ -220,19 +227,54 @@ public final class CharacterRuntime {
         return Collections.unmodifiableMap(facts);
     }
 
-    public ModuleRef mount(RuntimeModule.Spec spec, RuntimeModule module, boolean enabled) {
-        Objects.requireNonNull(spec); Objects.requireNonNull(module);
+    public <C, M extends RuntimeModule> MountedModule<M> mount(ModuleDefinition<C, M> definition,
+                                                               ModuleSelection<C> selection) {
+        Objects.requireNonNull(definition); Objects.requireNonNull(selection);
+        definition.validateConfig().accept(selection.config());
         ModuleEntry entry;
         synchronized (monitor) {
             require(state == State.BOUND, "runtime_not_bound");
-            require(!modules.containsKey(spec.instanceId()), "module_instance_exists");
+            require(!modules.containsKey(selection.instanceId()), "module_instance_exists");
             require(modules.size() < options.maxModules(), "runtime_module_capacity");
-            entry = new ModuleEntry(spec, module, enabled);
-            modules.put(spec.instanceId(), entry);
+            for (String slot : definition.slots()) {
+                SlotSpec spec = slotSpecs.get(slot);
+                require(spec != null, "unknown_module_slot");
+                require(slotOwners.getOrDefault(slot, Set.of()).size() < spec.capacity(), "module_slot_busy");
+            }
+            for (ModuleFunction<M> function : definition.exports()) {
+                require(!functionOwners.containsKey(function.name()), "module_function_exists");
+            }
+            entry = new ModuleEntry(definition, selection.instanceId(), selection.config(), selection.enabled());
+            modules.put(entry.instanceId, entry);
+            definition.slots().forEach(slot -> slotOwners.computeIfAbsent(slot, ignored -> new LinkedHashSet<>()).add(entry.instanceId));
+            definition.exports().forEach(function -> functionOwners.put(function.name(), entry));
+            beginHookLocked(entry);
             event(RuntimeEvents.Kind.MODULE_MOUNTED, entry, null, null, null);
         }
-        if (enabled) activate(entry.ref);
-        return entry.ref;
+        M instance;
+        try {
+            instance = Objects.requireNonNull(definition.factory().apply(selection.config()));
+            synchronized (monitor) {
+                entry.module = instance;
+                entry.functions = definition.bind(instance);
+                if (entry.state == ModuleState.INITIALIZING) entry.state = ModuleState.MOUNTED;
+            }
+        } catch (RuntimeException | Error failure) {
+            lastFailure = "module_initialization_failed";
+            stop(entry.ref, StopMode.UNLOAD);
+            throw new Invalid("module_initialization_failed");
+        } finally { endHook(entry); }
+        if (selection.enabled()) {
+            try { activate(entry.ref); }
+            catch (RuntimeException | Error failure) {
+                synchronized (monitor) {
+                    if (modules.get(entry.instanceId) != entry) throw failure;
+                }
+                stop(entry.ref, StopMode.UNLOAD);
+                throw failure;
+            }
+        }
+        return new MountedModule<>(entry.ref, instance);
     }
 
     /** A stable instance label receives a fresh handle/scope generation on each resumed activation. */
@@ -244,32 +286,32 @@ public final class CharacterRuntime {
             require(state == State.BOUND && entry.enabled, "module_not_enabled");
             if (entry.state == ModuleState.ACTIVE) return entry.ref;
             require(entry.state == ModuleState.MOUNTED || entry.state == ModuleState.SUSPENDED, "module_not_activatable");
-            if (entry.spec.controls().stream().anyMatch(controlOwners::containsKey)) {
+            if (entry.definition.controls().stream().anyMatch(controlOwners::containsKey)) {
                 entry.reason = "control_busy";
                 return entry.ref;
             }
             if (entry.context != null) throw new Invalid("module_scope_not_drained");
-            entry.ref = new ModuleRef(entry.spec.instanceId(), ++nextModuleGeneration);
+            entry.ref = new ModuleRef(entry.instanceId, ++nextModuleGeneration);
             ExecutionScope scope = new ExecutionScope(epoch,
-                    entry.spec.limits());
+                    entry.definition.limits());
             CharacterCommandLane.Grant grant = requireLane().declareGrant(scope);
             context = new ModuleContext(entry.ref, scope, grant);
             entry.context = context;
             entry.stop = null;
             entry.state = ModuleState.ACTIVE;
             entry.reason = null;
-            entry.spec.controls().forEach(key -> controlOwners.put(key, context));
+            entry.definition.controls().forEach(key -> controlOwners.put(key, context));
             beginHookLocked(entry);
             event(RuntimeEvents.Kind.MODULE_ACTIVE, entry, null, null, null);
         }
         try { entry.module.onActivated(context); }
-        catch (RuntimeException failure) {
+        catch (RuntimeException | Error failure) {
             lastFailure = "module_activation_failed";
             stop(entry.ref, StopMode.PAUSE);
             synchronized (monitor) {
-                if (entry.stop != null) entry.stop.failure = lastFailure;
+                if (entry.stop != null && entry.stop.failure == null) entry.stop.failure = "module_activation_failed";
                 if (entry.state == ModuleState.SUSPENDED) entry.state = ModuleState.FAILED;
-                entry.reason = lastFailure;
+                entry.reason = entry.cleanupFailure == null ? "module_activation_failed" : entry.cleanupFailure;
             }
             throw new Invalid("module_activation_failed");
         } finally { endHook(entry); }
@@ -306,7 +348,7 @@ public final class CharacterRuntime {
                   ExecutionScope.WorkHandle work, GameContext.CharacterRef character);
     }
 
-    public final class ModuleContext {
+    public final class ModuleContext implements ModuleCapabilities {
         private NativeScriptSession nativeScript;
         private final ModuleRef ref;
         private final ExecutionScope scope;
@@ -337,7 +379,7 @@ public final class CharacterRuntime {
                             }, adapter, () -> {
                                 synchronized (monitor) { if (nativeScript != null && nativeScript.isClosed()) nativeScript = null; }
                                 tryFinishStop(ref); tryFinalizeClose();
-                            });
+                            }, this);
                 } else {
                     require(nativeScript != null && nativeScript.contextId().equals(request.contextId())
                             && nativeScript.kind().equals(request.kind()), "native_script_context_stale");
@@ -351,6 +393,12 @@ public final class CharacterRuntime {
             NativeScriptSession session;
             synchronized (monitor) { session = nativeScript; }
             return session == null ? List.of() : List.of(session.describe());
+        }
+        @Override public List<Map<String, Object>> help() {
+            synchronized (monitor) { requireActive(this, null); return moduleFunctionHelp(); }
+        }
+        @Override public Map<String, Object> call(String name, Map<String, Object> arguments) {
+            return invokeModuleFunction(this, name, arguments);
         }
 
         public ExecutionScope.WorkHandle acceptWork() {
@@ -428,6 +476,7 @@ public final class CharacterRuntime {
             if (entry.stop != null && entry.stop.complete && mode == StopMode.PAUSE) return entry.stop;
             context = entry.context;
             entry.stop = new ModuleStop(ref, context, mode);
+            entry.stop.failure = entry.cleanupFailure;
             entry.state = ModuleState.STOPPING;
             entry.reason = mode == StopMode.UNLOAD ? "unloading" : "paused";
             if (context != null) context.grant.revoke();
@@ -436,7 +485,11 @@ public final class CharacterRuntime {
         }
         if (context != null) {
             try { entry.module.onStopping(context, mode); }
-            catch (RuntimeException failure) { entry.stop.failure = "module_stop_hook_failed"; lastFailure = entry.stop.failure; }
+            catch (RuntimeException | Error failure) {
+                entry.cleanupFailure = "module_stop_hook_failed";
+                entry.stop.failure = entry.cleanupFailure;
+                lastFailure = entry.cleanupFailure;
+            }
             finally { endHook(entry); }
             context.scope.beginDrain();
         }
@@ -475,6 +528,7 @@ public final class CharacterRuntime {
             synchronized (monitor) {
                 if (finisher == Thread.currentThread()) return ExecutionScope.DrainResult.SELF_WAIT;
                 while (!complete) {
+                    if (finishing && finisher == null && failure != null) return ExecutionScope.DrainResult.UNVERIFIED;
                     long remaining = budget - (System.nanoTime() - began);
                     if (remaining <= 0) return ExecutionScope.DrainResult.TIMED_OUT;
                     try { java.util.concurrent.TimeUnit.NANOSECONDS.timedWait(monitor, remaining); }
@@ -499,6 +553,13 @@ public final class CharacterRuntime {
             if (context != null && (!context.scope.snapshot().unloadComplete()
                     || context.grant.awaitReleased(Duration.ZERO) != CharacterCommandLane.GrantDrain.DRAINED)) return;
             unload = finished.stop.mode == StopMode.UNLOAD;
+            if (unload && finished.cleanupFailure != null) {
+                finished.stop.finishing = true;
+                finished.state = ModuleState.FAILED;
+                finished.reason = finished.stop.failure;
+                monitor.notifyAll();
+                return;
+            }
             if (!unload) {
                 finishStopLocked(finished, context, false);
             } else {
@@ -508,15 +569,24 @@ public final class CharacterRuntime {
             }
         }
         if (unload) {
-            try { finished.module.onUnloaded(); }
-            catch (RuntimeException failure) {
-                lastFailure = "module_unload_hook_failed";
-                finished.stop.failure = lastFailure;
+            boolean released = false;
+            try {
+                if (finished.module != null) finished.module.onUnloaded();
+                released = true;
+            } catch (RuntimeException | Error failure) {
+                finished.cleanupFailure = "module_unload_hook_failed";
+                finished.stop.failure = finished.cleanupFailure;
+                lastFailure = finished.cleanupFailure;
             } finally {
                 endHook(finished);
                 synchronized (monitor) {
                     finished.stop.finisher = null;
-                    finishStopLocked(finished, context, true);
+                    if (released) finishStopLocked(finished, context, true);
+                    else {
+                        finished.state = ModuleState.FAILED;
+                        finished.reason = finished.stop.failure;
+                        monitor.notifyAll();
+                    }
                 }
             }
         }
@@ -531,7 +601,15 @@ public final class CharacterRuntime {
         entry.state = remove ? ModuleState.UNLOADED : entry.stop.failure == null ? ModuleState.SUSPENDED : ModuleState.FAILED;
         event(remove ? RuntimeEvents.Kind.MODULE_UNLOADED : RuntimeEvents.Kind.MODULE_STOPPED,
                 entry, null, entry.stop.failure, null);
-        if (remove) modules.remove(entry.ref.instanceId);
+        if (remove) {
+            modules.remove(entry.instanceId);
+            entry.definition.slots().forEach(slot -> {
+                Set<String> occupants = slotOwners.get(slot);
+                occupants.remove(entry.instanceId);
+                if (occupants.isEmpty()) slotOwners.remove(slot);
+            });
+            functionOwners.entrySet().removeIf(function -> function.getValue() == entry);
+        }
         monitor.notifyAll();
     }
 
@@ -652,12 +730,81 @@ public final class CharacterRuntime {
         tryFinalizeClose();
         synchronized (monitor) {
             List<ModuleSnapshot> snapshots = modules.values().stream().map(entry -> new ModuleSnapshot(
-                    entry.spec.typeId(), entry.spec.instanceId(), entry.ref.moduleGeneration, entry.enabled, entry.state,
-                    entry.spec.controls().stream().sorted().toList(), entry.reason,
-                    entry.context == null ? null : entry.context.scope.snapshot(), entry.runningHooks)).toList();
+                    entry.definition.typeId(), entry.instanceId, entry.ref.moduleGeneration, entry.enabled, entry.state,
+                    entry.definition.controls().stream().sorted().toList(), entry.reason,
+                    entry.context == null ? null : entry.context.scope.snapshot(), entry.runningHooks,
+                    entry.definition.slots().stream().sorted().toList())).toList();
+            List<SlotSnapshot> slots = slotSpecs.values().stream().map(slot -> new SlotSnapshot(slot.id(), slot.capacity(),
+                    slotOwners.getOrDefault(slot.id(), Set.of()).stream().sorted().toList())).toList();
             return new Snapshot(id, epoch.value(), state, originKind, characterId, snapshots, rootScope.snapshot(),
-                    lane == null ? closedLane : lane.snapshot(), lastFailure);
+                    lane == null ? closedLane : lane.snapshot(), lastFailure, slots);
         }
+    }
+
+    /** Called with monitor held; declarations remain visible while their provider is paused. */
+    private List<Map<String, Object>> moduleFunctionHelp() {
+        List<Map<String, Object>> help = new ArrayList<>();
+        for (ModuleEntry entry : modules.values()) {
+            for (ModuleFunction<?> function : entry.definition.exports()) {
+                Map<String, Object> description = new LinkedHashMap<>(function.describe());
+                description.put("module_id", entry.instanceId);
+                description.put("module_generation", entry.ref.moduleGeneration);
+                String reason = functionUnavailable(entry);
+                description.put("available", reason == null);
+                if (reason != null) description.put("reason", reason);
+                help.add(Collections.unmodifiableMap(description));
+            }
+        }
+        return List.copyOf(help);
+    }
+
+    private String functionUnavailable(ModuleEntry entry) {
+        if (state != State.BOUND) return "runtime_not_bound";
+        if (!entry.enabled) return "module_disabled";
+        if (entry.state == ModuleState.ACTIVE && entry.runningHooks != 0) return "module_initializing";
+        if (entry.state != ModuleState.ACTIVE || entry.context == null || !entry.context.scope.isActive()) {
+            return "module_not_active";
+        }
+        return null;
+    }
+
+    private Map<String, Object> invokeModuleFunction(ModuleContext caller, String name, Map<String, Object> arguments) {
+        Objects.requireNonNull(name); Objects.requireNonNull(arguments);
+        ModuleEntry provider;
+        ModuleContext context;
+        ModuleFunction.Bound function;
+        ExecutionScope.WorkHandle work;
+        synchronized (monitor) {
+            requireActive(caller, null);
+            provider = functionOwners.get(name);
+            if (provider == null) return unavailableFunction(name, "function_missing");
+            String reason = functionUnavailable(provider);
+            if (reason != null) return unavailableFunction(name, reason);
+            function = provider.functions.get(name);
+            function.validate(arguments);
+            context = provider.context;
+            work = context.acceptWork();
+        }
+        Object[] result = new Object[1];
+        boolean[] invoked = new boolean[1];
+        context.scope.runTracked(work, () -> {
+            synchronized (monitor) {
+                if (functionUnavailable(provider) != null || provider.context != context) return;
+            }
+            invoked[0] = true;
+            try { result[0] = function.invoke(context, work, arguments); }
+            catch (RuntimeException failure) { throw failure; }
+            catch (Exception failure) { throw new IllegalStateException("module_function_failed", failure); }
+        });
+        if (!invoked[0]) return unavailableFunction(name, "module_not_active");
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", "SUCCEEDED");
+        response.put("result", result[0]);
+        return Collections.unmodifiableMap(response);
+    }
+
+    private static Map<String, Object> unavailableFunction(String name, String reason) {
+        return Map.of("status", "UNAVAILABLE", "function", name, "reason", reason);
     }
 
     private void trackRoot(ExecutionScope.WorkHandle work) {
@@ -735,19 +882,24 @@ public final class CharacterRuntime {
     }
 
     private final class ModuleEntry {
-        final RuntimeModule.Spec spec;
-        final RuntimeModule module;
+        final ModuleDefinition<?, ?> definition;
+        final String instanceId;
+        final Object configuration;
+        RuntimeModule module;
+        Map<String, ModuleFunction.Bound> functions = Map.of();
         ModuleRef ref;
         boolean enabled;
-        ModuleState state = ModuleState.MOUNTED;
+        ModuleState state = ModuleState.INITIALIZING;
         String reason;
+        String cleanupFailure;
         ModuleContext context;
         ModuleStop stop;
         int runningHooks;
         final Map<Thread, Integer> hookThreads = new IdentityHashMap<>();
-        ModuleEntry(RuntimeModule.Spec spec, RuntimeModule module, boolean enabled) {
-            this.spec = spec; this.module = module; this.enabled = enabled;
-            ref = new ModuleRef(spec.instanceId(), ++nextModuleGeneration);
+        ModuleEntry(ModuleDefinition<?, ?> definition, String instanceId, Object configuration, boolean enabled) {
+            this.definition = definition; this.instanceId = instanceId;
+            this.configuration = configuration; this.enabled = enabled;
+            ref = new ModuleRef(instanceId, ++nextModuleGeneration);
         }
     }
 }
