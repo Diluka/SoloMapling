@@ -164,7 +164,7 @@ PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 NATIVE_SCRIPT_ENTRY = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]{0,127}")
 SCRIPT_MAX_SOURCE_UNITS = 65_536
-SCRIPT_MAX_PARAMETERS_BYTES = 16_384
+SCRIPT_MAX_JSON_NODES = 16_384
 SCRIPT_MAX_TIMEOUT_MS = 5_000
 SCRIPT_CLEANUP_SECONDS = 5.0
 NATIVE_SCRIPT_KINDS = frozenset({"npc", "quest", "portal", "reactor", "event"})
@@ -221,21 +221,22 @@ def validate_script_run(
         raise BridgeError("INVALID_ARGUMENTS", "invoke 不得同时提交 source 和 entry。")
     if operation == "close" and (source != "" or options or args or entry is not None):
         raise BridgeError("INVALID_ARGUMENTS", "close 只接受空 source 和已有 context_id，不执行 options、entry 或 args。")
-    size = (_validate_script_json(parameters, "parameters")
-            + _validate_script_json(options, "options") + _validate_script_json(args, "args"))
-    if size > SCRIPT_MAX_PARAMETERS_BYTES:
-        raise BridgeError("INVALID_ARGUMENTS", "parameters、options 和 args 超过允许的 JSON 总大小。")
+    # Byte limits belong to the server's normalized JSON representation. Python
+    # and Jackson may encode the same finite number with different byte lengths.
+    _validate_script_json(parameters, "parameters")
+    _validate_script_json(options, "options")
+    _validate_script_json(args, "args")
 
 
-def _validate_script_json(value: Any, label: str) -> int:
+def _validate_script_json(value: Any, label: str) -> None:
     original = value
     pending = [(value, 0)]
     visited = 0
     while pending:
         value, depth = pending.pop()
         visited += 1
-        if depth > 16 or visited > SCRIPT_MAX_PARAMETERS_BYTES:
-            raise BridgeError("INVALID_ARGUMENTS", label + " 超过允许的 JSON 大小或嵌套深度。")
+        if depth > 16 or visited > SCRIPT_MAX_JSON_NODES:
+            raise BridgeError("INVALID_ARGUMENTS", label + " 超过允许的 JSON 节点数或嵌套深度。")
         if isinstance(value, dict):
             if any(not isinstance(key, str) for key in value):
                 raise BridgeError("INVALID_ARGUMENTS", label + " 对象的键必须是字符串。")
@@ -245,12 +246,9 @@ def _validate_script_json(value: Any, label: str) -> int:
         elif value is not None and type(value) not in {str, int, float, bool}:
             raise BridgeError("INVALID_ARGUMENTS", label + " 只能包含 JSON 值。")
     try:
-        encoded = json.dumps(original, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        json.dumps(original, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise BridgeError("INVALID_ARGUMENTS", label + " 必须是可序列化的有限 JSON 值。") from None
-    if len(encoded) > SCRIPT_MAX_PARAMETERS_BYTES:
-        raise BridgeError("INVALID_ARGUMENTS", label + " 超过允许的 JSON 大小。")
-    return len(encoded)
 
 
 def validate_script_help(session_id: str, expected_generation: int) -> None:

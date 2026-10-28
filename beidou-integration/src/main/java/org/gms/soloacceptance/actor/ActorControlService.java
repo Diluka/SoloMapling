@@ -508,9 +508,9 @@ public final class ActorControlService {
                 if (accepted != null) {
                     prior = accepted;
                     if (cancel) {
-                        // There was no carrier and no Context. A later run sees this exact checkpoint.
+                        // This invocation has no carrier. An existing target Context may remain open.
                         accepted.work.reject();
-                        scriptNotStarted(accepted, "CANCELLED", null);
+                        scriptNotStarted(accepted, script, "CANCELLED", null);
                     } else startNativeScript(accepted, script);
                 }
             }
@@ -542,7 +542,7 @@ public final class ActorControlService {
         } catch (Throwable failure) {
             if (!exact.snapshot().carrierClaimed()) {
                 exact.reject();
-                scriptNotStarted(operation, exact.cancelRequested() ? "CANCELLED" : "RUNTIME_ERROR",
+                scriptNotStarted(operation, request, exact.cancelRequested() ? "CANCELLED" : "RUNTIME_ERROR",
                         exact.cancelRequested() ? null : safeReason(failure, "native_script_execution_rejected"));
             } else synchronized (monitor) {
                 requestCancellation(operation);
@@ -588,16 +588,33 @@ public final class ActorControlService {
         }
     }
 
-    private void scriptNotStarted(Operation operation, String status, String reason) {
+    private void scriptNotStarted(Operation operation, NativeScriptRequest request, String status, String reason) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", status);
         result.put("result", null);
         result.put("stdout", ""); result.put("stderr", ""); result.put("output_truncated", false);
         result.put("error", reason == null ? null : Map.of("message", reason));
         result.put("engine_started", false); result.put("engine_exited", true);
-        result.put("context_closed", true); result.put("work_settled", operation.work.isSettled());
+        result.put("context_id", request.contextId());
+        boolean newContext = "start".equals(request.operation());
+        String contextState = newContext ? "NOT_STARTED" : "UNKNOWN";
+        boolean contextClosed = newContext;
+        if (!newContext) {
+            try {
+                for (Map<String, Object> context : operation.session.execution.nativeScriptContexts()) {
+                    if (request.contextId().equals(context.get("context_id")) && request.kind().equals(context.get("kind"))) {
+                        contextState = context.get("context_state") instanceof String observed ? observed : "UNKNOWN";
+                        contextClosed = Boolean.TRUE.equals(context.get("context_closed"));
+                        break;
+                    }
+                }
+            } catch (RuntimeException unavailable) {
+                // No matching current fact is not proof that the pre-existing Context was closed.
+            }
+        }
+        result.put("context_closed", contextClosed); result.put("work_settled", operation.work.isSettled());
         result.put("invocation_settled", operation.work.isSettled());
-        result.put("context_state", "NOT_STARTED");
+        result.put("context_state", contextState);
         operation.session.execution.refresh();
         synchronized (monitor) {
             operation.result = java.util.Collections.unmodifiableMap(result);

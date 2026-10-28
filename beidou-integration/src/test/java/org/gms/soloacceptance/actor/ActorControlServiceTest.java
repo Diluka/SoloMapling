@@ -3277,6 +3277,62 @@ class ActorControlServiceTest {
     }
 
     @Test
+    void cancellingBeforeInvokeOrCloseAdmissionPreservesTheExistingContextAndItsCleanupObligation() throws Exception {
+        ActorControlService service = service(4, 24, 64);
+        var opened = open(service, "native-early-existing-open"); executors.getFirst().runNext();
+        TransportNativeAdapter adapter = prepareNativeAdapter();
+        var started = service.scriptRun("admin", "native-early-existing-start", scriptRequest(
+                sessionId(opened), generation(opened), "count", Map.of(), 5000L,
+                new ScriptBinding("npc", "start", null, Map.of(), null, List.of())));
+        assertEquals("SUCCEEDED", started.get("status"));
+        String contextId = (String) result(started).get("context_id");
+        var nativeScope = execution(service, opened).moduleScope();
+        for (String operation : List.of("invoke", "close")) {
+            var binding = new ScriptBinding("npc", operation, contextId, Map.of(), null, List.of());
+            String source = "invoke".equals(operation) ? "count++; count" : "";
+            var request = scriptRequest(sessionId(opened), generation(opened), source, Map.of(), 5000L, binding);
+            String target = "native-early-existing-" + operation;
+            var cancelled = service.scriptCancel("admin", target + "-cancel", scriptCancelRequest(
+                    sessionId(opened), generation(opened), target, source, request.parameters(), request.timeoutMs(), binding));
+            assertEquals("CANCELLED", cancelled.get("status"));
+            assertEquals(contextId, result(cancelled).get("context_id"));
+            assertEquals("OPEN", result(cancelled).get("context_state"));
+            assertEquals(false, result(cancelled).get("context_closed"));
+            assertEquals(false, result(cancelled).get("engine_started"));
+            assertEquals(true, result(cancelled).get("invocation_settled"));
+            assertEquals(true, result(cancelled).get("work_settled"));
+            var recovered = service.scriptRun("admin", target, request);
+            assertEquals(id(cancelled), id(recovered));
+            assertEquals(result(cancelled), result(recovered));
+            var contexts = (List<?>) service.scriptHelp("admin",
+                    new ActorScriptHelpRequest(sessionId(opened), generation(opened))).get("contexts");
+            assertEquals(contextId, ((Map<?, ?>) contexts.getFirst()).get("context_id"));
+            assertEquals("OPEN", ((Map<?, ?>) contexts.getFirst()).get("context_state"));
+            var read = service.scriptRun("admin", target + "-read", scriptRequest(sessionId(opened), generation(opened),
+                    "count", Map.of(), 5000L, new ScriptBinding("npc", "invoke", contextId, Map.of(), null, List.of())));
+            assertEquals("SUCCEEDED", read.get("status"));
+            assertEquals(0, ((Number) result(read).get("result")).intValue(), "the cancelled invocation never ran");
+            assertEquals(0, adapter.closes.get(), "cancelling an unstarted call does not close its target");
+            assertEquals(1, nativeScope.snapshot().outstandingResources());
+            assertEquals(0, nativeScope.snapshot().acceptedWork());
+        }
+        var close = new ScriptBinding("npc", "close", contextId, Map.of(), null, List.of());
+        var closed = service.scriptRun("admin", "native-early-existing-final-close", scriptRequest(
+                sessionId(opened), generation(opened), "", Map.of(), 5000L, close));
+        assertEquals("SUCCEEDED", closed.get("status"));
+        assertEquals("CLOSED", result(closed).get("context_state"));
+        assertEquals(true, result(closed).get("context_closed"));
+        assertEquals(1, adapter.closes.get());
+        assertEquals(0, nativeScope.snapshot().outstandingResources());
+        assertEquals(0, nativeScope.snapshot().acceptedWork());
+
+        var staleCancelled = service.scriptCancel("admin", "native-early-gone-cancel", scriptCancelRequest(
+                sessionId(opened), generation(opened), "native-early-gone", "", Map.of(), 5000L, close));
+        assertEquals("UNKNOWN", result(staleCancelled).get("context_state"));
+        assertEquals(false, result(staleCancelled).get("context_closed"), "absence is not release evidence");
+    }
+
+    @Test
     void nativeDescriptorValidationRejectsMalformedRequestsBeforeAllocatingHistoryOrWork() {
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "native-validation-open");

@@ -15,7 +15,6 @@ import javax.script.ScriptContext;
 import javax.script.ScriptException;
 import java.io.Writer;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -357,10 +356,12 @@ public final class NativeScriptSession {
         @Override public void write(char[] text, int offset, int length) throws IOException {
             NativeScriptExecution call = activeCall;
             if (call == null) return;
-            byte[] bytes = new String(text, offset, length).getBytes(StandardCharsets.UTF_8);
-            (error ? call.stderr : call.stdout).write(bytes);
+            call.output(error).write(text, offset, length);
         }
-        @Override public void flush() { }
+        @Override public void flush() throws IOException {
+            NativeScriptExecution call = activeCall;
+            if (call != null) call.output(error).flush();
+        }
         @Override public void close() { }
     }
 }

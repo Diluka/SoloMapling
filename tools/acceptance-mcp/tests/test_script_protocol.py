@@ -190,21 +190,28 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(private, response.model_dump_json())
         self.assertEqual([], self.stub.requests)
 
-    async def test_stdio_json_budget_includes_options_and_args_without_extra_depth(self) -> None:
-        boundary = {"text": "a" * (16384 - len('{"text":""}') - len('{}') - len('[]'))}
-        too_large = {"text": boundary["text"] + "a"}
+    async def test_stdio_keeps_depth_guard_and_forwards_server_budget_rejection(self) -> None:
         depth_boundary = None
         for _ in range(16):
             depth_boundary = {"nested": depth_boundary}
         too_deep = {"nested": depth_boundary}
+
+        def respond(request: dict):
+            if request["path"] == RUN_PATH and request["body"]["requestId"] == "script:server-budget":
+                return 400, {"message": "invalid_script_parameters"}
+            return self.stub.default_response(request)
+
+        self.stub.responder = respond
         async with self.stdio_client() as client:
-            for parameters in [boundary, depth_boundary]:
-                response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": parameters, "options": {}})
-                self.assertFalse(response.is_error)
-            for parameters in [too_large, too_deep]:
-                response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": parameters, "options": {}})
-                self.assertTrue(response.is_error)
-                self.assertEqual("INVALID_ARGUMENTS", response.structured_content["error"]["code"])
+            response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": depth_boundary})
+            self.assertFalse(response.is_error)
+            response = await client.call_tool("script_run", {**SCRIPT_ARGS, "parameters": too_deep})
+            self.assertTrue(response.is_error)
+            self.assertEqual("INVALID_ARGUMENTS", response.structured_content["error"]["code"])
+            response = await client.call_tool("script_run", {
+                **SCRIPT_ARGS, "request_id": "script:server-budget", "parameters": {"text": "a" * 20000}})
+            self.assertTrue(response.is_error)
+            self.assertEqual("INVALID_ARGUMENTS", response.structured_content["error"]["code"])
         self.assertEqual(2, len([request for request in self.stub.requests if request["path"] == RUN_PATH]))
 
     async def test_official_sdk_cancel_reaches_independent_http_cancel(self) -> None:

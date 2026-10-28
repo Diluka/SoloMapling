@@ -120,6 +120,7 @@ python3 beidou-integration/scripts/build.py --help
 
 - MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。`script_run` 只执行北斗脚本，直接接收顶层 `kind/operation/context_id/options/entry/args`，不保留独立纯JS模式或外层 `environment` 兼容分支；缺少kind/operation及旧字段请求明确拒绝。
 - `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。`script_help` 只按当前角色列实际 `native_environments/contexts/maximum_contexts_per_module`，不接收names，也不维护已删除的纯函数目录。
+- `options/args/parameters` 的16KiB输入预算仅由服务端按其规范化JSON UTF-8编码裁决；客户端保留类型、有限数值、Unicode、节点数和深度校验，不再重复计算本地编码字节数或要求跨语言编码器产生同样长度。语言stdout/stderr使用持续UTF-8编码收集完整字符，游戏聊天的原生字符集限制另行保留。
 - 脚本设施由 `CharacterRuntime` 承载，消费当前模块代次的原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令lane。MCP保留鉴权、协议、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
 - 当前客户端仍为十一工具，既有十三动作及独立管理指令保留。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。
 
@@ -127,6 +128,7 @@ python3 beidou-integration/scripts/build.py --help
 
 - `kind` 选择npc/quest/portal/reactor/event，`operation` 为start/invoke/close。帮助与实际适配器说明同源，不为北斗每个Java方法另造同义函数。NPC/QM复用原管理器、精确CM/QM、Client缓存引擎和回调状态；门户和机关来自当前实际地图；事件使用实际Channel与同一受管Invocable创建角色自有原生EventManager，不替换或取消频道共享事件。
 - 每模块最多一个持久Context，后续调用使用原context_id及原模块代次。`invocation_settled/work_settled` 证明本次调用结算；`context_closed=false,context_state=OPEN` 可以是正常保留，最终关闭另核引擎、精确原生会话和调度资源真实释放。不得接管或清理外来、后继CM/QM，旧世界或旧模块不能续权。
+- 提前取消尚未启动的invoke/close只取消本次调用，不自动关闭原Context；检查点从原运行体按精确context_id投影现有事实，无法确认时标UNKNOWN，不能凭CANCELLED或work已结算编造context_closed=true。start未创建上下文的NOT_STARTED只描述本次新建尝试。
 - 期限、取消、模块停止及根关闭均须核实际执行退出。`Future.cancel/isDone`、HTTP返回或operation终态不能单独证明收尾；guest循环已停也不代表host Java方法已返回。原生异步调度、已出队回调和未知资源继续保留原scope债务。
 - 首环#219在原生预热副作用前明确拒绝尚未接入的owned EIM创建；完整EIM及一分钟延迟地图释放、更多脚本组合、机器人实际交互和真实客户端玩法仍按各自证据验收。北斗submodule只读，适配和织入仅在Solo维护。对象来源和连续调用见 `docs/robot-runtime/beidou-script-environment.md`，不提前将整个#216标完成。
 
