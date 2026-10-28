@@ -101,8 +101,8 @@ class AcceptanceObservationServiceTest {
     void enabledCommandsAreAnnouncedIndependentlyOfActorActions() throws ReflectiveOperationException {
         DebugCommandService commands = mock(DebugCommandService.class);
         Map<String, Object> commandCapabilities = Map.of("enabled", true,
-                "enabled_tools", List.of("game_command_help", "game_command"),
-                "command_generation", "commands-test-generation", "commands", List.of("give"));
+                "enabled_tools", List.of("game_command"),
+                "command_generation", "commands-test-generation", "generic_command", true);
         when(commands.publicCapabilities()).thenReturn(commandCapabilities);
         ObjectProvider<DebugCommandService> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(commands);
@@ -111,7 +111,7 @@ class AcceptanceObservationServiceTest {
         field.set(observations, provider);
 
         Map<String, Object> result = observations.capabilities();
-        assertEquals(List.of("game_capabilities", "game_observe", "game_command_help", "game_command"),
+        assertEquals(List.of("game_capabilities", "game_observe", "game_command"),
                 result.get("enabled_tools"));
         assertEquals(commandCapabilities, result.get("debug_commands"));
         assertEquals(List.of(), result.get("actions"));

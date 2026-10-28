@@ -1,0 +1,4 @@
+interface:
+  display_name: "SoloMapling 机器人验收"
+  short_description: "准备可归因的游戏场景，复现并回归真实机器人交互及其结果"
+  default_prompt: "使用 $solomapling-bot-testing 准备场景并复现这个机器人的交互问题。"

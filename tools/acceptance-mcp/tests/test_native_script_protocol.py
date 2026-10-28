@@ -12,7 +12,7 @@ from solo_acceptance_mcp.server import build_server
 
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN
-from tests.script_fixture import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_ARGS, SCRIPT_HELP, ScriptStub, script_operation
+from tests.script_fixture import CANCEL_PATH, RUN_PATH, SCRIPT_ARGS, ScriptStub, script_operation
 
 
 NATIVE_ARGS = {**SCRIPT_ARGS, "request_id": "native-script:fixture-1", "source": "",
@@ -49,10 +49,8 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                    "request_id": "native-script:defaults", "kind": "npc", "operation": "start"}
         async with self.stdio_client() as client:
             response = await client.call_tool("script_run", minimal)
-            help_response = await client.call_tool("script_help", {"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7})
         self.assertFalse(response.is_error)
         self.assertEqual(script_operation(minimal["request_id"]), response.structured_content)
-        self.assertEqual(SCRIPT_HELP, help_response.structured_content)
         data = next(request for request in self.stub.requests if request["path"] == RUN_PATH)["body"]["data"]
         self.assertEqual({"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7,
                           "kind": "npc", "operation": "start", "context_id": None, "options": {}, "entry": None,
@@ -60,8 +58,8 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.structured_content["result"]["context_closed"])
         self.assertTrue(response.structured_content["result"]["invocation_settled"])
         self.assertEqual(response.structured_content, json.loads(response.content[0].text))
-        self.assertNotIn(PASSWORD, response.model_dump_json() + help_response.model_dump_json())
-        self.assertNotIn(TOKEN, response.model_dump_json() + help_response.model_dump_json())
+        self.assertNotIn(PASSWORD, response.model_dump_json())
+        self.assertNotIn(TOKEN, response.model_dump_json())
 
     async def test_invalid_flat_native_combinations_are_rejected_before_auth_without_echo(self) -> None:
         private = PASSWORD + TOKEN + "private-native-input"
@@ -113,8 +111,6 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(1, sum(request["path"] == RUN_PATH for request in self.stub.requests))
             finally:
                 cleanup_complete.set()
-            help_result = await client.call_tool("script_help", {"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7})
-            self.assertFalse(help_result.is_error)
 
     async def test_native_kinds_callbacks_and_close_reach_http_with_original_id(self) -> None:
         calls = [

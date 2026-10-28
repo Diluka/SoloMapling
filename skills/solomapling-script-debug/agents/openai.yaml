@@ -1,0 +1,4 @@
+interface:
+  display_name: "北斗脚本调试"
+  short_description: "在随附源码中查阅原生接口，执行与继续脚本并核对副作用和收尾"
+  default_prompt: "使用 $solomapling-script-debug 查阅当前北斗脚本的源码与原生接口，完成调试并核对调用结果和收尾。"

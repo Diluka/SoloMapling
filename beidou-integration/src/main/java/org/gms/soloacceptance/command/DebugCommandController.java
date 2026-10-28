@@ -9,13 +9,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Map;
 import java.util.UUID;
@@ -30,12 +27,6 @@ public final class DebugCommandController {
 
     public DebugCommandController(DebugCommandService commands) {
         this.commands = commands;
-    }
-
-    @GetMapping("/help")
-    public ResultBody<Map<String, Object>> help(@RequestParam(name = "command", required = false) String command) {
-        AcceptanceAccess.requireAdmin();
-        return ResultBody.success(commands.help(command));
     }
 
     @PostMapping("/execute")
@@ -53,7 +44,7 @@ public final class DebugCommandController {
         return failure(failure.status(), failure.reason());
     }
 
-    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ResultBody<Map<String, String>>> malformedRequest(Exception ignored) {
         return failure(HttpStatus.BAD_REQUEST, "malformed_request");
     }

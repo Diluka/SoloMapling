@@ -19,7 +19,7 @@ TOOLS = {
     "game_capabilities", "game_observe", "actor_open", "actor_close",
     "operation_get", "operation_cancel",
 }
-READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get", "game_command_help", "script_help"}
+READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get"}
 SESSION_ID = "session-actor-fixture"
 OPEN_ID = "operation-open-fixture"
 CLOSE_ID = "operation-close-fixture"
@@ -96,7 +96,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_implemented_tools_have_explicit_mutation_and_request_contracts(self) -> None:
         async with Client(build_server(self.stub.config())) as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS | {"game_act", "game_command_help", "game_command", "script_run", "script_help"}, set(tools))
+        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
             self.assertTrue(tool.annotations.idempotent_hint, name)
@@ -191,7 +191,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": SESSION_ID, "expected_generation": 1, "request_id": "stdio-close",
                 })
                 closed = await client.call_tool("operation_get", {"operation_id": CLOSE_ID})
-        self.assertEqual(TOOLS | {"game_act", "game_command_help", "game_command", "script_run", "script_help"}, names)
+        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run"}, names)
         self.assertTrue(all(not result.is_error for result in [opened, online, closing, closed]))
         self.assertEqual("QUEUED", opened.structured_content["status"])
         self.assertEqual(42, online.structured_content["session"]["actor"]["character_id"])

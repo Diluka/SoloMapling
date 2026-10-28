@@ -276,20 +276,6 @@ class DebugCommandServiceTest {
         }
     }
 
-    @Test
-    void helpReadsTheRealNativeRegistryWithoutExecutingOrChangingCommands() {
-        Command restricted = register("zeta", 4, "native privileged command");
-        assertEquals(List.of("native-command", "zeta"), service.help(null).get("commands"));
-        assertEquals(List.of(Map.of("name", "zeta", "rank", 4, "description", "native privileged command")),
-                service.help("ZETA").get("command_details"));
-        dispatcher.getRegisteredCommands().remove("zeta");
-        assertEquals(List.of("native-command"), service.help(null).get("commands"));
-        assertEquals("native_command_not_registered", assertThrows(ObservationException.class,
-                () -> service.help("zeta")).reason());
-        verify(nativeCommand, never()).execute(any(), any(String[].class));
-        verify(restricted, never()).execute(any(), any(String[].class));
-    }
-
     private Command register(String name, int rank, String description) {
         Command command = mock(Command.class);
         when(command.getRank()).thenReturn(rank); when(command.getDescription()).thenReturn(description);

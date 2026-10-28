@@ -1,18 +1,13 @@
 package soloMapling.game.command;
 
 import org.gms.client.Client;
-import org.gms.client.command.Command;
 import org.gms.client.command.CommandsExecutor;
 import org.gms.util.ThreadLocalUtil;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /** One native command entry shared by script bindings and administrator transports. */
 public final class NativeCommandExecutor {
@@ -79,32 +74,6 @@ public final class NativeCommandExecutor {
             if (previous == null) ThreadLocalUtil.removeCurrentClient();
             else ThreadLocalUtil.setCurrentClient(previous);
         }
-    }
-
-    /** Read the enabled native registry without installing or changing any command. */
-    public static Map<String, Object> describeCommands(String name) {
-        if (name != null && (name.isBlank()
-                || name.codePointCount(0, name.length()) > MAX_COMMAND_CHARACTERS)) {
-            throw new IllegalArgumentException("invalid_command_name");
-        }
-        List<Map.Entry<String, Command>> entries = new ArrayList<>(
-                CommandsExecutor.getInstance().getRegisteredCommands().entrySet());
-        entries.sort(Comparator.comparing(Map.Entry::getKey));
-        String selected = name == null ? null : name.toLowerCase();
-        List<String> names = new ArrayList<>();
-        List<Map<String, Object>> details = new ArrayList<>();
-        for (Map.Entry<String, Command> entry : entries) {
-            if (selected != null && !selected.equals(entry.getKey())) continue;
-            Command command = entry.getValue();
-            names.add(entry.getKey());
-            details.add(Map.of("name", entry.getKey(), "rank", command.getRank(),
-                    "description", Objects.toString(command.getDescription(), "")));
-        }
-        if (selected != null && names.isEmpty()) {
-            throw new IllegalArgumentException("native_command_not_registered");
-        }
-        return Map.of("source", "native_registered_commands", "commands", List.copyOf(names),
-                "command_details", List.copyOf(details));
     }
 
     private static Result unknown(boolean invoked, String reason) {

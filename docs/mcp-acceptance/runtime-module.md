@@ -27,7 +27,6 @@ MCP 的外部 session、角色宿主和控制模块承担不同责任。它们�
 | `game_observe(scope="actor")` | 从同一宿主的角色来源读取事实，继续核 owner/session 和包窗口权限；不维护第二份角色状态，也不从只读快照取得普通动作控制权 |
 | 现有 NPC 动作 | 保留已审来源、offer、dialogue_version 和 legacy/NextLevel 路由，使用同一宿主 lane，不借迁移扩大菜单或收益路径 |
 | `script_run` | 直接按kind/operation执行北斗原脚本，消费当前模块原work，投影输出、JSON结果、本次调用及持久Context的真实收尾；不占短命令lane |
-| `script_help` | 只读查询同源native_environments、当前contexts与容量；不创建operation或执行work |
 | `actor_close` | 请求根宿主的正常角色关闭，经来源核原生清理、对话及声明范围存档；模块停止或卸载不能替代此操作 |
 
 MCP 的根来源由两个包内适配承接：
@@ -104,6 +103,6 @@ MCP模块额外声明movement/combat控制资源并为调度资源与cleanup工�
 
 MCP中断通过独立取消请求转发；取消先到时建立原请求检查点，迟到run不执行。持久Context可以在本次 `invocation_settled/work_settled` 后保持OPEN；最终关闭与未知收尾另核，债务保留，角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 投影同一原作用域的工作与资源计数，单个计数快照不能替代实际事实。
 
-`script_help` 只返回当前角色的同源环境描述、存活上下文及容量，不再接收names或维护纯函数目录。行为模块、共享事实/事件和现有动作迁移仍归各自任务，详细契约见[脚本执行参考](../robot-runtime/script-execution.md)和[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
+[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)提供源码查阅与操作说明；上下文标识、状态与结算直接消费执行结果。行为模块、共享事实/事件和现有动作迁移仍归各自任务，详细契约见[脚本执行参考](../robot-runtime/script-execution.md)和[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
 
 [#216北斗脚本上下文](../robot-runtime/beidou-script-environment.md)复用原管理器、原文件和真实对象，NPC/QM连续回调及事件原调度保持同一引擎。owned EIM实例创建尚未接入延迟地图清理，入口明确拒绝；完整共享能力目录、直接动作迁移及真实机器人交互不由基础执行通过推导完成。

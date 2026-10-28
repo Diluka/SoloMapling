@@ -438,29 +438,6 @@ public final class ActorControlService {
         return scriptInvocation(owner, request.targetRequestId(), request.invocation(), true);
     }
 
-    public Map<String, Object> scriptHelp(String owner, ActorScriptHelpRequest request) {
-        validateOwner(owner);
-        if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_actor_session");
-        validateScriptSession(request.sessionId(), request.expectedGeneration());
-        Session session;
-        NativeActorHandle handle;
-        synchronized (monitor) {
-            requireAccepting();
-            session = ownedSession(owner, request.sessionId(), request.expectedGeneration());
-            requireActionSession(session, null);
-            handle = session.handle;
-        }
-        if (!backend.isCurrent(handle)) throw error(HttpStatus.GONE, "stale_actor_session");
-        Map<String, Object> help = session.execution.scriptHelp();
-        synchronized (monitor) { requireActionSession(session, handle); }
-        Map<String, Object> result = new LinkedHashMap<>(help);
-        result.put("schema_version", 1);
-        result.put("language", "javascript");
-        result.put("native_environments", backend.nativeScriptEnvironments());
-        result.put("contexts", session.execution.nativeScriptContexts());
-        return result;
-    }
-
     /** Protocol history references the runtime's original work; scripts never enter the short-command lane. */
     private Map<String, Object> scriptInvocation(String owner, String requestId, ActorScriptRequest request,
                                                   boolean cancel) {
@@ -888,7 +865,7 @@ public final class ActorControlService {
             if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act",
-                    "script_run", "script_help"));
+                    "script_run"));
             result.put("script_execution", Map.of("language", "javascript", "minimum_timeout_ms", 1,
                     "maximum_timeout_ms", 5000, "default_timeout_ms", 1000, "maximum_source_characters", 65536,
                     "maximum_parameters_bytes", 16384, "execution_owner", "character_runtime"));
