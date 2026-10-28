@@ -2,126 +2,59 @@ package org.gms.soloacceptance.command;
 
 import org.gms.client.Character;
 import org.gms.client.Client;
-import org.gms.client.inventory.Inventory;
-import org.gms.client.inventory.InventoryType;
-import org.gms.client.inventory.Item;
-import org.gms.constants.inventory.ItemConstants;
 import org.gms.dao.entity.AccountsDO;
 import org.gms.dao.entity.CharactersDO;
-import org.gms.model.dto.GiveResourceReqDTO;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
-import org.gms.server.ItemInformationProvider;
 import org.gms.service.AccountService;
 import org.gms.service.CharacterService;
-import org.gms.service.GiveService;
 import org.gms.soloacceptance.actor.ActorProfiles;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import soloMapling.beidou.BotRegistry;
+import soloMapling.game.command.NativeCommandExecutor;
 
 import java.util.Objects;
 import java.util.function.Supplier;
 
-/** A native management adapter; it neither owns a role nor schedules role actions. */
+/** Resolves an eligible native target, then calls the same executor exposed to native scripts. */
 @Component
 @ConditionalOnProperty(prefix = "solomapling.acceptance", name = {
         "enabled", "actors-enabled", "debug-commands-enabled"}, havingValue = "true", matchIfMissing = false)
 public final class NativeDebugCommandBackend implements DebugCommandService.Backend {
     private final AccountService accounts;
     private final CharacterService characters;
-    private final GiveService giveService;
     private final Supplier<Server> servers;
-    private final Supplier<ItemInformationProvider> items;
 
     @Autowired
-    public NativeDebugCommandBackend(AccountService accounts, CharacterService characters, GiveService giveService) {
-        this(accounts, characters, giveService, Server::getInstance, ItemInformationProvider::getInstance);
+    public NativeDebugCommandBackend(AccountService accounts, CharacterService characters) {
+        this(accounts, characters, Server::getInstance);
     }
 
-    NativeDebugCommandBackend(AccountService accounts, CharacterService characters, GiveService giveService,
-                              Supplier<Server> servers, Supplier<ItemInformationProvider> items) {
+    NativeDebugCommandBackend(AccountService accounts, CharacterService characters, Supplier<Server> servers) {
         this.accounts = accounts;
         this.characters = characters;
-        this.giveService = giveService;
         this.servers = servers;
-        this.items = items;
     }
 
     @Override
-    public DebugCommandService.Outcome give(ActorProfiles.Resolved profile, int itemId, int quantity) {
-        if (itemId <= 0 || quantity < 1 || quantity > Short.MAX_VALUE) {
-            return failed("invalid_give_parameters");
-        }
+    public DebugCommandService.Outcome execute(ActorProfiles.Resolved profile, String command) {
+        try { NativeCommandExecutor.validateCommand(command); }
+        catch (IllegalArgumentException invalid) { return failed("invalid_command_text"); }
         Target target;
-        Inventory inventory;
-        InventoryType type = ItemConstants.getInventoryType(itemId);
         try {
             target = target(profile);
-            ItemInformationProvider ii = items.get();
-            if (type != InventoryType.USE && type != InventoryType.ETC
-                    || ItemConstants.isPet(itemId) || ItemConstants.isRechargeable(itemId)) {
-                return failed("item_not_supported");
-            }
-            if (ii.getName(itemId) == null) return failed("item_not_found");
-            if (ii.isCash(itemId) || ii.isQuestItem(itemId) || ii.getSlotMax(target.client(), itemId) <= 1) {
-                return failed("item_not_supported");
-            }
-            inventory = target.character().getInventory(type);
-            if (inventory == null) return failed("inventory_unavailable");
+            requireCurrent(target);
         } catch (Rejected rejected) {
             return failed(rejected.reason);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException unavailable) {
             return failed("command_validation_unavailable");
         }
-
-        // This is the very same reentrant inventory lock used by the native addById.
-        // It bounds evidence collection without introducing another scheduler or lock.
-        inventory.lockInventory();
-        try {
-            Long before;
-            try {
-                requireCurrent(target);
-                before = quantity(inventory, itemId);
-            } catch (Rejected rejected) {
-                return failed(rejected.reason);
-            } catch (RuntimeException ignored) {
-                return failed("inventory_observation_unavailable");
-            }
-
-            GiveResourceReqDTO request = new GiveResourceReqDTO();
-            request.setWorldId(target.world().getId());
-            request.setPlayerId(target.character().getId());
-            request.setType((byte) 5);
-            request.setId(itemId);
-            request.setQuantity(quantity);
-            boolean nativeError = false;
-            try {
-                giveService.give(request);
-            } catch (RuntimeException ignored) {
-                nativeError = true;
-            }
-            Long after = null;
-            try {
-                after = quantity(inventory, itemId);
-            } catch (RuntimeException ignored) {
-                // Dispatched writes are never replayable merely because evidence failed.
-            }
-            if (after != null && after - before == quantity) {
-                return outcome(target, type, "SUCCEEDED", true, "item_quantity_confirmed", before, after);
-            }
-            if (after != null && after.equals(before) && !nativeError) {
-                return outcome(target, type, "FAILED", true, "inventory_full_or_no_change", before, after);
-            }
-            return outcome(target, type, "UNKNOWN", true,
-                    after == null ? "inventory_observation_unavailable"
-                            : after.equals(before) ? "native_give_error" : "inventory_partial_or_unexpected_change",
-                    before, after);
-        } finally {
-            inventory.unlockInventory();
-        }
+        NativeCommandExecutor.Result result = NativeCommandExecutor.execute(target.client(), command);
+        return new DebugCommandService.Outcome(result.status(), result.nativeHandlerInvoked(),
+                result.nativeHandlerReturned(), result.commandOutcome(), result.reason(), target.characterId(), profile.world());
     }
 
     private Target target(ActorProfiles.Resolved profile) {
@@ -170,27 +103,8 @@ public final class NativeDebugCommandBackend implements DebugCommandService.Back
         }
     }
 
-    private static long quantity(Inventory inventory, int itemId) {
-        long total = 0;
-        for (Item item : inventory.list()) {
-            if (item.getItemId() == itemId) {
-                if (item.getPosition() <= 0 || item.getQuantity() < 0) {
-                    throw new IllegalStateException("invalid inventory evidence");
-                }
-                total += item.getQuantity();
-            }
-        }
-        return total;
-    }
-
     private static DebugCommandService.Outcome failed(String reason) {
-        return new DebugCommandService.Outcome("FAILED", false, reason, null, null, null, null, null);
-    }
-
-    private static DebugCommandService.Outcome outcome(Target target, InventoryType type, String status,
-                                                       boolean dispatched, String reason, Long before, Long after) {
-        return new DebugCommandService.Outcome(status, dispatched, reason, before, after, type.name(),
-                target.characterId(), target.world().getId());
+        return new DebugCommandService.Outcome("FAILED", false, false, "NOT_INVOKED", reason, null, null);
     }
 
     private record Target(Server server, World world, Channel channel, Character character, Client client,

@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -344,22 +344,29 @@ def validate_action_request(session_id: str, expected_generation: int, request_i
     validate_action(action, parameters, expected_context)
 
 
+MAX_COMMAND_CHARACTERS = 16_384
+
+
+def validate_command_text(command: str) -> None:
+    if not isinstance(command, str) or not command.strip() or len(command) > MAX_COMMAND_CHARACTERS:
+        raise BridgeError("INVALID_ARGUMENTS", "command 必须是1～16384字符的非空字符串。")
+    try:
+        command.encode("utf-8", errors="strict")
+    except UnicodeError:
+        raise BridgeError("INVALID_ARGUMENTS", "command 必须是有效的 Unicode 字符串。") from None
+
+
 def validate_command_help(command: str | None = None) -> None:
-    if command is not None and (not isinstance(command, str) or command != "give"):
-        raise BridgeError("INVALID_ARGUMENTS", "command 当前只支持 give。")
+    if command is not None:
+        validate_command_text(command)
 
 
 def validate_command_request(profile_id: str, request_id: str, command: str,
-                             parameters: dict[str, Any], expected_command_generation: str) -> None:
+                             expected_command_generation: str) -> None:
     validate_identifier(profile_id, "profile_id", PROFILE_IDENTIFIER)
     validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
     validate_identifier(expected_command_generation, "expected_command_generation")
-    if not isinstance(command, str) or command != "give":
-        raise BridgeError("INVALID_ARGUMENTS", "command 当前只支持 give。")
-    if not isinstance(parameters, dict) or set(parameters) != {"item_id", "quantity"}:
-        raise BridgeError("INVALID_ARGUMENTS", "give parameters 必须且只能包含 item_id 和 quantity。")
-    validate_integer(parameters["item_id"], "item_id", 1, MAX_INT)
-    validate_integer(parameters["quantity"], "quantity", 1, 32767)
+    validate_command_text(command)
 
 
 class BridgeClient:
@@ -393,17 +400,17 @@ class BridgeClient:
         validate_command_help(command)
         path = "/solo/acceptance/v1/command/help"
         if command is not None:
-            path += "?command=" + command
+            path += "?command=" + quote(command, safe="")
         return await self._authorized_request("GET", path)
 
     async def command(
-        self, profile_id: str, *, request_id: str, command: str, parameters: dict[str, Any],
+        self, profile_id: str, *, request_id: str, command: str,
         expected_command_generation: str,
     ) -> dict[str, Any]:
-        validate_command_request(profile_id, request_id, command, parameters, expected_command_generation)
+        validate_command_request(profile_id, request_id, command, expected_command_generation)
         try:
             return await self._mutation("/solo/acceptance/v1/command/execute", {
-                "profile_id": profile_id, "command": command, "parameters": dict(parameters),
+                "profile_id": profile_id, "command": command,
                 "expected_command_generation": expected_command_generation,
             }, request_id)
         except BridgeError as failure:

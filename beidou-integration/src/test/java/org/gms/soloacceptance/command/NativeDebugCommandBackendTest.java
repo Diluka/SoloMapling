@@ -3,41 +3,36 @@ package org.gms.soloacceptance.command;
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.client.Client;
-import org.gms.client.inventory.Inventory;
-import org.gms.client.inventory.InventoryType;
-import org.gms.client.inventory.Item;
+import org.gms.client.command.Command;
+import org.gms.client.command.CommandsExecutor;
+import org.gms.config.GameConfig;
 import org.gms.dao.entity.AccountsDO;
 import org.gms.dao.entity.CharactersDO;
-import org.gms.model.dto.GiveResourceReqDTO;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
-import org.gms.server.ItemInformationProvider;
 import org.gms.service.AccountService;
 import org.gms.service.CharacterService;
-import org.gms.service.GiveService;
 import org.gms.soloacceptance.actor.ActorProfiles;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.command.NativeCommandExecutor;
 
-import java.util.List;
+import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class NativeDebugCommandBackendTest {
-    private static final int POTION = 2_000_000;
-    private static final int SHELL = 4_000_000;
     private final ActorProfiles.Resolved profile = new ActorProfiles.Resolved(
             "primary", "mcp_primary", "test-password", "McpPrimary", 0, 1, false);
     private AccountService accounts;
     private CharacterService characters;
-    private GiveService giveService;
-    private ItemInformationProvider items;
     private Server server;
     private World world;
     private Channel channel;
@@ -47,278 +42,187 @@ class NativeDebugCommandBackendTest {
     private CharactersDO stored;
     private Character character;
     private Client client;
-    private Inventory inventory;
     private NativeDebugCommandBackend backend;
+    private MockedStatic<NativeCommandExecutor> executor;
 
     @BeforeEach
     void setup() {
         CharacterTestContext.install();
-        accounts = mock(AccountService.class);
-        characters = mock(CharacterService.class);
-        giveService = mock(GiveService.class);
-        items = mock(ItemInformationProvider.class);
-        server = mock(Server.class);
-        world = mock(World.class);
-        channel = mock(Channel.class);
-        worldPlayers = mock(PlayerStorage.class);
-        channelPlayers = mock(PlayerStorage.class);
+        accounts = mock(AccountService.class); characters = mock(CharacterService.class);
+        server = mock(Server.class); world = mock(World.class); channel = mock(Channel.class);
+        worldPlayers = mock(PlayerStorage.class); channelPlayers = mock(PlayerStorage.class);
         character = mock(Character.class);
-        // A normal native client is deliberate: no AcceptanceClient, module, or runtime is needed.
+        // A plain native client deliberately requires no AcceptanceClient, module, or runtime.
         client = mock(Client.class);
         account = AccountsDO.builder().id(17).name("mcp_primary").webadmin(0).banned(false).build();
         stored = CharactersDO.builder().id(41).accountid(17).name("McpPrimary").world(0).gm(0).build();
         when(accounts.findByName("mcp_primary")).thenReturn(account);
         when(characters.findByName("McpPrimary")).thenReturn(stored);
-        when(server.isOnline()).thenReturn(true);
-        when(server.getWorld(0)).thenReturn(world);
-        when(world.getId()).thenReturn(0);
-        when(world.getChannel(1)).thenReturn(channel);
+        when(server.isOnline()).thenReturn(true); when(server.getWorld(0)).thenReturn(world);
+        when(world.getId()).thenReturn(0); when(world.getChannel(1)).thenReturn(channel);
         when(channel.getId()).thenReturn(1);
         when(world.getPlayerStorage()).thenReturn(worldPlayers);
         when(channel.getPlayerStorage()).thenReturn(channelPlayers);
         when(worldPlayers.getCharacterById(41)).thenReturn(character);
         when(channelPlayers.getCharacterById(41)).thenReturn(character);
-        when(character.getId()).thenReturn(41);
-        when(character.getAccountId()).thenReturn(17);
-        when(character.getName()).thenReturn("McpPrimary");
-        when(character.getWorld()).thenReturn(0);
-        when(character.getClient()).thenReturn(client);
-        when(character.isLoggedInWorld()).thenReturn(true);
-        when(client.getPlayer()).thenReturn(character);
-        when(client.getAccID()).thenReturn(17);
-        when(client.getChannel()).thenReturn(1);
-        when(client.isLoggedIn()).thenReturn(true);
-        inventory = new Inventory(character, InventoryType.USE, (byte) 24);
-        when(character.getInventory(InventoryType.USE)).thenReturn(inventory);
-        when(items.getName(POTION)).thenReturn("Red Potion");
-        when(items.getName(SHELL)).thenReturn("Snail Shell");
-        when(items.getSlotMax(client, POTION)).thenReturn((short) 100);
-        when(items.getSlotMax(client, SHELL)).thenReturn((short) 100);
-        backend = new NativeDebugCommandBackend(accounts, characters, giveService, () -> server, () -> items);
+        when(character.getId()).thenReturn(41); when(character.getAccountId()).thenReturn(17);
+        when(character.getName()).thenReturn("McpPrimary"); when(character.getWorld()).thenReturn(0);
+        when(character.getClient()).thenReturn(client); when(character.isLoggedInWorld()).thenReturn(true);
+        when(client.getPlayer()).thenReturn(character); when(client.getAccID()).thenReturn(17);
+        when(client.getChannel()).thenReturn(1); when(client.isLoggedIn()).thenReturn(true);
+        backend = new NativeDebugCommandBackend(accounts, characters, () -> server);
+        executor = mockStatic(NativeCommandExecutor.class);
+        executor.when(() -> NativeCommandExecutor.validateCommand(any())).thenCallRealMethod();
+    }
+
+    @AfterEach
+    void stop() { if (executor != null) executor.close(); }
+
+    @Test
+    void forwardsConfiguredNativeClientAndCompleteUnmodifiedCommandToSharedExecutorOnce() {
+        String command = "!Any-Native-Command  Mixed CASE  arguments";
+        executor.when(() -> NativeCommandExecutor.execute(client, command)).thenReturn(returned());
+        var result = backend.execute(profile, command);
+        assertEquals("RETURNED", result.status());
+        assertEquals(true, result.nativeHandlerInvoked());
+        assertEquals(true, result.nativeHandlerReturned());
+        assertEquals("UNREPORTED", result.commandOutcome());
+        assertEquals(41, result.characterId()); assertEquals(0, result.world());
+        executor.verify(() -> NativeCommandExecutor.execute(client, command), times(1));
+        verify(character, never()).setGM(anyInt());
     }
 
     @Test
-    void nativeServiceReceivesOnlyTheConfiguredPositiveTargetAndFixedItemResourceType() {
-        inventory.addItem(new Item(POTION, (short) 0, (short) 3));
-        doAnswer(call -> {
-            inventory.getItem((short) 1).setQuantity((short) 5);
-            return null;
-        }).when(giveService).give(any());
-
-        var result = backend.give(profile, POTION, 2);
-
-        assertEquals("SUCCEEDED", result.status());
-        assertEquals(Boolean.TRUE, result.nativeDispatched());
-        assertEquals(3L, result.quantityBefore());
-        assertEquals(5L, result.quantityAfter());
-        assertEquals("USE", result.inventoryType());
-        assertEquals(41, result.characterId());
-        assertEquals(0, result.world());
-        ArgumentCaptor<GiveResourceReqDTO> captured = ArgumentCaptor.forClass(GiveResourceReqDTO.class);
-        verify(giveService).give(captured.capture());
-        assertEquals(41, captured.getValue().getPlayerId());
-        assertEquals(0, captured.getValue().getWorldId());
-        assertEquals((byte) 5, captured.getValue().getType());
-        assertEquals(POTION, captured.getValue().getId());
-        assertEquals(2, captured.getValue().getQuantity());
-        assertNull(captured.getValue().getPlayer());
-        assertNull(captured.getValue().getRate());
+    void anyCommandNameUsesTheSameNativeEntryWithoutGivingItemsOrChangingPermissions() {
+        for (String command : new String[]{"@time", "!item 2000000 1", "/native-command arg", "@newly-registered-name"}) {
+            executor.when(() -> NativeCommandExecutor.execute(client, command)).thenReturn(returned());
+            assertEquals("RETURNED", backend.execute(profile, command).status());
+            executor.verify(() -> NativeCommandExecutor.execute(client, command), times(1));
+        }
     }
 
     @Test
-    void ordinaryStackableEtcItemUsesItsRealInventory() {
-        Inventory etc = new Inventory(character, InventoryType.ETC, (byte) 24);
-        when(character.getInventory(InventoryType.ETC)).thenReturn(etc);
-        doAnswer(call -> {
-            etc.addItem(new Item(SHELL, (short) 0, (short) 2));
-            return null;
-        }).when(giveService).give(any());
-
-        var result = backend.give(profile, SHELL, 2);
-        assertEquals("SUCCEEDED", result.status());
-        assertEquals("ETC", result.inventoryType());
-        assertEquals(0L, result.quantityBefore());
-        assertEquals(2L, result.quantityAfter());
-    }
-
-    @Test
-    void rejectsInvalidQuantitiesBeforeCallingNativeServices() {
-        for (int quantity : new int[]{0, -1, Short.MAX_VALUE + 1}) {
-            var result = backend.give(profile, POTION, quantity);
+    void rejectsEmptyOverlongAndMalformedUnicodeBeforeNativeHandler() {
+        for (String command : new String[]{null, "", "  ", "x".repeat(16_385), "@time\ud800"}) {
+            var result = backend.execute(profile, command);
             assertEquals("FAILED", result.status());
-            assertEquals(Boolean.FALSE, result.nativeDispatched());
-            assertEquals("invalid_give_parameters", result.reason());
+            assertEquals(false, result.nativeHandlerInvoked());
+            assertEquals("invalid_command_text", result.reason());
         }
-        verifyNoInteractions(giveService, accounts, characters);
+        verifyNoInteractions(accounts, characters);
     }
 
     @Test
-    void rejectsEquipmentPetsCashSetupAndRechargeableItems() {
-        for (int itemId : new int[]{1_040_000, 5_000_000, 5_020_000, 3_010_000, 2_070_000, 2_330_000}) {
-            var result = backend.give(profile, itemId, 1);
-            assertEquals("FAILED", result.status(), Integer.toString(itemId));
-            assertEquals(Boolean.FALSE, result.nativeDispatched());
-            assertEquals("item_not_supported", result.reason());
-        }
-        verifyNoInteractions(giveService);
-    }
-
-    @Test
-    void rejectsUnknownItemsAndSpecialNonOrdinaryItemData() {
-        when(items.getName(POTION)).thenReturn(null);
-        assertEquals("item_not_found", backend.give(profile, POTION, 1).reason());
-        when(items.getName(POTION)).thenReturn("Red Potion");
-        when(items.isCash(POTION)).thenReturn(true);
-        assertEquals("item_not_supported", backend.give(profile, POTION, 1).reason());
-        when(items.isCash(POTION)).thenReturn(false);
-        when(items.isQuestItem(POTION)).thenReturn(true);
-        assertEquals("item_not_supported", backend.give(profile, POTION, 1).reason());
-        when(items.isQuestItem(POTION)).thenReturn(false);
-        when(items.getSlotMax(client, POTION)).thenReturn((short) 1);
-        assertEquals("item_not_supported", backend.give(profile, POTION, 1).reason());
-        verifyNoInteractions(giveService);
-    }
-
-    @Test
-    void rejectsAnAccountOrStoredCharacterOutsideTheConfiguredOrdinaryIdentity() {
+    void preservesExistingOrdinaryFixtureEligibilityChecks() {
         account.setWebadmin(1);
-        assertEquals("profile_target_not_eligible", backend.give(profile, POTION, 1).reason());
-        account.setWebadmin(0);
+        assertRejected("profile_target_not_eligible"); account.setWebadmin(0);
         account.setBanned(true);
-        assertEquals("profile_target_not_eligible", backend.give(profile, POTION, 1).reason());
-        account.setBanned(false);
-        stored.setAccountid(999);
-        assertEquals("profile_target_not_eligible", backend.give(profile, POTION, 1).reason());
-        stored.setAccountid(17);
-        stored.setWorld(1);
-        assertEquals("profile_target_not_eligible", backend.give(profile, POTION, 1).reason());
-        stored.setWorld(0);
+        assertRejected("profile_target_not_eligible"); account.setBanned(false);
         stored.setGm(1);
-        assertEquals("profile_target_not_eligible", backend.give(profile, POTION, 1).reason());
-        verifyNoInteractions(giveService);
+        assertRejected("profile_target_not_eligible"); stored.setGm(0);
+        stored.setAccountid(18);
+        assertRejected("profile_target_not_eligible"); stored.setAccountid(17);
+        stored.setWorld(1);
+        assertRejected("profile_target_not_eligible");
     }
 
     @Test
-    void rejectsOfflineOrReplacedNativeObjectsEvenWhenIdsMatch() {
+    void rejectsOfflineMissingAndReplacementObjectsBeforeSharedInvocation() {
         when(worldPlayers.getCharacterById(41)).thenReturn(null);
-        assertEquals("profile_target_not_online", backend.give(profile, POTION, 1).reason());
+        assertRejected("profile_target_not_online");
         when(worldPlayers.getCharacterById(41)).thenReturn(character);
         when(channelPlayers.getCharacterById(41)).thenReturn(mock(Character.class));
-        assertEquals("profile_target_not_online", backend.give(profile, POTION, 1).reason());
-        when(channelPlayers.getCharacterById(41)).thenReturn(character);
-        when(client.getAccID()).thenReturn(999);
-        assertEquals("profile_target_not_online", backend.give(profile, POTION, 1).reason());
-        when(client.getAccID()).thenReturn(17);
-        when(client.isLoggedIn()).thenReturn(false);
-        assertEquals("profile_target_not_online", backend.give(profile, POTION, 1).reason());
-        verifyNoInteractions(giveService);
+        assertRejected("profile_target_not_online");
     }
 
     @Test
-    void liveRoleNameMustStillMatchTheConfiguredAndPersistedIdentity() {
-        when(character.getName()).thenReturn("OtherPlayer");
-        var result = backend.give(profile, POTION, 1);
-        assertEquals("FAILED", result.status());
-        assertEquals(Boolean.FALSE, result.nativeDispatched());
-        assertEquals("profile_target_not_online", result.reason());
-        verifyNoInteractions(giveService);
+    void rechecksExactTargetImmediatelyBeforeSharedInvocation() {
+        when(worldPlayers.getCharacterById(41)).thenReturn(character, mock(Character.class));
+        assertRejected("profile_target_not_online");
+        executor.verify(() -> NativeCommandExecutor.execute(any(), anyString()), never());
     }
 
     @Test
-    void rejectsAHeadlessBotOrLiveGmWithoutChangingPrivileges() {
-        when(character.gmLevel()).thenReturn(1);
-        assertEquals("profile_target_not_online", backend.give(profile, POTION, 1).reason());
-        when(character.gmLevel()).thenReturn(0);
+    void mismatchedLiveNameAccountAndClientCannotSelectAnotherRole() {
+        when(character.getName()).thenReturn("someone-else");
+        assertRejected("profile_target_not_online");
+        when(character.getName()).thenReturn("McpPrimary");
+        when(character.getAccountId()).thenReturn(18);
+        assertRejected("profile_target_not_online");
+        when(character.getAccountId()).thenReturn(17);
+        when(client.getPlayer()).thenReturn(mock(Character.class));
+        assertRejected("profile_target_not_online");
+    }
+
+    @Test
+    void environmentBotsRemainExcludedFromTheExistingMcpTargetPolicy() {
         BotClient bot = mock(BotClient.class);
-        when(character.getClient()).thenReturn(bot);
-        when(bot.getPlayer()).thenReturn(character);
-        when(bot.getAccID()).thenReturn(17);
-        when(bot.getChannel()).thenReturn(1);
-        when(bot.isLoggedIn()).thenReturn(true);
-        assertEquals("profile_target_not_online", backend.give(profile, POTION, 1).reason());
-        verifyNoInteractions(giveService);
+        when(character.getClient()).thenReturn(bot); when(bot.getPlayer()).thenReturn(character);
+        when(bot.getAccID()).thenReturn(17); when(bot.getChannel()).thenReturn(1); when(bot.isLoggedIn()).thenReturn(true);
+        assertRejected("profile_target_not_online");
     }
 
     @Test
-    void checksTheExactOnlineTargetAgainImmediatelyBeforeNativeDispatch() {
-        when(worldPlayers.getCharacterById(41)).thenReturn(character, character, mock(Character.class));
-        var result = backend.give(profile, POTION, 1);
-        assertEquals("FAILED", result.status());
-        assertEquals(Boolean.FALSE, result.nativeDispatched());
-        assertEquals("profile_target_not_online", result.reason());
-        verifyNoInteractions(giveService);
-    }
-
-    @Test
-    void aVoidReturnWithoutInventoryChangeIsNotSuccess() {
-        var result = backend.give(profile, POTION, 2);
-        assertEquals("FAILED", result.status());
-        assertEquals(Boolean.TRUE, result.nativeDispatched());
-        assertEquals("inventory_full_or_no_change", result.reason());
-        assertEquals(0L, result.quantityBefore());
-        assertEquals(0L, result.quantityAfter());
-    }
-
-    @Test
-    void partialNativeChangesRemainUnknownAndAreNotRepeated() {
-        doAnswer(call -> {
-            inventory.addItem(new Item(POTION, (short) 0, (short) 1));
-            return null;
-        }).when(giveService).give(any());
-        var result = backend.give(profile, POTION, 2);
+    void sharedUnknownReceiptIsKeptWithoutRetryingOrExposingNativeExceptionText() {
+        String command = "@native-command argument";
+        executor.when(() -> NativeCommandExecutor.execute(client, command)).thenReturn(
+                new NativeCommandExecutor.Result("UNKNOWN", true, false, "UNREPORTED", "native_handler_failed"));
+        var result = backend.execute(profile, command);
         assertEquals("UNKNOWN", result.status());
-        assertEquals(Boolean.TRUE, result.nativeDispatched());
-        assertEquals(0L, result.quantityBefore());
-        assertEquals(1L, result.quantityAfter());
-        verify(giveService, times(1)).give(any());
+        assertEquals(true, result.nativeHandlerInvoked()); assertEquals(false, result.nativeHandlerReturned());
+        assertEquals("UNREPORTED", result.commandOutcome());
+        executor.verify(() -> NativeCommandExecutor.execute(client, command), times(1));
     }
 
     @Test
-    void confirmedInventoryFactSurvivesAnExceptionAfterTheNativeEffect() {
-        doAnswer(call -> {
-            inventory.addItem(new Item(POTION, (short) 0, (short) 2));
-            throw new IllegalStateException("private native error");
-        }).when(giveService).give(any());
-        var result = backend.give(profile, POTION, 2);
-        assertEquals("SUCCEEDED", result.status());
-        assertEquals("item_quantity_confirmed", result.reason());
-        assertEquals(2L, result.quantityAfter());
-        assertFalse(result.toString().contains("private native error"));
+    void nativeAssertionErrorThroughTheMcpChainRestoresUnknownWithoutRunningAgain() {
+        executor.close(); executor = null;
+        CommandsExecutor nativeExecutor = CommandsExecutor.getInstance();
+        var original = new HashMap<>(nativeExecutor.getRegisteredCommands());
+        Command command = mock(Command.class);
+        when(command.getRank()).thenReturn(0);
+        doThrow(new AssertionError("private native assertion")).when(command).execute(eq(client), any(String[].class));
+        when(client.tryacquireClient()).thenReturn(true);
+        when(character.getMapId()).thenReturn(10000);
+        try (MockedStatic<GameConfig> config = mockStatic(GameConfig.class)) {
+            config.when(() -> GameConfig.getServerBoolean("deterred_player_command")).thenReturn(false);
+            nativeExecutor.getRegisteredCommands().put("assertion-probe", command);
+            DebugCommandService service = new DebugCommandService(DebugCommandServiceTest.profiles(), backend,
+                    "test-generation", 2);
+            DebugCommandRequest request = new DebugCommandRequest("primary", "test-generation", "@assertion-probe");
+            var first = service.execute("operator", "native-assertion", request);
+            assertEquals("UNKNOWN", first.get("status"));
+            assertEquals(true, first.get("terminal"));
+            assertEquals(true, first.get("native_handler_invoked"));
+            assertEquals(false, first.get("native_handler_returned"));
+            assertFalse(first.toString().contains("private"));
+            assertEquals(first, service.execute("operator", "native-assertion", request));
+            verify(command, times(1)).execute(eq(client), any(String[].class));
+            verify(client).releaseClient();
+        } finally {
+            nativeExecutor.getRegisteredCommands().clear();
+            nativeExecutor.getRegisteredCommands().putAll(original);
+        }
     }
 
     @Test
-    void anExceptionAfterDispatchWithoutConfirmedEffectIsUnknown() {
-        doThrow(new IllegalStateException("secret cause")).when(giveService).give(any());
-        var result = backend.give(profile, POTION, 2);
-        assertEquals("UNKNOWN", result.status());
-        assertEquals(Boolean.TRUE, result.nativeDispatched());
-        assertEquals("native_give_error", result.reason());
-        assertFalse(result.toString().contains("secret cause"));
-    }
-
-    @Test
-    void unreadablePostStateRetainsTheDispatchAndAvailableBeforeFact() {
-        Inventory unreadable = mock(Inventory.class);
-        when(character.getInventory(InventoryType.USE)).thenReturn(unreadable);
-        when(unreadable.list()).thenReturn(List.of(new Item(POTION, (short) 1, (short) 3)))
-                .thenThrow(new IllegalStateException("secret observation error"));
-        var result = backend.give(profile, POTION, 2);
-        assertEquals("UNKNOWN", result.status());
-        assertEquals(Boolean.TRUE, result.nativeDispatched());
-        assertEquals(3L, result.quantityBefore());
-        assertNull(result.quantityAfter());
-        verify(unreadable).unlockInventory();
-        assertFalse(result.toString().contains("secret observation error"));
-    }
-
-    @Test
-    void validationReadFailuresDoNotDispatchOrExposeTheirMessage() {
-        when(accounts.findByName(anyString())).thenThrow(new IllegalStateException("secret account details"));
-        var result = backend.give(profile, POTION, 2);
-        assertEquals("FAILED", result.status());
-        assertEquals(Boolean.FALSE, result.nativeDispatched());
+    void validationReadFailureIsFixedAndNeverReachesTheSharedExecutor() {
+        when(accounts.findByName(anyString())).thenThrow(new IllegalStateException("private account details"));
+        var result = backend.execute(profile, "@time");
+        assertEquals("FAILED", result.status()); assertEquals(false, result.nativeHandlerInvoked());
         assertEquals("command_validation_unavailable", result.reason());
-        verifyNoInteractions(giveService);
-        assertFalse(result.toString().contains("secret account details"));
+        assertFalse(result.toString().contains("private"));
+        executor.verify(() -> NativeCommandExecutor.execute(any(), anyString()), never());
+    }
+
+    private void assertRejected(String reason) {
+        var result = backend.execute(profile, "@time");
+        assertEquals("FAILED", result.status()); assertEquals(false, result.nativeHandlerInvoked());
+        assertEquals(false, result.nativeHandlerReturned()); assertEquals("NOT_INVOKED", result.commandOutcome());
+        assertEquals(reason, result.reason());
+        executor.verify(() -> NativeCommandExecutor.execute(any(), anyString()), never());
+    }
+    private static NativeCommandExecutor.Result returned() {
+        return new NativeCommandExecutor.Result("RETURNED", true, true, "UNREPORTED", "native_handler_returned");
     }
 }

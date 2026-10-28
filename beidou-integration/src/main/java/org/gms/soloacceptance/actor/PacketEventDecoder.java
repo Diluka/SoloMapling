@@ -12,6 +12,7 @@ import java.util.Map;
 final class PacketEventDecoder {
     static final int MAXIMUM_TEXT_CHARS = 1024;
     static final int SERVER_MESSAGE = 0x44;
+    static final int YELLOW_TIP = 0x4D;
     static final int CHAT_TEXT = 0xA2;
     static final int PLAYER_HINT = 0xD6;
     static final int NPC_TALK = 0x130;
@@ -20,7 +21,8 @@ final class PacketEventDecoder {
 
     static Map<String, Object> decode(byte[] bytes, Charset charset) {
         int opcode = (bytes[0] & 0xff) | (bytes[1] & 0xff) << 8;
-        if (opcode != SERVER_MESSAGE && opcode != CHAT_TEXT && opcode != PLAYER_HINT && opcode != NPC_TALK) {
+        if (opcode != SERVER_MESSAGE && opcode != YELLOW_TIP && opcode != CHAT_TEXT
+                && opcode != PLAYER_HINT && opcode != NPC_TALK) {
             return summary("unsupported", "unsupported_opcode");
         }
         try {
@@ -39,6 +41,13 @@ final class PacketEventDecoder {
                 fields.put("height", reader.unsignedShort());
                 fields.put("enabled", reader.bool());
                 fields.put("clears_previous", ".".equals(fields.get("text")));
+            } else if (opcode == YELLOW_TIP) {
+                if (reader.unsignedByte() != 0xFF) {
+                    return summary("unsupported", "unsupported_yellow_tip_type");
+                }
+                fields.put("event_type", "yellow_tip");
+                reader.text(fields);
+                if (reader.unsignedShort() != 0) throw malformed("packet_yellow_tip_tail_invalid");
             } else if (opcode == NPC_TALK) {
                 int speakerType = reader.unsignedByte();
                 if (speakerType != 4) return summary("unsupported", "unsupported_npc_speaker_type");

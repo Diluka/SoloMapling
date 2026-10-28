@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from urllib.parse import urlsplit
 
-from solo_acceptance_mcp.actor_events_smoke import run_actor_events_smoke
+from solo_acceptance_mcp.actor_events_smoke import require_packet_capability, run_actor_events_smoke
 from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure
 from solo_acceptance_mcp.bridge import BridgeError, MAX_LONG
 from solo_acceptance_mcp.smoke import ACTOR_IMPLEMENTED_TOOLS
@@ -27,6 +27,42 @@ PACKET_CAPABILITIES = {
         {"event_type": "server_message", "opcode": 68, "message_types": list(range(8))},
     ],
 }
+
+
+class PacketCapabilityTests(unittest.TestCase):
+    @staticmethod
+    def capabilities(extra):
+        packet = deepcopy(PACKET_CAPABILITIES)
+        packet["decoded_packets"].extend(extra)
+        return {"scopes": ["world", "scene", "actor"],
+                "actor_control": {"packet_observation": packet}}
+
+    def test_base_npc_and_yellow_tip_capabilities_are_independently_optional(self):
+        yellow = {"event_type": "yellow_tip", "opcode": 77}
+        npc = {"event_type": "npc_dialogue", "opcode": 304, "message_types": [4]}
+        npc_reply = {**npc, "message_types": [4, 12]}
+        for extra in [[], [npc], [npc_reply], [yellow], [npc, yellow], [yellow, npc_reply]]:
+            with self.subTest(extra=extra):
+                caps = self.capabilities(extra)
+                self.assertEqual(caps["actor_control"]["packet_observation"], require_packet_capability(caps))
+                caps["actor_control"]["packet_observation"]["decoded_packets"].reverse()
+                self.assertEqual(caps["actor_control"]["packet_observation"], require_packet_capability(caps))
+
+    def test_duplicate_unknown_and_invalid_optional_decoders_are_rejected(self):
+        yellow = {"event_type": "yellow_tip", "opcode": 77}
+        invalid = [
+            [yellow, yellow],
+            [{"event_type": "unknown", "opcode": 77}],
+            [{"event_type": "yellow_tip", "opcode": True}],
+            [{"event_type": "yellow_tip", "opcode": 78}],
+            [{"event_type": "yellow_tip", "opcode": "77"}],
+            [{"event_type": [], "opcode": 77}],
+            [{"event_type": "npc_dialogue", "opcode": 304, "message_types": [True]}],
+            [{"event_type": "npc_dialogue", "opcode": 304, "message_types": [4, 4]}],
+        ]
+        for extra in invalid:
+            with self.subTest(extra=extra), self.assertRaises(ActorSmokeFailure):
+                require_packet_capability(self.capabilities(extra))
 
 
 class ActorEventsStub(ActorSmokeStub):
@@ -61,6 +97,12 @@ class ActorEventsStub(ActorSmokeStub):
             self.packet_events[0], self.packet_events[1] = self.packet_events[1], self.packet_events[0]
             for sequence, event in enumerate(self.packet_events, 1):
                 event["sequence"] = sequence
+        elif mode == "yellow_tip":
+            self.packet_events[2] = {"sequence": 3, "received_at": received, "opcode": 77,
+                                     "length": 7 + len("服务器时间：12:34".encode("gbk")),
+                                     "event_type": "yellow_tip", "decode_status": "decoded",
+                                     "information_level": "player_visible", "text": "服务器时间：12:34",
+                                     "text_truncated": False}
         super().__init__(mode)
 
     def default_response(self, request: dict) -> tuple[int, object]:
@@ -76,6 +118,11 @@ class ActorEventsStub(ActorSmokeStub):
                 caps["scopes"].remove("actor")
             elif self.mode == "wrong_cursor_scope":
                 caps["actor_control"]["packet_observation"]["cursor_scope"] = "operation_lifecycle"
+            elif self.mode == "yellow_tip":
+                caps["actor_control"]["packet_observation"]["decoded_packets"].extend([
+                    {"event_type": "npc_dialogue", "opcode": 304, "message_types": [4, 12]},
+                    {"event_type": "yellow_tip", "opcode": 77},
+                ])
             return 200, envelope(caps)
         if path != "/solo/acceptance/v1/actor/observe":
             return super().default_response(request)
@@ -181,6 +228,15 @@ class ActorEventsSmokeTests(unittest.IsolatedAsyncioTestCase):
         stub, report = await self.run_fixture("empty_ticker")
         self.assertTrue(report["passed"], report)
         self.assertEqual("", stub.packet_events[1]["text"])
+        self.assertEqual(2, len(stub.close_requests))
+
+    async def test_yellow_tip_text_is_accepted_in_a_five_decoder_packet_window(self):
+        stub, report = await self.run_fixture("yellow_tip")
+        self.assertTrue(report["passed"], report)
+        self.assertTrue(report["cleanup"]["verified"])
+        self.assertTrue(any(event.get("event_type") == "yellow_tip"
+                            and event["text"] == "服务器时间：12:34"
+                            for page in report["packet_pages"] for event in page["events"]["items"]))
         self.assertEqual(2, len(stub.close_requests))
 
     async def test_normal_new_packets_during_repeated_read_or_future_probe_do_not_false_fail(self):

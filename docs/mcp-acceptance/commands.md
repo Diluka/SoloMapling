@@ -1,8 +1,56 @@
-# 服务端管理指令调试入口
+# 通用原生命令执行
 
-本页描述 #207 的独立管理入口。实际启用状态以
-`game_capabilities.debug_commands` 与顶层 `enabled_tools` 为准；客户端列出工具
-不代表当前服务已经开启。源码默认关闭，配置只维护在本地 `application.yml`：
+本入口复用北斗现有 `CommandsExecutor.handle(Client, String)`，完整命令文本原样传入。
+命令注册、参数解析、启停、GM等级和具体行为仍由原生系统处理；桥不维护命令或物品白名单，
+不改变普通角色的GM等级，也不绕过原生权限。旧 #207 的受限GiveService/type5包装已移除，
+不再接受 `command="give"` 加 `parameters` 的旧结构。
+
+## 脚本函数
+
+每个受管北斗原生引擎在原文件首次eval前只注入一个执行函数：
+
+```javascript
+executeCommand("@time");
+```
+
+函数只接受一个非空字符串；使用该原生环境的实际Client，直接调用共享
+`soloMapling.game.command.NativeCommandExecutor.execute`。同引擎的后续source和原生回调
+复用同一个函数。调用仍需该环境的原生绑定就绪；函数在首次eval前安装，不代表可绕过事件等环境的初始化资格。结果是普通JS JSON数据，不返回Client/角色等Java对象。脚本不注入帮助函数。
+
+示例的前缀和命令是否可用依原生注册及权限；普通GM0角色不会因为脚本调用而获得GM权限。
+纯语言运算、环境生命周期和原生上下文规则继续沿北斗脚本接口，本片不增加独立纯JS模式
+或新的调度队列。脚本停止后不再推进后续调用，已发生的命令效果不撤回。
+
+## MCP 接口
+
+`game_command` 解析已登记在线profile的真实Client，然后调用同一共享执行器，
+不通过角色lane，也不为MCP实现第二份命令逻辑。管理员JWT、已登记普通专用目标和
+配置开关保持原有边界；角色/游戏数据仍由北斗持有。
+
+```json
+{
+  "profile_id": "primary",
+  "request_id": "native-command-unique-1",
+  "expected_command_generation": "command-generation-from-capabilities",
+  "command": "@time"
+}
+```
+
+`command` 是完整文本，保留前缀、大小写和空格，不在桥中拆分或改写；最多16384个
+Unicode字符，拒绝非字符串、全空白、不成对surrogate和多余字段。脚本调用及HTTP/MCP
+输入仍分别受到各自已有的总输入预算约束。
+
+`game_command_help()` 只供MCP按需查询实际启用的原生命令目录，
+`game_command_help(command="time")` 查询原生命令名称、rank和description。目录来自
+现有registeredCommands，不是桥的支持列表；普通角色不能执行高rank命令不等于服务端
+没有注册它。帮助不会作为函数注入脚本。
+
+| 工具 | HTTP入口 |
+| --- | --- |
+| game_command_help | GET /solo/acceptance/v1/command/help，可选command名称 |
+| game_command | POST /solo/acceptance/v1/command/execute，requestId放信封外层，其余字段放data |
+
+源码默认关闭独立MCP命令工具，在本地application.yml保留原配置并开启：
 
 ```yaml
 solomapling:
@@ -12,60 +60,22 @@ solomapling:
     debug-commands-enabled: true
 ```
 
-## 原生服务与目标
+这个开关只管理独立MCP入口，不改变原生脚本本来具备的Java API访问能力。
+实际开放以 `game_capabilities.debug_commands` 和顶层enabled_tools为准。
 
-北斗的 `give` 是 `GiveController` / `GiveService` 的管理资源发放功能，并非已核实的
-游戏内 `@give` 命令。本入口直接调用原生管理服务，不经过 `CharacterRuntime`、
-模块 scope/Grant 或角色 lane。角色、背包与存档数据由北斗持有，普通 chat 的命令
-拒绝规则不变。新增工具独立于 `game_act.actions`。
+## 调用事实与结果
 
-沿正常管理端 JWT 和管理员授权，只使用已有 `actor-profiles` 登记的在线普通专用
-账号/角色。工具不接收密码、任意玩家 ID 或全服目标，不提升 GM/webadmin，不操作
-环境机器人。角色模块是否活跃不授予或撤销管理权限。
+原生handle返回void，可能在未知命令、权限不足或Client忙时发提示后正常return。
+因此 `status=RETURNED`、`native_handler_invoked=true`、`native_handler_returned=true`
+只表示调用已返回，`command_outcome=UNREPORTED` 不确认命令业务成功。需要通过原生
+反馈包或实际状态判断效果，不能只看JS无异常、HTTP200或MCP的is_error=false。管理员黄字反馈沿actor包窗口的yellow_tip读取（原生0x4D），与普通聊天广播分开，保留原编码、有界文本和游标语义。Client忙碌提示沿原有server_message（0x44/type5）读取；原生动作信号量有7个许可，NPC回调持有一份许可并不意味着嵌套命令必然拒绝。本片不改变许可或锁规则。
+原生调用异常返回UNKNOWN；目标资格失败等本层拒绝则不调用原生处理器。
 
-首轮仅普通 USE/ETC 可堆叠物品，拒绝装备、宠物、现金、任务、可充值及其他未开放
-类型，不透传全服发放、GM 提权或地图切换。物品存在性和原生槽位规则在服务端核对，
-Python 不复制 WZ 规则。给物品只是调试准备，不替代 #200 动作或礼包流程的验收。
+MCP按管理员身份/request_id保留本进程最多256条历史，不淘汰；满容量明确拒绝。
+同ID同参数恢复原结果，即使目标已离线也不重新执行；变参或旧管理进程代次拒绝。
+命令正文只在本次调用中使用，历史保存SHA256签名而非命令文本。超时或UNKNOWN只用
+原ID、原参数和原代次恢复，不换新ID重发。管理代次与世界/角色/模块代次独立。
 
-## 查询与调用
-
-先通过 `game_command_help()`、`game_command_help(command="give")` 或能力公告取得
-已开放范围和本进程的 `command_generation`。调用示意（代次须使用实际返回值）：
-
-```json
-{
-  "profile_id": "primary",
-  "request_id": "give-debug-unique-1",
-  "expected_command_generation": "command-generation-from-help",
-  "command": "give",
-  "parameters": {"item_id": 2000000, "quantity": 1}
-}
-```
-
-`item_id` 为正整数，`quantity` 为 1..32767 的整数；布尔值、浮点数、数值字符串
-和多余字段拒绝。管理代次独立于世界、actor session 和模块代次。
-
-| 工具 | HTTP 入口 |
-| --- | --- |
-| `game_command_help(command?)` | `GET /solo/acceptance/v1/command/help`，可选 command 查询参数 |
-| `game_command(...)` | `POST /solo/acceptance/v1/command/execute`；requestId 在原生信封外层，其余参数在 data |
-
-## 结果与恢复
-
-同步执行；重复的进行中请求可返回 `RUNNING`，终态为 `SUCCEEDED`、`FAILED` 或
-`UNKNOWN`。结果包含 command_id、原 request_id、terminal、native_dispatched、固定
-reason 和可取得的 quantity_before/quantity_after。`native_dispatched=null` 表示派发
-事实未知。成功必须取得真实库存增量，void 返回或 HTTP 成功不能单独作为成功证据。
-
-历史按管理员身份和请求 ID 隔离，本进程最多256条且不淘汰；满容量明确拒绝。
-同 ID 同参数返回原记录，目标随后离线也不重新执行；同 ID 变参拒绝。超时或未知
-结果只用原 ID、原参数和原管理代次恢复，不换新 ID 重发。重启后的旧代次拒绝；
-不能刷新代次替未知的旧请求再次发放。
-
-管理命令不接入 actor 的 operation_get/operation_cancel，没有撤回接口。
-`persisted_state_verified=false` 表示本结果不证明存档，需正常退出后同 CID 重开，
-独立核对逻辑物品、数量和槽位。
-
-后续 #199 可把同一适配绑定成脚本函数；#204 管理脚本环境和本次脚本生命周期，
-不因此增加管理命令的角色 lane 前置。脚本中断停止后续步骤，不能撤回已发物品。
-#199/#204 不是本入口的交付前置。
+脚本调用沿原script_run请求的幂等、上下文和生命周期；每次合法函数调用是一次原生命令
+调用，不增加独立MCP历史或第二套工作账本。具体命令是否保存数据由原生实现决定，
+这个通用返回不提供通用物品增量或存档成功声明。

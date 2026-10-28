@@ -222,8 +222,18 @@ class NativeEventSchedulerIntegrationTest {
             return context.runNativeScript(context.acceptWork(), new NativeScriptRequest("event", operation, id,
                     Map.of(), null, List.of(), source, parameters, 5000), adapter).completion().toCompletableFuture().get(10, TimeUnit.SECONDS);
         }
-        void assertDrained() {
+        void assertDrained() throws InterruptedException {
+            // Context close settles its own invocation. Native scheduler carriers can
+            // still be leaving their finally blocks; observe their actual settlement
+            // without cancelling work or changing the production scope lifecycle.
+            long deadline = System.nanoTime() + WAIT.toNanos();
             var state = context.scope().snapshot();
+            while ((state.acceptedWork() != 0 || state.runningBodies() != 0
+                    || state.pendingCarriers() != 0 || state.outstandingResources() != 0)
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+                state = context.scope().snapshot();
+            }
             assertEquals(0, state.acceptedWork()); assertEquals(0, state.runningBodies());
             assertEquals(0, state.pendingCarriers()); assertEquals(0, state.outstandingResources());
         }

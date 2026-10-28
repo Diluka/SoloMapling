@@ -135,3 +135,9 @@ python3 beidou-integration/scripts/build.py --help
 - 管理指令直接复用北斗原生管理服务，与 CharacterRuntime、模块 scope/Grant 和角色 lane 解耦。角色、背包和存档数据仍在北斗服务端；不得以未经验证的并发假设强加运行体前置。后续 #199 只需将同一适配绑定到脚本环境，不复制实现。
 - `game_command_help` / `game_command` 独立于 `game_act`；需本地 `enabled`、`actors-enabled`、`debug-commands-enabled` 三开关同时启用，新增开关默认关闭。沿正常管理员 JWT，目标限已有 profile 登记的在线普通专用角色；首轮仅普通 USE/ETC 可堆叠物品，不透传全服、提权或其他资源分支。
 - 请求携带独立 `expected_command_generation`，从 help/capabilities 获取。按 owner/request_id 保留本进程最多256条历史且不淘汰，原ID同参数恢复事实、变参拒绝、旧进程代次拒绝；未知结果不新ID重发。实际数量前后态和同CID重开存档分开验证。各层交付以 #207 为准，详见 `docs/mcp-acceptance/commands.md`。
+
+## 通用命令桥（取代 #207 受限give包装）
+
+- 脚本注入 `executeCommand(text)`，MCP `game_command` 也调用同一 `NativeCommandExecutor.execute(Client,String)`，完整文本原样交给CommandsExecutor.handle；不逐命令/物品适配，不保留旧give/type5/USE-ETC白名单。脚本不注入帮助；MCP现有只读帮助按需读取真实注册目录。
+- 权限按用户本轮要求暂不改动：管理员JWT/已登记普通目标沿现有边界，原生GM/配置检查照常；不提权、不绕过，也不把权限拒绝改称桥不支持。角色数据归北斗，不增加运行体lane或第二队列。
+- RETURNED仅表示void handle返回，command_outcome=UNREPORTED；未知或权限/忙/未知命令反馈不能推导业务成功。MCP旧parameters格式拒绝，历史只存命令摘要；原ID/管理进程代次恢复及容量边界保持。详见docs/mcp-acceptance/commands.md，各层验收以本轮交付记录为准。

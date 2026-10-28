@@ -27,6 +27,7 @@ PACKET_CAPABILITY = {
     ],
 }
 NPC_PACKET_CAPABILITY = {"event_type": "npc_dialogue", "opcode": 304, "message_types": [4]}
+YELLOW_TIP_PACKET_CAPABILITY = {"event_type": "yellow_tip", "opcode": 77}
 
 
 def require_packet_capability(caps: dict[str, Any]) -> dict[str, Any]:
@@ -40,11 +41,15 @@ def require_packet_capability(caps: dict[str, Any]) -> dict[str, Any]:
         check(type(packet.get(key)) is int and packet[key] == PACKET_CAPABILITY[key], "PACKET_CAPABILITY_INVALID")
     check(packet.get("cursor_scope") == PACKET_CAPABILITY["cursor_scope"], "PACKET_CURSOR_SCOPE_INVALID")
     decoded = packet.get("decoded_packets")
-    check(isinstance(decoded, list) and len(decoded) in {3, 4} and all(isinstance(row, dict) for row in decoded),
+    check(isinstance(decoded, list) and len(decoded) in {3, 4, 5}
+          and all(isinstance(row, dict) and isinstance(row.get("event_type"), str) for row in decoded),
           "PACKET_DECODERS_INVALID")
     by_type = {row.get("event_type"): row for row in decoded}
-    expected_packets = PACKET_CAPABILITY["decoded_packets"] + ([NPC_PACKET_CAPABILITY] if len(decoded) == 4 else [])
-    check(len(by_type) == len(expected_packets), "PACKET_DECODERS_INVALID")
+    optional_packets = [NPC_PACKET_CAPABILITY, YELLOW_TIP_PACKET_CAPABILITY]
+    expected_packets = PACKET_CAPABILITY["decoded_packets"] + [
+        row for row in optional_packets if row["event_type"] in by_type
+    ]
+    check(len(by_type) == len(decoded) == len(expected_packets), "PACKET_DECODERS_INVALID")
     for expected in expected_packets:
         actual = by_type.get(expected["event_type"])
         check(isinstance(actual, dict) and type(actual.get("opcode")) is int
@@ -123,7 +128,7 @@ class ActorEventsAcceptance(ActorAcceptance):
                   and event["length"] >= 0, "PACKET_EVENT_METADATA_INVALID")
             check(event.get("decode_status") in {"decoded", "unsupported", "malformed"}, "PACKET_DECODE_STATUS_INVALID")
             if event["decode_status"] == "decoded":
-                check(event.get("event_type") in {"chat_text", "player_hint", "server_message", "npc_dialogue"}
+                check(event.get("event_type") in {"chat_text", "player_hint", "server_message", "npc_dialogue", "yellow_tip"}
                       and event.get("information_level") == "player_visible"
                       and isinstance(event.get("text"), str) and len(event["text"]) <= 1024
                       and type(event.get("text_truncated")) is bool, "PACKET_TEXT_INVALID")

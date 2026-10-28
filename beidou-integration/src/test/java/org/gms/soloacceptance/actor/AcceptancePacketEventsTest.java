@@ -10,6 +10,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -27,7 +30,7 @@ class AcceptancePacketEventsTest {
     private static final Set<String> MALFORMED_REASONS = Set.of(
             "packet_missing", "packet_bytes_missing", "packet_header_missing", "packet_read_failed",
             "packet_payload_incomplete", "packet_string_length_invalid", "packet_text_encoding_invalid",
-            "packet_boolean_invalid", "packet_trailing_bytes");
+            "packet_boolean_invalid", "packet_trailing_bytes", "packet_yellow_tip_tail_invalid");
     private AcceptanceClient client;
 
     @BeforeEach
@@ -87,6 +90,62 @@ class AcceptancePacketEventsTest {
             assertFalse(event.containsKey("ticker_enabled"));
             assertFalse(event.containsKey("channel_id"));
         }
+    }
+
+    @Test
+    void decodesRealNativeYellowTipWithChineseAndEmptyText() {
+        Packet packet = nativePacket(() -> PacketCreator.sendYellowTip("原生命令权限不足，请核对角色等级"));
+        Map<String, Object> event = receive(packet);
+        assertDecoded(event, "yellow_tip", "原生命令权限不足，请核对角色等级", false);
+        assertEquals(0x4D, event.get("opcode"));
+        assertEquals(packet.getBytes().length, event.get("length"));
+        assertDecoded(receive(nativePacket(() -> PacketCreator.sendYellowTip(""))), "yellow_tip", "", false);
+    }
+
+    @Test
+    void yellowTipReusesBoundedStrictNativeTextDecoding() {
+        String boundary = "中".repeat(1024);
+        assertDecoded(receive(nativePacket(() -> PacketCreator.sendYellowTip(boundary))),
+                "yellow_tip", boundary, false);
+        assertDecoded(receive(nativePacket(() -> PacketCreator.sendYellowTip(boundary + "文"))),
+                "yellow_tip", boundary, true);
+
+        byte[] invalidGbk = nativePacket(() -> PacketCreator.sendYellowTip(boundary + "A")).getBytes().clone();
+        invalidGbk[invalidGbk.length - 3] = (byte) 0x81;
+        assertMalformed(receive(() -> invalidGbk));
+    }
+
+    @Test
+    void yellowTipCodePointTruncationNeverSplitsASurrogatePair() {
+        // UTF-8 is a decoder seam; ordinary native client languages remain GBK/ASCII.
+        String boundary = "a".repeat(1023) + "\uD83D\uDE42";
+        byte[] text = (boundary + "中").getBytes(StandardCharsets.UTF_8);
+        byte[] nativeHeader = nativePacket(() -> PacketCreator.sendYellowTip("")).getBytes();
+        ByteBuffer packet = ByteBuffer.allocate(7 + text.length).order(ByteOrder.LITTLE_ENDIAN);
+        packet.put(nativeHeader, 0, 3).putShort((short) text.length).put(text).putShort((short) 0);
+        Map<String, Object> decoded = PacketEventDecoder.decode(packet.array(), StandardCharsets.UTF_8);
+        assertDecoded(decoded, "yellow_tip", boundary, true);
+        assertEquals(1024, ((String) decoded.get("text")).codePointCount(0, boundary.length()));
+    }
+
+    @Test
+    void unknownYellowTipVariantsAndMalformedPayloadsKeepOnlyFixedSummaries() {
+        byte[] nativeBytes = nativePacket(() -> PacketCreator.sendYellowTip("private-body")).getBytes();
+        byte[] unknown = nativeBytes.clone();
+        unknown[2] = 0;
+        assertSummary(receive(() -> unknown), "unsupported", "unsupported_yellow_tip_type");
+
+        byte[] length = nativeBytes.clone();
+        length[3] = (byte) 0xFF;
+        length[4] = (byte) 0xFF;
+        assertMalformed(receive(() -> length));
+        assertMalformed(receive(() -> Arrays.copyOf(nativeBytes, nativeBytes.length - 1)));
+
+        byte[] tail = nativeBytes.clone();
+        tail[tail.length - 2] = 1;
+        assertSummary(receive(() -> tail), "malformed", "packet_yellow_tip_tail_invalid");
+        assertMalformed(receive(() -> Arrays.copyOf(nativeBytes, nativeBytes.length + 1)));
+        assertEquals(4L, client.packetEvents(0, 100).get("malformed_events_total"));
     }
 
     @Test
@@ -298,6 +357,7 @@ class AcceptancePacketEventsTest {
                 Map.of("event_type", "player_hint", "opcode", 0xD6),
                 Map.of("event_type", "server_message", "opcode", 0x44,
                         "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7)),
+                Map.of("event_type", "yellow_tip", "opcode", 0x4D),
                 Map.of("event_type", "npc_dialogue", "opcode", 0x130,
                         "message_types", List.of(4, 12))), capabilities.get("decoded_packets"));
     }
