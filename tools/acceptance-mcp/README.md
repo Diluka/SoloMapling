@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、已审NPC回复与基本动作，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现九个工具；`script_run/script_help` 为本轮源码提供的脚本基础，实际部署与各层验收结果见 #199。后端是否已开启角色、已审 NPC、基本动作与脚本，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -10,11 +10,13 @@
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
-| `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC及运行体基本动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
+| `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC 及运行体基本动作，当前源码包含十三动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
+| `script_run` | 在现有角色运行体中同步执行有期限的纯 JavaScript，收集输出和 JSON 结果 | 必须有 request_id；本片无游戏函数，仍按受管调用记录 |
+| `script_help` | 查询同源函数目录或指定函数说明，未注册时返回空目录 | 只读；不创建脚本 work 或 operation |
 
-基本调试入口按 [#200](https://github.com/Diluka/SoloMapling/issues/200) 逐片交付，后续同步脚本由 [#199](https://github.com/Diluka/SoloMapling/issues/199) 单独验收；能力公告只列实际已实现的工具、动作和观察范围。
+MCP 用于机器人开发调试，让 Agent 进入游戏，与待测机器人交互并检查实际行为。[#199](https://github.com/Diluka/SoloMapling/issues/199) 首片直接贯通纯脚本基础，不等待 [#200](https://github.com/Diluka/SoloMapling/issues/200) 全部完成；次要游戏操作以后按需进入脚本环境。本片保留现有 `game_act`，不迁移具体游戏函数，能力公告只列实际实现范围。
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]`、三种动作 `chat/npc_center_open/npc_cancel`、增加 `npc_reply` 的四动作组合，或再增加 `inventory_move` 的五动作组合；五动作后端也可独立公告已实现的移动、停止、普攻及物品动作。顶层和 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅包含已审查路径的 `select/decline`；没有礼包 accept、任意 NPC、未审查选项、任意封包或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及同时开放两个脚本工具的完整九项组合。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅含已审查路径的 select/decline；礼包 accept、任意 NPC、未审查选项、任意封包、SocialBot 完整互动及游戏脚本函数仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 `inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；此动作不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
 
@@ -33,7 +35,7 @@ R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后
 | `equip` | `{"source_slot":1,"target_slot":-11}` | EQUIP正槽位穿到合法普通装备位，资格、冲突卸装和属性沿原生规则 |
 | `unequip` | `{"source_slot":-11,"target_slot":1}` | 从合法普通装备位卸至EQUIP正槽位，沿原生容量和冲突规则 |
 
-OID必须为 `1..2147483647` 整数；正背包槽位为 `1..127`。普通装备位白名单为 `-1..-13`、`-15..-19`、`-49/-50`，`-14`、现金位和未知位均拒绝。布尔值、浮点数、额外字段和跨动作参数不会被隐式转换；本工具不接受任意CID、模板ID、物品ID、封包或脚本。
+OID必须为 `1..2147483647` 整数；正背包槽位为 `1..127`。普通装备位白名单为 `-1..-13`、`-15..-19`、`-49/-50`，`-14`、现金位和未知位均拒绝。布尔值、浮点数、额外字段和跨动作参数不会被隐式转换；`game_act` 不接受任意CID、模板ID、物品ID、封包或脚本。
 
 受理、原生派发、命中/位移/库存变化、work真实结算和存档分别由后端事实表达。排队取消及移动停止需继续查询原 operation；已发生的攻击、消耗或丢弃不因取消而撤销。HTTP超时或断连保留原请求ID，不自动再执行。装备和物品持久化通过正常退出后同CID重开核验，不能以既有保存标志替代具体槽位、数量和属性证据。
 
@@ -62,7 +64,7 @@ uv sync --frozen
 }
 ```
 
-`base_url` 默认 `http://127.0.0.1:8686`，只接受无路径、查询和内嵌凭据的 HTTP/HTTPS 地址。HTTP 超时为 `0.1`～`30` 秒。凭据仅供管理端鉴权，工具参数不接收角色账号密码或任意原生角色 ID。
+`base_url` 默认 `http://127.0.0.1:8686`，只接受无路径、查询和内嵌凭据的 HTTP/HTTPS 地址。普通 HTTP 超时为 `0.1`～`30` 秒；脚本请求另保证至少执行期限加 5 秒的收尾预算。凭据仅供管理端鉴权，工具参数不接收角色账号密码或任意原生角色 ID。
 
 工作区示例：
 
@@ -97,10 +99,12 @@ enabled = true
 | `game_act(…, action="npc_cancel", parameters={"dialogue_version":123})` | 同一路由，版本必须来自当前实际 actor 对话 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":123,"kind":"select","selection":0})` | 同一路由，只能选择当前完整 offer 中已审查的项目 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":124,"kind":"decline"})` | 同一路由，拒绝实际 type12 按钮，不带 selection |
+| `script_run(session_id="…", expected_generation=1, request_id="script-unique-1", source="parameters.a + parameters.b", parameters={"a":2,"b":3}, timeout_ms=1000)` | `POST /solo/acceptance/v1/script/run`，data 为角色目标、source、parameters 和 timeout_ms |
+| `script_help(session_id="…", expected_generation=1, names=[])` | `POST /solo/acceptance/v1/script/help`，只读查询，不占操作历史 |
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
 
-四种写调用都要求调用方提供 `request_id`，它是原生信封的 `requestId`。客户端成功和 HTTP/传输错误都会保留该 ID。HTTP `401` 最多刷新一次 JWT 并重发同一信封；超时或连接错误不会自动重放写请求。写请求结果未知时返回 `outcome_unknown=true`、`retryable=false`，应先查询已有操作，或明确使用原请求 ID 恢复，不换新 ID 盲重试。无效参数在发 HTTP 前拒绝。
+`actor_open/actor_close/operation_cancel/game_act/script_run` 都要求调用方提供 `request_id`，它是原生信封的 `requestId`。客户端成功和 HTTP/传输错误都会保留该 ID。HTTP `401` 最多刷新一次 JWT 并重发同一信封；超时或连接错误不会自动重放写请求。写请求结果未知时返回 `outcome_unknown=true`、`retryable=false`，应先查询已有操作，或明确使用原请求 ID 恢复，不换新 ID 盲重试。无效参数在发 HTTP 前拒绝。
 
 `actor_open` 只按后端明确配置的 profile 工作，可选 world/channel 必须符合后端 profile。打开返回 `QUEUED` 只表示已受理；查询到 `SUCCEEDED`、`observed_outcome=native_actor_online`、原生在线和实际场景身份后才确认登录。已关闭 session 的旧打开请求必须返回原操作，不能重新创建角色。
 
@@ -126,6 +130,52 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
 
 中心由原生 `ENTER_MTS` 的 `use_mts=false` 分支打开固定9900001首屏，不要求地图上存在该 NPC，也不把它称为远距离地图点击。取消按当前真实路由：中心 legacy type4 为 `04 ff`，福利 legacy type12 为 `0c ff`；福利 decline 是另一条 `0c 00` 请求。传送 NextLevel SEND_SELECT/SEND_NEXT_SELECT 用 `04 00` 取消，即使城镇正文截断仍可正常取消。调用方不能传 lastMsg、action byte、show、脚本或原始包。成功取消及关闭均要求 `native_dialogue_cleanup_verified=true`，表示原生 CM/QM 映射都已清空。`operation_cancel` 只取消尚未派发的操作，不结束已经打开的 CM。新请求使用已失效或已消费版本返回410；拒绝不消耗当前版本，同 ID 重放仍返回原操作。
 
+## 脚本基础调用
+
+先正常 `actor_open` 并查询到实际在线角色，保存返回的 `session_id/session_generation`；脚本工具的 `expected_generation` 使用该会话代次。它不接受任意角色 ID，继续沿管理端 JWT/admin、owner、当前角色、世界来源与模块代次核验。脚本首片没有游戏函数，不需要或接受 `expected_context`。
+
+一次纯运算调用：
+
+```text
+script_run(session_id="实际session_id", expected_generation=实际session_generation,
+           request_id="由调用方保存的唯一请求ID",
+           source="console.log('开始计算', parameters.label); const total = parameters.values.reduce((a,b) => a+b, 0); ({label: parameters.label, total})",
+           parameters={"label":"首环","values":[2,3,5]}, timeout_ms=1000)
+```
+
+`source` 非空，最多 65,536 个 UTF-16 单元。`parameters` 为 JSON 对象，默认 `{}`，在 guest 中使用同名对象；`timeout_ms` 为 1～5,000 的严格整数，默认 1,000，包含创建、绑定、计算和结果转换。`console`/`print` 输出在 `stdout/stderr` 收集，每路最多 16,384 字节并显式标记截断。返回值来自最后表达式；参数与结果各受 16,384 个 UTF-8 字节等边界限制，具体见[运行体参考](../../docs/robot-runtime/script-execution.md#语言输入和结果)。函数、循环对象、Promise 等结果会失败，不把语言对象或宿主引用序列化出去。
+
+工具返回现有 operation 结构，`kind=SCRIPT`；其 `result` 包含：
+
+```json
+{
+  "status": "SUCCEEDED",
+  "result": {"label":"首环","total":10},
+  "stdout": "开始计算 首环\n",
+  "stderr": "",
+  "output_truncated": false,
+  "engine_exited": true,
+  "context_closed": true,
+  "work_settled": true
+}
+```
+
+语法错误为 `PARSE_ERROR`，执行异常为 `RUNTIME_ERROR`，不可序列化结果为 `RESULT_ERROR`；错误可带有界 `error={message,line,column}`，无法定位时行列为 `null`。期限、取消及清理失败分别为 `TIMED_OUT/CANCELLED/CLEANUP_ERROR`。外层 operation 使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`，脚本失败同时设置 MCP `is_error=true`，输出与收尾标记仍保留。只有 `engine_exited/context_closed/work_settled` 全部为真，才确认本次脚本真实结束。
+
+函数帮助查询：
+
+```text
+script_help(session_id="实际session_id", expected_generation=实际session_generation)
+script_help(session_id="实际session_id", expected_generation=实际session_generation,
+            names=["missing_fn"])
+```
+
+`names` 默认 `[]`，最多 64 项。不传名称时列目录；生产本片没有注册游戏函数，所以返回 `schema_version=1,language="javascript",functions=[],unavailable=[]`。指定未注册名称时在 `unavailable` 中列出，`functions` 仍为空。帮助与绑定同源，`cm/im/qm/rm/em`、Java 类访问、移动、背包等旧游戏脚本能力不自动进入此环境。
+
+取消等待中的官方 SDK task 会发送 MCP 取消通知。桥在受保护的收尾段内向内部 `POST /solo/acceptance/v1/script/cancel` 发送原请求 ID 和完整原 run 参数，等待真实收尾并回收原 HTTP 请求；无需也没有新增 MCP `script_cancel` 工具。取消先到的检查点阻止迟到 run 开始执行。已取消的 MCP 请求按协议不再返回响应；使用相同 `request_id`、source、parameters 和 timeout_ms 再次调用，可恢复原 operation，变参仍返回冲突。已知 `operation_id` 时也可 `operation_get`。传输或取消失败仍是结果未知，不能改用新 ID 重放或据此宣布后台已停止。
+
+模块停止与根角色关闭沿原 scope 取消并等待脚本实际退出；脚本不占短命令 lane。正常完成后继续使用该 session，最后仍须 `actor_close` 并核原生清理和存档。无限循环、断连与世界停启探针只在隔离环境运行，实际部署只做正常角色与纯脚本循环。完整行为模块、共享事实/事件、具体游戏函数和直接动作迁移仍留待后续，基础完成不代表 #199/#204 全部完成。
+
 ## 本地测试和只读协议冒烟
 
 本地测试只用随机端口 HTTP 桩与 SDK stdio 子进程，不连接游戏数据库、不调用模型：
@@ -134,7 +184,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、七工具读写注解，以及官方 SDK 的真实 stdio 正反例。
+测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、九工具读写注解与脚本取消转发，以及官方 SDK 的真实 stdio 正反例。引擎真实停止及游戏后态由运行体测试和隔离端到端另行验证。
 
 实际后端的只读检查不打开角色：
 
@@ -144,7 +194,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
   --output /absolute/evidence/mcp-observation.json
 ```
 
-它检查客户端七工具及桥当前合法的两项、六项或七项开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色控制已通过。
+它检查客户端九工具及桥当前合法的两项、六项、七项或九项开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色或脚本执行已通过。
 
 ## 显式目标的原生角色验收
 
@@ -185,7 +235,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
   --output /absolute/evidence/actor-events.json
 ```
 
-目标、profile 和证据路径均必填，地址必须与配置完全一致；`page-limit` 默认为1，范围1～500。先检查客户端七工具、actor scope 及实际解码/游标能力，再正常打开角色，核对角色、会话、运行代次和当前真实场景。它按包序号分页，拒绝同会话最新序号回退，确认同游标重读保持已见前缀、尾页及空页游标正确。未来游标探针使用 `Long.MAX_VALUE`，避免正常新包到达使“上一尾页+1”变成合法游标。脚本查找实际 type4、ticker=true 的系统公告；正文可以为空，不匹配固定欢迎语。
+目标、profile 和证据路径均必填，地址必须与配置完全一致；`page-limit` 默认为1，范围1～500。先检查客户端工具目录、actor scope 及实际解码/游标能力，再正常打开角色，核对角色、会话、运行代次和当前真实场景。它按包序号分页，拒绝同会话最新序号回退，确认同游标重读保持已见前缀、尾页及空页游标正确。未来游标探针使用 `Long.MAX_VALUE`，避免正常新包到达使“上一尾页+1”变成合法游标。脚本查找实际 type4、ticker=true 的系统公告；正文可以为空，不匹配固定欢迎语。
 
 随后正常保存退出，验证旧会话不能再读取正文；同一原生 CID 以新会话重新打开后，旧会话仍被拒绝，最后再次正常退出。每页及负向探针的证据逐步保存，失败不会覆写为通过；写结果未知、畸形收据和中断恢复沿用生命周期 CLI 的处理。
 

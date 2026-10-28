@@ -1,6 +1,6 @@
 # MCP 游戏验收机器人：基础方案与螺旋推进
 
-**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已完成隔离及实际部署验收。** 当前已交付七工具，`game_act` 支持 `chat/npc_center_open/npc_cancel/npc_reply/inventory_move`，NPC 回复仅开放已审查的 select/decline。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准，`implementation_round` 仍为 `R2a`。当前按 [#200 基本操作调试入口](https://github.com/Diluka/SoloMapling/issues/200) 逐片验收；[#199 同步脚本与函数帮助](https://github.com/Diluka/SoloMapling/issues/199) 为后续二期，尚未实现。礼包接受、完整城镇菜单、付费出行、SocialBot 回复及其他基本动作继续独立推进。宿主原生工具加载与真实客户端玩法分别记录；每个切片完成实际验收后及时关闭对应 Issue，并同步文档与相关 `AGENTS.md`。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。本轮源码新增 `script_run`、`script_help`，客户端共九工具，首片只执行纯脚本与返回空函数目录。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准；脚本切片的源码测试、CI、隔离及实际部署结果按 [#199](https://github.com/Diluka/SoloMapling/issues/199) 分别记录。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -27,7 +27,7 @@ solomapling:
 
 `allow-create` 默认 `false`；开启后允许通过北斗原生服务创建缺少的专用账号、角色，并完成首次登录条款初始化，不提升 GM/webadmin。已有账号须为未封禁的普通账号、目标角色须为 GM 0；账号已在线或被其他客户端占用时拒绝接管。新角色沿原生新手创建和出生规则进入游戏，R2a 不提供调级或传送。
 
-关闭 `actors-enabled` 时，后端只开放 R1 两项观察工具；客户端可列出七工具，不代表后端角色接口或任何动作已经开启。
+关闭 `actors-enabled` 时，后端只开放 R1 两项观察工具；客户端可列出九工具，不代表后端角色、动作或脚本接口已经开启。
 
 ## 与二代、PQ 共享基础
 
@@ -53,7 +53,7 @@ solomapling:
 
 ## 目标与定位
 
-让操作者通过 MCP 观察当前游戏，主动操作专用验收角色，并通过正常入口触发游戏脚本。当前先验证单项基本操作，后续同步脚本按 #199 推进。验收角色由操作者控制；公会核心队员和自动PQ bot是它的交互对象，也可在多角色场景中作为协作队员。它们共享正常游戏动作能力，身份、调度归属和验收职责分开。
+MCP 用于机器人开发调试：让 Agent 进入游戏，与待测机器人交互，再从真实观察和回复核对其行为是否符合设计。验收角色由操作者控制；公会核心队员和自动 PQ bot 是它的交互对象，也可在多角色场景中作为协作队员。它们共享正常游戏动作能力，身份、调度归属和验收职责分开。次要游戏操作以后按需进入脚本环境，脚本基础先用纯运算、参数和语言输出贯通，不逐项扩大 MCP 直接动作。
 
 这里的角色是**服务器端玩家替身**：用于验证服务器业务链、机器人行为、NPC/门户/物品/组队与副本结果。真实客户端的网络握手、封包加解密、渲染、输入和玩家操控体验仍有独立验收。
 
@@ -79,7 +79,7 @@ flowchart LR
 - Solo验收桥沿当前管理端JWT和管理员权限鉴权，默认不开启，开关与 profile 维护在本地配置。当前角色并发上限固定为4，实际额度由 capabilities 返回。全部新增代码维护在Solo，北斗submodule保持原样。
 - 独立`AcceptanceClient extends Client`捕获`sendPacket`，在专用actor注册表中登记。不要继承`BotClient`或把验收玩家放入环境`BotRegistry`：聊天观察和入图脚本会按bot分支处理。
 - 开放的能力由`game_capabilities`实际返回。接口契约可先设计齐，未实现或未验证的动作保持不可用；不创建空工具来宣称已支持。
-- 命令使用同一宿主的既有有界 lane，角色观察来自根来源；外部 operation 是请求与结果历史。Session 或模块不再各建队列/物理工作账本，也不引入分布式消息总线、任意代码执行器或每角色一个 LLM。
+- 短原生命令使用同一宿主的既有有界 lane，角色观察来自根来源；纯脚本使用运行体管理的执行载体与原模块 work，保持 lane 可用。外部 operation 是请求与结果历史，Session 或模块不再各建角色宿主、动作队列或物理工作账本。
 
 ## 身份与生命周期
 
@@ -101,7 +101,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 当前工具接口
 
-下表列出已交付的七工具。`game_act` 当前支持五种动作，npc_reply 仅支持已审查的 select/decline，inventory_move 仅支持普通背包正槽位移位。角色/动作接口须开启双开关，后续能力在独立实现与验收后开放。
+下表列出当前客户端的九工具，脚本两工具为本轮源码实现的基础切片；实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -111,7 +111,9 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `actor_close` | session_id、expected_generation、request_id | 排队正常离线，查询清理及持久化核验结果，保留 fixture | R2a |
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
-| `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | chat/中心首屏/取消/npc_reply/inventory_move 已交付，reply 仅 select/decline |
+| `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
+| `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 本轮基础切片：纯 JavaScript，无游戏函数 |
+| `script_help` | session_id、expected_generation、可选 names | 查询同源函数描述，未注册时 functions 为空 | 本轮基础切片：只读，不分配脚本工作 |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。
 
@@ -367,13 +369,15 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 
 `expected_context` 已用于聊天的真实场景与世界代次检查；#75 取消另核最新dialogue_version，后续地图动作再增加目标 OID 等条件。基本动作按 #200 在固定场景分别核验指令、实际结果、停止或取消及必要存档；后续脚本仍需遵守各动作的原生规则与真实结算。
 
-## 基本操作与后续同步脚本
+## 基本操作与脚本基础
 
-一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱，按各自切片开放。当前背包移位已交付，其余基本动作仍待实现或验收。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。
+一期以 [#200](https://github.com/Diluka/SoloMapling/issues/200) 为总验收：移动与停止、一次普通攻击、拾取与丢弃、物品使用、背包移位及装备穿脱。背包移位由 #164 交付，其余八动作由 PR #208 实现，各层验收与实际开放范围分别核对对应证据。每项动作直接触发后观察真实结果，保留权限、幂等、代次及原生规则，不要求先完成一条复合行为链。本轮脚本基础保留这十三动作，不把它们注册为脚本函数。
 
-二期 [#199](https://github.com/Diluka/SoloMapling/issues/199) 安排在 #200 最终验收之后，计划提供 `script_run` 和 `script_help`。Agent 根据本次任务编写脚本，经一次同步调用取得结果、校验错误或运行异常；帮助与运行体实际公开能力使用一致描述来源。脚本在运行体托管的环境中执行，行为模块按中立协议贡献能力、观察和事件；相关运行体基础由 [#204](https://github.com/Diluka/SoloMapling/issues/204) 补齐。
+[#199](https://github.com/Diluka/SoloMapling/issues/199) 的本轮基础切片直接提供 `script_run` 和 `script_help`，不等待 #200 全部完成；[#204](https://github.com/Diluka/SoloMapling/issues/204) 只补本片需要的运行体支撑。Agent 使用已有专用角色提交纯 JavaScript，通过 `parameters` 读取 JSON 参数，以 `console`/`print` 输出，以最后表达式返回可序列化结果。解析错误、运行错误和期限结束随本次调用返回，帮助与实际绑定共用一份注册描述。
 
-脚本入口与运行体依赖均未实现。后续接线需独立核验调用中断、实际动作收尾和临时上下文释放；当前七工具与基本动作可独立使用和验收。
+生产函数目录为空，`script_help()` 正常返回 `functions=[]`；指定未知名称会列入 `unavailable`。本轮不绑定移动、攻击、背包、NPC、加点等游戏函数，不迁移或删除 `game_act`。行为模块脚本、共享事实/事件目录和具体游戏函数继续留在 #199/#204 及相应后续任务，本片通过不代表这些范围完成。
+
+脚本使用 `CharacterRuntime` 当前模块代次和原 scope/work，在管理载体执行；短原生命令仍沿唯一 lane。取消或超时须等脚本引擎退出、Context 关闭及原 work 真实结算，不以 Future 或请求提前返回替代。调用例子和恢复规则见[脚本工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，内部协议见[运行体脚本设施](../robot-runtime/script-execution.md)。源码、CI、隔离和实际部署验收分别留证。
 
 ## 螺旋迭代计划
 
@@ -386,7 +390,7 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 | R2b 普通聊天与回复 | #70/#72/#74 已完成隔离/部署验收并关闭，SocialBot 往返仍待后续 | 同场景准确点名，实际收到目标回复，遵守频率/交互状态规则；用MCP复现并修复确认的迁移问题 |
 | R2c NPC 对话 | #75 已部署验收；#110无收益select/decline已完成隔离及实际部署验收，accept/完整菜单出行由#112/#113推进 | 当前NPC/距离与对话版本正确，过期选择拒绝；核对取消及启动脚本的实际副作用 |
 | 一期基本操作 #200 | 移动与停止、普通攻击、拾取丢弃、物品使用、背包移位和穿脱逐片交付 | 固定场景分别核验指令、真实结果、停止或取消及必要存档，复用同一宿主与原生规则 |
-| 二期同步脚本 #199 | #200 总验收后推进 script_run/script_help 及 #204 运行体依赖 | 同步返回实际结果或错误，帮助与能力一致；调用中断后实际工作收尾、资源释放可核验 |
+| 脚本基础 #199/#204 | 不等待 #200，先贯通纯脚本的 script_run/script_help；游戏函数及动作迁移后续按需推进 | 同步返回参数运算、输出与可序列化结果或错误，空目录真实反映绑定；无限循环中断后引擎退出、Context 关闭及原 work 结算可核验 |
 | R5 组队协作验收 | 多actor分工、真人保留角色、单个PQ阶段和逐步扩展 | 一真人与合法bot编制逐阶段验证；双队/双频道隔离、同时站位、掉线补位与失败恢复；每种PQ独立留证 |
 
 组队协作依赖[组队任务计划 #13](https://github.com/Diluka/SoloMapling/issues/13)及[团队协作内核 #14](https://github.com/Diluka/SoloMapling/issues/14)，按对应任务与实际阶段独立验收。基本操作通过、脚本调用成功与 PQ 通关分别记录，不能互相替代。
@@ -461,4 +465,4 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 
 ## #200 其余基本操作
 
-候选增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计13动作，工具数仍为七；实际开放项以capabilities为准。基本能力均在运行体共享Java层，MCP保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。
+PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，本轮再增加两个脚本工具后共九工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。本轮不增减这些直接动作，也没有对应游戏脚本函数。

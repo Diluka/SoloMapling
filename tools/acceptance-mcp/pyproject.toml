@@ -9,6 +9,7 @@ description = "Observation and native actor session MCP tools for the SoloMaplin
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"
 dependencies = [
+  "anyio==4.15.1",
   "httpx==0.28.1",
   "mcp==2.3.0",
 ]

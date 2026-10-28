@@ -89,13 +89,22 @@ class AcceptanceActorExecutionTest {
             execution.finalized();
         } finally {
             if (!executor.isShutdown()) {
-                // Unknown native ownership remains visible. Only terminate this completed test's private executor;
-                // this does not prove root close or erase its outstanding resource registration.
-                assertEquals(CharacterRuntime.State.CLOSING, execution.runtime().snapshot().state());
-                assertFalse(execution.runtime().snapshot().lane().closed());
-                assertTrue(executor.getQueue().isEmpty());
-                assertEquals(0, execution.scope().snapshot().acceptedWork());
-                executor.shutdown();
+                CharacterRuntime.Snapshot state = execution.runtime().snapshot();
+                if (state.state() == CharacterRuntime.State.CLOSED) {
+                    // The host publishes CLOSED before shutting its executor down outside the host lock.
+                    // A concurrent finalizer can observe that legitimate interval; termination is awaited below.
+                    assertTrue(execution.resourceReleased());
+                    assertTrue(state.rootScope().unloadComplete());
+                    assertTrue(state.lane().closed());
+                } else {
+                    // Unknown native ownership remains visible. Only terminate this completed test's private executor;
+                    // this does not prove root close or erase its outstanding resource registration.
+                    assertEquals(CharacterRuntime.State.CLOSING, state.state());
+                    assertFalse(state.lane().closed());
+                    assertTrue(executor.getQueue().isEmpty());
+                    assertEquals(0, state.rootScope().acceptedWork());
+                    executor.shutdown();
+                }
             }
             assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
             WorldEpoch.onWorldStopping();

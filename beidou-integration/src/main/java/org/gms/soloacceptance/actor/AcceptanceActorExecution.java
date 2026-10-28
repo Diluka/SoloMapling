@@ -15,6 +15,8 @@ import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeEvents;
+import soloMapling.game.script.ScriptExecution;
+import soloMapling.game.script.ScriptRequest;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -140,6 +142,16 @@ final class AcceptanceActorExecution {
         requireModule().recordResult(work, result);
     }
 
+    ScriptExecution runScript(ExecutionScope.WorkHandle work, ScriptRequest request) {
+        try { return requireModule().runScript(work, request); }
+        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
+    }
+
+    Map<String, Object> scriptHelp(List<String> names) {
+        try { return requireModule().scriptHelp(names); }
+        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
+    }
+
     Map<String, Object> observeOrigin() {
         try {
             Map<String, Object> facts = new LinkedHashMap<>(runtime.observeOrigin());
@@ -251,6 +263,13 @@ final class AcceptanceActorExecution {
         if (selected != null) moduleGeneration = selected.generation();
         attached.put("generation", moduleGeneration);
         attached.put("state", selected == null ? moduleGeneration == 0 ? "NOT_ATTACHED" : "UNLOADED" : selected.state().name());
+        if (selected != null && selected.scope() != null) {
+            ExecutionScope.ScopeSnapshot scope = selected.scope();
+            attached.put("scope", Map.of("state", scope.state().name(), "accepted_work", scope.acceptedWork(),
+                    "running_bodies", scope.runningBodies(), "pending_carriers", scope.pendingCarriers(),
+                    "outstanding_resources", scope.outstandingResources(), "pending_callbacks", scope.pendingCallbacks(),
+                    "unload_complete", scope.unloadComplete()));
+        }
         info.put("module", java.util.Collections.unmodifiableMap(attached));
         info.put("lane", Map.of("pending", state.lane().pending(), "ordinary", state.lane().ordinary(),
                 "cleanup", state.lane().cleanup(), "closed", state.lane().closed()));
