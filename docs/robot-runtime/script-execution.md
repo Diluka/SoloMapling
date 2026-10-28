@@ -86,3 +86,10 @@ MCP handler 中断通过独立 `/script/cancel` 请求转发到后端，携带�
 ## 验证边界
 
 本接口用于机器人开发调试，代表脚本、原生规则和实际行为按任务分别验收。EIM 创建及其一分钟延迟地图释放尚未接通，运行体所有的 EM 明确拒绝相关入口；完整 EIM、更多脚本组合、真实机器人交互和客户端玩法不由基础执行通过推导完成。官方北斗 submodule 保持只读。
+
+## 通用命令函数
+
+受管北斗引擎首次eval前发布 `executeCommand(commandText)`，同引擎的后续代码和回调
+均可复用。它取当前真实Client，调用与MCP一致的NativeCommandExecutor；原生权限不变，
+不进入角色短lane，RETURNED不表示命令效果成功。只注入执行函数，不注入帮助函数。
+具体协议、状态和恢复边界见[通用命令执行](../mcp-acceptance/commands.md)。

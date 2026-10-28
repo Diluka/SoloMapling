@@ -11,15 +11,12 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.Set;
 
-/** Finite management inputs; neither native player IDs nor resource types are accepted. */
+/** A complete native command line; role selection remains a configured profile. */
 @JsonDeserialize(using = DebugCommandRequest.Deserializer.class)
 public record DebugCommandRequest(
         @JsonProperty("profile_id") String profileId,
         @JsonProperty("expected_command_generation") String expectedCommandGeneration,
-        String command,
-        Parameters parameters) {
-
-    public record Parameters(@JsonProperty("item_id") Integer itemId, Integer quantity) { }
+        String command) {
 
     /** Keeps the native SubmitBody wire format while rejecting unknown outer fields as well. */
     @JsonDeserialize(using = SubmissionDeserializer.class)
@@ -45,13 +42,10 @@ public record DebugCommandRequest(
 
     private static DebugCommandRequest parse(JsonNode value, DeserializationContext context) throws IOException {
         JsonNode body = object(value,
-                Set.of("profile_id", "expected_command_generation", "command", "parameters"), context);
+                Set.of("profile_id", "expected_command_generation", "command"), context);
         if (body == null) return null;
-        JsonNode parameters = object(body.get("parameters"), Set.of("item_id", "quantity"), context);
         return new DebugCommandRequest(string(body.get("profile_id"), context),
-                string(body.get("expected_command_generation"), context), string(body.get("command"), context),
-                parameters == null ? null : new Parameters(integer(parameters.get("item_id"), context),
-                        integer(parameters.get("quantity"), context)));
+                string(body.get("expected_command_generation"), context), string(body.get("command"), context));
     }
 
     private static JsonNode object(JsonNode value, Set<String> allowed, DeserializationContext context)
@@ -71,13 +65,5 @@ public record DebugCommandRequest(
         if (value == null || value.isNull()) return null;
         if (!value.isTextual()) return context.reportInputMismatch(String.class, "command string required");
         return value.textValue();
-    }
-
-    private static Integer integer(JsonNode value, DeserializationContext context) throws IOException {
-        if (value == null || value.isNull()) return null;
-        if (!value.isIntegralNumber() || !value.canConvertToInt()) {
-            return context.reportInputMismatch(Integer.class, "command integer required");
-        }
-        return value.intValue();
     }
 }

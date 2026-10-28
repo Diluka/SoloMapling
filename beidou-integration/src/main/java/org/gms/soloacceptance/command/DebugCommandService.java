@@ -6,8 +6,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import soloMapling.game.command.NativeCommandExecutor;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,39 +20,45 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/** Independent administrator calls: native services own game data, not CharacterRuntime. */
+/** Independent command transport; native command rules and permissions remain in the server. */
 @Service
 @ConditionalOnProperty(prefix = "solomapling.acceptance",
         name = {"enabled", "actors-enabled", "debug-commands-enabled"}, havingValue = "true", matchIfMissing = false)
 public final class DebugCommandService {
     private static final Pattern REQUEST_ID = Pattern.compile("[A-Za-z0-9_.:-]{1,128}");
     private static final int HISTORY_LIMIT = 256;
+    private static final Outcome UNKNOWN = new Outcome(
+            "UNKNOWN", null, null, "UNREPORTED", "command_execution_unknown", null, null);
     private final ActorProfiles profiles;
     private final Backend backend;
     private final String generation;
     private final int historyLimit;
     private final Map<Key, Entry> history = new LinkedHashMap<>();
 
+    @FunctionalInterface
     public interface Backend {
-        Outcome give(ActorProfiles.Resolved profile, int itemId, int quantity);
+        Outcome execute(ActorProfiles.Resolved profile, String command);
+        default Map<String, Object> describeCommands(String name) {
+            return NativeCommandExecutor.describeCommands(name);
+        }
     }
 
-    /** Only fixed summaries cross this boundary; history never retains native role objects. */
-    public record Outcome(String status, Boolean nativeDispatched, String reason,
-                          Long quantityBefore, Long quantityAfter, String inventoryType,
-                          Integer characterId, Integer world) { }
+    /** The receipt describes the handler call, never a command-specific gameplay outcome. */
+    public record Outcome(String status, Boolean nativeHandlerInvoked, Boolean nativeHandlerReturned,
+                          String commandOutcome, String reason, Integer characterId, Integer world) { }
 
     private record Key(String owner, String requestId) { }
+    private record Signature(String profileId, String expectedGeneration, String commandSha256) { }
 
     private static final class Entry {
         final String commandId = "command-" + UUID.randomUUID();
         final String requestId;
-        final DebugCommandRequest request;
+        final Signature signature;
         volatile Outcome outcome;
 
-        Entry(String requestId, DebugCommandRequest request) {
+        Entry(String requestId, Signature signature) {
             this.requestId = requestId;
-            this.request = request;
+            this.signature = signature;
         }
     }
 
@@ -68,7 +79,9 @@ public final class DebugCommandService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("enabled", true);
         result.put("enabled_tools", List.of("game_command_help", "game_command"));
-        result.put("commands", List.of("give"));
+        result.put("generic_command", true);
+        result.put("command_dispatcher", "CommandsExecutor.handle");
+        result.put("command_outcome", "UNREPORTED");
         result.put("command_generation", generation);
         result.put("administrator_required", true);
         result.put("runtime_required", false);
@@ -77,84 +90,80 @@ public final class DebugCommandService {
         result.put("request_history", "owner_scoped_process_lifetime_no_eviction");
         result.put("recovery", "repeat_same_request_id_and_arguments_with_original_command_generation");
         result.put("cancellation_supported", false);
-        result.put("give_inventory_types", List.of("USE", "ETC"));
-        result.put("give_maximum_quantity", (int) Short.MAX_VALUE);
+        result.put("maximum_command_characters", NativeCommandExecutor.MAX_COMMAND_CHARACTERS);
+        result.put("character_counting", "unicode_code_points");
+        result.put("native_permissions", "unchanged_client_character_permissions");
+        result.put("completion", "RETURNED means only native handler returned; inspect native feedback and game state");
         return Collections.unmodifiableMap(result);
     }
 
     public Map<String, Object> help(String command) {
-        if (command != null && !"give".equals(command)) throw invalid("unsupported_command");
         Map<String, Object> result = new LinkedHashMap<>(publicCapabilities());
-        result.put("functions", List.of(Map.of(
-                "command", "give",
-                "description", "通过北斗原生管理服务给已登记在线调试角色发放普通可堆叠物品。",
-                "parameters", Map.of("item_id", "positive integer; ordinary noncash USE/ETC stackable item",
-                        "quantity", "integer in 1..32767"),
-                "examples", List.of(Map.of("item_id", 2000000, "quantity", 1),
-                        Map.of("item_id", 4000000, "quantity", 1)),
-                "unsupported", List.of("equipment", "pet", "cash", "quest", "rechargeable", "all_players", "gm_promotion"),
-                "completion", "SUCCEEDED requires exact observed native inventory increase; partial or unknown effects are not replayed")));
+        try {
+            result.putAll(backend.describeCommands(command));
+        } catch (IllegalArgumentException unknown) {
+            throw invalid("native_command_not_registered");
+        } catch (RuntimeException unavailable) {
+            throw new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "native_command_catalog_unavailable");
+        }
         return Collections.unmodifiableMap(result);
     }
 
     public Map<String, Object> execute(String owner, String requestId, DebugCommandRequest request) {
         if (owner == null || owner.isBlank()) throw invalid("invalid_command_owner");
         if (requestId == null || !REQUEST_ID.matcher(requestId).matches()) throw invalid("invalid_request_id");
-        if (request == null || request.parameters() == null) throw invalid("malformed_command");
+        if (request == null) throw invalid("malformed_command");
         if (!generation.equals(request.expectedCommandGeneration())) {
             throw new ObservationException(HttpStatus.CONFLICT, "command_generation_changed");
         }
-        if (!"give".equals(request.command())) throw invalid("unsupported_command");
-        Integer itemId = request.parameters().itemId();
-        Integer quantity = request.parameters().quantity();
-        if (itemId == null || itemId <= 0) throw invalid("invalid_item_id");
-        if (quantity == null || quantity < 1 || quantity > Short.MAX_VALUE) throw invalid("invalid_quantity");
-
+        try { NativeCommandExecutor.validateCommand(request.command()); }
+        catch (IllegalArgumentException invalid) { throw invalid("invalid_command_text"); }
+        Signature signature = new Signature(request.profileId(), request.expectedCommandGeneration(), digest(request.command()));
         Key key = new Key(owner, requestId);
         Entry entry;
         synchronized (history) {
             Entry previous = history.get(key);
-            if (previous != null) {
-                if (!previous.request.equals(request)) {
-                    throw new ObservationException(HttpStatus.CONFLICT, "request_id_conflict");
-                }
-                return snapshot(previous);
-            }
+            if (previous != null) return restore(previous, signature);
         }
-        // Only configuration is resolved here: restoring an existing result never depends
-        // on the profile still being online, present, or otherwise executable now.
+        // Restoration only needs the immutable signature, not a still-online profile.
         ActorProfiles.Resolved profile = profiles.resolve(request.profileId(), null, null);
         synchronized (history) {
             Entry previous = history.get(key);
-            if (previous != null) {
-                if (!previous.request.equals(request)) {
-                    throw new ObservationException(HttpStatus.CONFLICT, "request_id_conflict");
-                }
-                return snapshot(previous);
-            }
+            if (previous != null) return restore(previous, signature);
             if (history.size() >= historyLimit) {
                 throw new ObservationException(HttpStatus.TOO_MANY_REQUESTS, "command_history_full");
             }
-            entry = new Entry(requestId, request);
+            entry = new Entry(requestId, signature);
             history.put(key, entry);
         }
         try {
-            Outcome outcome = backend.give(profile, itemId, quantity);
+            Outcome outcome = backend.execute(profile, request.command());
             entry.outcome = validOutcome(outcome) ? outcome : unknown();
         } catch (RuntimeException ignored) {
-            // The backend normally retains its exact dispatch facts. If it fails outside
-            // that contract, keep the request consumed rather than risk a second give.
-            entry.outcome = unknown();
+            // Finalization below consumes unknown effects without retaining exception contents.
+        } catch (Error failed) {
+            if (failed instanceof VirtualMachineError || failed instanceof ThreadDeath) throw failed;
+        } finally {
+            // Every exited invocation has a terminal record, including fatal errors propagated
+            // to the transport. A later retry must never treat an exited body as still RUNNING.
+            if (entry.outcome == null) entry.outcome = unknown();
         }
         return snapshot(entry);
     }
 
+    private Map<String, Object> restore(Entry previous, Signature signature) {
+        if (!previous.signature.equals(signature)) {
+            throw new ObservationException(HttpStatus.CONFLICT, "request_id_conflict");
+        }
+        return snapshot(previous);
+    }
+
     private static boolean validOutcome(Outcome outcome) {
-        return outcome != null && List.of("SUCCEEDED", "FAILED", "UNKNOWN").contains(outcome.status());
+        return outcome != null && List.of("RETURNED", "FAILED", "UNKNOWN").contains(outcome.status());
     }
 
     private static Outcome unknown() {
-        return new Outcome("UNKNOWN", null, "command_execution_unknown", null, null, null, null, null);
+        return UNKNOWN;
     }
 
     private Map<String, Object> snapshot(Entry entry) {
@@ -163,21 +172,25 @@ public final class DebugCommandService {
         result.put("command_generation", generation);
         result.put("command_id", entry.commandId);
         result.put("request_id", entry.requestId);
-        result.put("profile_id", entry.request.profileId());
-        result.put("command", entry.request.command());
+        result.put("profile_id", entry.signature.profileId());
+        result.put("command_sha256", entry.signature.commandSha256());
         result.put("status", outcome == null ? "RUNNING" : outcome.status());
         result.put("terminal", outcome != null);
-        result.put("native_dispatched", outcome == null ? null : outcome.nativeDispatched());
+        result.put("native_handler_invoked", outcome == null ? null : outcome.nativeHandlerInvoked());
+        result.put("native_handler_returned", outcome == null ? null : outcome.nativeHandlerReturned());
+        result.put("command_outcome", outcome == null ? "UNREPORTED" : outcome.commandOutcome());
         result.put("reason", outcome == null ? "command_running" : outcome.reason());
-        result.put("item_id", entry.request.parameters().itemId());
-        result.put("quantity", entry.request.parameters().quantity());
-        result.put("quantity_before", outcome == null ? null : outcome.quantityBefore());
-        result.put("quantity_after", outcome == null ? null : outcome.quantityAfter());
-        result.put("inventory_type", outcome == null ? null : outcome.inventoryType());
         result.put("character_id", outcome == null ? null : outcome.characterId());
         result.put("world", outcome == null ? null : outcome.world());
-        result.put("persisted_state_verified", false);
         return Collections.unmodifiableMap(result);
+    }
+
+    private static String digest(String command) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(command.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("sha256_unavailable");
+        }
     }
 
     private static ObservationException invalid(String reason) {

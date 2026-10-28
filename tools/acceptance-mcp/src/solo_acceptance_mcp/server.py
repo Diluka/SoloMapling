@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .bridge import (
-    BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT,
+    BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT, MAX_COMMAND_CHARACTERS,
     SCRIPT_MAX_SOURCE_UNITS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
     validate_command_help, validate_command_request, validate_script_help, validate_script_run,
 )
@@ -33,6 +33,7 @@ NativeScriptEntry = Annotated[
 InventorySlot = Annotated[int, Field(ge=1, le=127, strict=True)]
 EquippedSlot = Literal[*EQUIPMENT_SLOTS]
 ObjectId = Annotated[int, Field(ge=1, le=MAX_INT, strict=True)]
+CommandText = Annotated[str, Field(min_length=1, max_length=MAX_COMMAND_CHARACTERS, strict=True)]
 
 
 class ChatParameters(BaseModel):
@@ -119,14 +120,8 @@ class ExpectedContext(BaseModel):
     runtime_generation: Identifier
 
 
-class GiveItemParameters(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    item_id: Annotated[int, Field(ge=1, le=MAX_INT, strict=True)]
-    quantity: Annotated[int, Field(ge=1, le=32767, strict=True)]
-
-
 CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
-COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "parameters", "expected_command_generation"})
+COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "expected_command_generation"})
 SCRIPT_RUN_REQUIRED = frozenset({"session_id", "expected_generation", "request_id", "kind", "operation"})
 SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"source", "parameters", "timeout_ms", "context_id", "options", "entry", "args"}
 SCRIPT_HELP_REQUIRED = frozenset({"session_id", "expected_generation"})
@@ -220,7 +215,9 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
                       "script_run 在同一角色运行体执行有期限的北斗脚本；按实际 script_help 选择 NPC、任务、门户、机关或独占事件的真实对象与原入口。"
                       "持久 context_id 用于后续回调或关闭，原生副作用按实际结果核验，不由工具返回成功推导玩法完成。"
-                      "game_command_help 与 game_command 是独立管理员调试入口，按服务端实际配置向专用 profile 提供原生 give 物品能力，不经过角色运行体或 lane。"),
+                      "北斗脚本提供 executeCommand(commandText) 通用执行函数，与 game_command 共用原生handle；权限沿原生，RETURNED不代表具体命令效果。"
+                      "game_command_help 查询实际原生命令目录，game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现。"
+                      "权限沿原生检查；RETURNED仅表示原生处理器返回，不证明命令执行成功或产生玩法效果。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -247,22 +244,21 @@ def build_server(config: BridgeConfig) -> MCPServer:
             return result(failure.public_data(), is_error=True)
 
     @server.tool(annotations=read_annotations)
-    async def game_command_help(command: Literal["give"] | None = None) -> CallToolResult:
-        """查询实际开放的管理员调试指令及参数；省略 command 时列出目录。指令独立于角色运行体，实际开关和物品范围以服务端说明为准。"""
+    async def game_command_help(command: CommandText | None = None) -> CallToolResult:
+        """查询实际注册的原生命令目录、说明和权限等级；省略 command 列出目录，指定名称查询该命令。目录存在不代表当前角色获准执行。"""
         try:
             return result(await bridge.command_help(command))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 
-    @server.tool(annotations=open_annotations)
+    @server.tool(annotations=destructive_annotations)
     async def game_command(
-        profile_id: ProfileId, request_id: RequestId, command: Literal["give"],
-        parameters: GiveItemParameters, expected_command_generation: Identifier,
+        profile_id: ProfileId, request_id: RequestId, command: CommandText,
+        expected_command_generation: Identifier,
     ) -> CallToolResult:
-        """对已登记专用 profile 调用原生 give 物品管理服务，不经过 CharacterRuntime 或角色 lane。先从帮助取得 command_generation，作为 expected_command_generation；它独立于角色与世界代次。必须提供 request_id，同 ID 同参数恢复原结果、不重复发放。超时或未知结果只用原 ID 和原指令代次恢复，不能换新 ID 或刷新代次重发；重启后的旧指令代次会被拒绝。"""
+        """对已登记在线 profile 原样执行完整原生命令文本，与脚本 executeCommand 共用实现，不按命令名筛选。语法和 GM 权限沿原生检查。RETURNED只证明原生void处理器已返回，权限拒绝也可能正常返回，实际效果须读取反馈或状态确认。先从帮助/能力取得 command_generation 作为 expected_command_generation，并提供 request_id；同ID同参数恢复原结果。超时或UNKNOWN只用原ID和原代次恢复，不换ID或刷新代次重发。"""
         try:
             return result(await bridge.command(profile_id, request_id=request_id, command=command,
-                                               parameters=parameters.model_dump(),
                                                expected_command_generation=expected_command_generation))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
@@ -339,7 +335,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         entry: NativeScriptEntry | None = None,
         args: list[Any] = Field(default_factory=list),
     ) -> CallToolResult:
-        """在当前角色运行体执行北斗脚本。kind 选择 script_help 公告的真实 NPC、任务、门户、机关或独占事件；start 加载原脚本和入口，invoke 沿原 context_id 执行回调或 source，close 收尾。source 默认空，parameters 为 JSON 参数，输出使用 console/print。上下文可保留以继续回调，本次执行退出和最终资源释放分别核验；无法确认停止时返回未知。使用相同 request_id 和完整相同参数恢复结果，不重放未知请求。"""
+        """在当前角色运行体执行北斗脚本。kind 选择 script_help 公告的真实 NPC、任务、门户、机关或独占事件；start 加载原脚本和入口，invoke 沿原 context_id 执行回调或 source，close 收尾。source 默认空，parameters 为 JSON 参数，输出使用 console/print。executeCommand(commandText) 与 game_command 共用原生handle，权限依原生，RETURNED仅表示处理器返回。上下文可保留以继续回调，本次执行退出和最终资源释放分别核验；无法确认停止时返回未知。使用相同 request_id 和完整相同参数恢复结果，不重放未知请求。"""
         try:
             data = await bridge.script_run(
                 session_id, expected_generation, request_id=request_id, kind=kind, operation=operation,

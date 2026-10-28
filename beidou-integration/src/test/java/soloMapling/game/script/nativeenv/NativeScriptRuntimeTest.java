@@ -9,10 +9,13 @@ import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
+import org.gms.util.ThreadLocalUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.command.NativeCommandExecutor;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -216,6 +219,74 @@ class NativeScriptRuntimeTest {
         fixture.assertDrained();
     }
 
+    @Test void commandBridgeIsAvailableBeforeTheNativeFileAndInLaterManagedCallbacks() throws Exception {
+        Fixture fixture = fixture();
+        fixture.adapter.commandClient = fixture.role.character.client();
+        fixture.adapter.sourceDuringStart = "var initialCommandFact = executeCommand('/first ARG 中文');"
+                + "function runCommand(text) { return executeCommand(text); }";
+        NativeScriptResult opened = fixture.start("({fact: initialCommandFact, "
+                + "plainJson: Object.getPrototypeOf(initialCommandFact) === Object.prototype, "
+                + "hostApi: typeof initialCommandFact.getClass, "
+                + "temporary: typeof __soloNativeCommandBridge, "
+                + "help: typeof executeCommandHelp, commandHelp: typeof commandHelp})", Map.of());
+        assertOpen(opened);
+        Map<?, ?> value = (Map<?, ?>) opened.result();
+        assertEquals("RETURNED", ((Map<?, ?>) value.get("fact")).get("status"));
+        assertEquals("UNREPORTED", ((Map<?, ?>) value.get("fact")).get("command_outcome"));
+        assertEquals(true, value.get("plainJson"));
+        assertEquals("undefined", value.get("hostApi"));
+        assertEquals("undefined", value.get("temporary"));
+        assertEquals("undefined", value.get("help"));
+        assertEquals("undefined", value.get("commandHelp"));
+        Object engine = fixture.adapter.session.engine();
+
+        try (ExecutorService caller = Executors.newSingleThreadExecutor()) {
+            Object callback = caller.submit(() -> fixture.adapter.session.invocable()
+                    .invokeFunction("runCommand", "/second  ARG two"))
+                    .get(5, TimeUnit.SECONDS);
+            assertEquals("RETURNED", ((Map<?, ?>) callback).get("status"));
+            assertEquals("UNREPORTED", ((Map<?, ?>) callback).get("command_outcome"));
+        }
+        assertSame(engine, fixture.adapter.session.engine());
+        assertEquals(List.of("/first ARG 中文", "/second  ARG two"), fixture.adapter.commands);
+        assertEquals(0, fixture.runtime.snapshot().lane().pending(), "commands_do_not_enter_the_role_lane");
+        assertClosed(fixture.closeContext(opened.contextId()));
+        fixture.assertDrained();
+    }
+
+    @Test void commandBridgeRejectsArityAndNonStringValuesWithoutCoercionOrNativeCalls() throws Exception {
+        Fixture fixture = fixture();
+        fixture.adapter.commandClient = fixture.role.character.client();
+        for (String source : List.of("executeCommand()", "executeCommand('/one', '/two')",
+                "executeCommand(null)", "executeCommand(undefined)", "executeCommand(3)",
+                "executeCommand(true)", "executeCommand(['/one'])",
+                "executeCommand({toString() { return 'private-command-marker'; }})")) {
+            NativeScriptResult result = fixture.start(source, Map.of());
+            assertNotEquals(ScriptResult.Status.SUCCEEDED, result.status(), source);
+            assertNotNull(result.error());
+            assertTrue(result.error().message().contains("executeCommand_requires_one_string"));
+            assertFalse(result.error().message().contains("private-command-marker"));
+            assertTrue(fixture.adapter.commands.isEmpty());
+            assertTrue(result.invocationSettled());
+            if (!"CLOSED".equals(result.contextState())) fixture.closeContext(result.contextId());
+            fixture.assertDrained();
+        }
+    }
+
+    @Test void commandBridgeRechecksTheNativeBindingBeforeItsHostCall() throws Exception {
+        Fixture fixture = fixture();
+        fixture.adapter.commandClient = fixture.role.character.client();
+        NativeScriptResult opened = fixture.start("0", Map.of());
+        assertOpen(opened);
+        NativeScriptResult result = fixture.invoke(opened.contextId(), null, List.of(),
+                "invalidateCommandContext(); executeCommand('/must-not-run')");
+        assertNotEquals(ScriptResult.Status.SUCCEEDED, result.status());
+        assertNotNull(result.error());
+        assertTrue(result.error().message().contains("native_test_context_stale"));
+        assertTrue(fixture.adapter.commands.isEmpty());
+        assertTrue(result.invocationSettled());
+    }
+
     @Test void cleanupDeadlineActuallyStopsAnEnteredNativeCancelScheduleLoop() throws Exception {
         Fixture fixture = fixture();
         fixture.adapter.loopDuringClose = true;
@@ -332,7 +403,27 @@ class NativeScriptRuntimeTest {
         volatile NativeScriptSession session;
         volatile boolean valid = true;
         volatile boolean loopDuringClose;
+        volatile Client commandClient;
+        String sourceDuringStart = "";
+        final List<String> commands = new ArrayList<>();
         boolean sawNullOption;
+
+        @Override public AutoCloseable enter(NativeScriptSession session) {
+            if (commandClient == null) return () -> { };
+            Client previous = ThreadLocalUtil.getCurrentClient();
+            ThreadLocalUtil.setCurrentClient(commandClient);
+            MockedStatic<NativeCommandExecutor> bridge = mockStatic(NativeCommandExecutor.class);
+            bridge.when(() -> NativeCommandExecutor.execute(eq(commandClient), anyString())).thenAnswer(call -> {
+                assertSame(commandClient, ThreadLocalUtil.getCurrentClient());
+                commands.add(call.getArgument(1));
+                return new NativeCommandExecutor.Result("RETURNED", true, true, "UNREPORTED", "native_handler_returned");
+            });
+            return () -> {
+                bridge.close();
+                if (previous == null) ThreadLocalUtil.removeCurrentClient();
+                else ThreadLocalUtil.setCurrentClient(previous);
+            };
+        }
 
         @Override public Object start(NativeScriptSession session, NativeScriptRequest request) throws Exception {
             this.session = session;
@@ -340,6 +431,10 @@ class NativeScriptRuntimeTest {
             GraalJSScriptEngine engine = GraalJSScriptEngine.create(null, Context.newBuilder("js")
                     .allowHostAccess(HostAccess.NONE));
             session.captureEngine(engine, "native-test.js");
+            if (!sourceDuringStart.isEmpty()) engine.eval(sourceDuringStart);
+            engine.put("invalidateCommandContext", (ProxyExecutable) values -> {
+                valid = false; return null;
+            });
             engine.put("entered", (ProxyExecutable) values -> {
                 entered.countDown(); return null;
             });

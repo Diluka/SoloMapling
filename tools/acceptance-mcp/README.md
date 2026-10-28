@@ -14,9 +14,9 @@
 | `script_run` | 按kind/operation在现有角色运行体执行北斗原脚本及后续代码，收集输出和JSON结果 | 必须有request_id；可保留上下文并产生实际游戏副作用 |
 | `script_help` | 查询实际北斗环境、原入口、存活上下文与容量 | 只读；不创建脚本work或operation |
 | `game_command_help` | 查询独立管理指令的实际范围、参数和管理进程代次 | 只读；需启用 debug-commands-enabled |
-| `game_command` | 对已登记在线调试角色调用原生 give 物品服务 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
+| `game_command` | 对已登记在线调试角色执行完整原生命令文本 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
 
-管理指令的配置、目标、真实结果与原 ID 恢复见[管理指令说明](../../docs/mcp-acceptance/commands.md)。新增工具不扩大 `game_act` 范围，后端未启用时不公告为可用能力。
+通用命令的配置、目标、调用事实与原 ID 恢复见[管理指令说明](../../docs/mcp-acceptance/commands.md)。新增工具不扩大 `game_act` 范围，后端未启用时不公告为可用能力。
 
 MCP用于机器人开发调试，让Agent进入游戏，与待测机器人交互并检查实际行为。`script_run`只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗脚本，直接指定kind/operation和上下文参数；独立纯JS模式及旧environment字段已移除。现有game_act和管理入口保留，不在本次迁移直接动作，能力公告只列实际实现范围。
 
@@ -307,3 +307,12 @@ NPC/任务复用原管理器，门户/机关使用当前真实对象，事件有
 每步记录实际包、版本、可信路径和当前offer，验证隐藏61～68/999、未审项目3、旧版和已消费版被拒；同原ID重放不得多发包或前进，最终完整窗口核对全部NPC序号，避免迟到重复。重新打开的点击间隔继续按500ms加实际缓存时钟周期再加1ms等待，拒绝或未知结果都不盲重试，并正常关闭已知角色。
 
 公开快照前后比较地图/场景/位置、等级经验、金币、三种券、背包和任务，保存重开不要求完全相同 x/y。`claim_marker_verified_via_cli=false` 与 `return_location_storage_verified_via_cli=false` 明确保留：固定“新人福利礼包”领取标记和持久返回位置由独立数据库审计补证，CLI没有新增查询任意扩展键或数据库能力。通过本项不代表 accept、领取收益、目的地选择、付费出行或真实客户端已验收。
+
+## 通用命令桥
+
+北斗脚本直接使用 `executeCommand("@time")`，只有执行函数，没有额外脚本帮助函数。
+MCP `game_command` 接受 profile_id/request_id/expected_command_generation/command，
+command是完整原文，旧parameters结构不兼容；脚本与MCP共用NativeCommandExecutor，
+不逐命令适配或限定give。MCP只读game_command_help按需读取原生目录和等级。
+RETURNED仅表示原生void处理器返回，实际效果沿原生反馈和状态核验；GM权限保持原生。
+详细说明见[通用命令执行](../../docs/mcp-acceptance/commands.md)。

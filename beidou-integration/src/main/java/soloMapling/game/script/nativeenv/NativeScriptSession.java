@@ -2,6 +2,9 @@ package soloMapling.game.script.nativeenv;
 
 import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.proxy.ProxyExecutable;
+import org.gms.util.ThreadLocalUtil;
+import soloMapling.game.command.NativeCommandExecutor;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.script.ScriptValues;
@@ -94,15 +97,54 @@ public final class NativeScriptSession {
             selected.getPolyglotContext().close(true);
             throw new IllegalStateException("native_script_engine_replaced");
         }
+        boolean firstCapture = engine == null;
         engine = selected; scriptPath = path;
         selected.getContext().setWriter(new InvocationWriter(false));
         selected.getContext().setErrorWriter(new InvocationWriter(true));
         context = selected.getPolyglotContext();
         ENGINES.put(selected, this);
+        if (firstCapture) bindCommandExecutor();
         NativeScriptExecution call = activeCall;
         if (call != null) bindParameters(call.parameters());
         if (closing.get()) forceCancel();
     }
+
+    /** One shared native dispatcher, exposed as a language function in this exact engine. */
+    private void bindCommandExecutor() {
+        String temporary = "__soloNativeCommandBridge";
+        engine().put(temporary, (ProxyExecutable) arguments -> {
+            if (arguments.length != 1 || !arguments[0].isString()) {
+                throw new IllegalArgumentException("executeCommand_requires_one_string");
+            }
+            NativeScriptExecution call = activeCall;
+            if (CURRENT.get() != this || call == null || closing.get() || closed || forced || call.shouldStop()) {
+                throw new IllegalStateException("native_command_context_inactive");
+            }
+            validate();
+            // The native adapter has already installed this invocation's real Client.
+            // A returned handler is only a dispatch fact, not proof of a game effect.
+            return ScriptValues.json(NativeCommandExecutor.execute(
+                    ThreadLocalUtil.getCurrentClient(), arguments[0].asString()).toMap());
+        });
+        try {
+            // Use the JSR-223 scope to publish a real guest global, as with parameters.
+            // The closure retains the host callback; callers receive only detached JSON.
+            engine().eval("""
+                    (function (invoke, parse) {
+                        globalThis.executeCommand = function (commandText) {
+                            return parse(invoke(...arguments));
+                        };
+                    })(__soloNativeCommandBridge, JSON.parse);
+                    delete globalThis.__soloNativeCommandBridge;
+                    """);
+        } catch (ScriptException failure) {
+            recordFailure(failure);
+            throw new IllegalStateException("native_command_binding_failed");
+        } finally {
+            engine().getBindings(ScriptContext.ENGINE_SCOPE).remove(temporary);
+        }
+    }
+
     void bindParameters(Map<String, Object> parameters) {
         try {
             // JSR-223 imports its bindings into a script-engine global scope. Put an actual language

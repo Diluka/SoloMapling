@@ -77,9 +77,8 @@ class DebugCommandControllerTest {
         DebugCommandService service = mock(DebugCommandService.class);
         DebugCommandController controller = new DebugCommandController(service);
         authenticate("admin-a", "ROLE_ADMIN");
-        DebugCommandRequest request = new DebugCommandRequest("primary", "generation", "give",
-                new DebugCommandRequest.Parameters(2000000, 1));
-        Map<String, Object> outcome = Map.of("status", "SUCCEEDED");
+        DebugCommandRequest request = new DebugCommandRequest("primary", "generation", "@time");
+        Map<String, Object> outcome = Map.of("status", "RETURNED");
         when(service.execute("admin-a", "give-id", request)).thenReturn(outcome);
         var response = controller.execute(new DebugCommandRequest.Submission("give-id", request));
         assertEquals(20000, response.getCode());
@@ -104,21 +103,21 @@ class DebugCommandControllerTest {
     }
 
     @Test
-    void nativeJacksonCoercionAndUnknownFieldSettingsCannotExpandFiniteInputs() throws Exception {
+    void nativeJacksonCoercionAndUnknownFieldsCannotExpandTheCommandEnvelope() throws Exception {
         ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        String valid = "{\"requestId\":\"give-id\",\"data\":{\"profile_id\":\"primary\","
-                + "\"expected_command_generation\":\"generation\",\"command\":\"give\","
-                + "\"parameters\":{\"item_id\":2000000,\"quantity\":1}}}";
-        assertEquals(2000000, mapper.readValue(valid, DebugCommandRequest.Submission.class).data().parameters().itemId());
+        String valid = "{\"requestId\":\"command-id\",\"data\":{\"profile_id\":\"primary\","
+                + "\"expected_command_generation\":\"generation\",\"command\":\"@time Arg With Case\"}}";
+        assertEquals("@time Arg With Case", mapper.readValue(valid, DebugCommandRequest.Submission.class).data().command());
         for (String invalid : List.of(
                 valid.replace("\"requestId\":", "\"playerId\":0,\"requestId\":"),
                 valid.replace("\"profile_id\":", "\"player_id\":0,\"profile_id\":"),
-                valid.replace("\"item_id\":", "\"type\":11,\"item_id\":"),
-                valid.replace("\"quantity\":1", "\"quantity\":\"1\""),
-                valid.replace("\"quantity\":1", "\"quantity\":1.0"),
-                valid.replace("\"quantity\":1", "\"quantity\":true"),
-                valid.replace("\"quantity\":1", "\"quantity\":2147483648"),
-                valid.replace("\"quantity\":1", "\"quantity\":1,\"quantity\":2"),
+                valid.replace("\"command\":", "\"parameters\":{\"item_id\":2000000,\"quantity\":1},\"command\":"),
+                valid.replace("\"@time Arg With Case\"", "1"),
+                valid.replace("\"@time Arg With Case\"", "1.0"),
+                valid.replace("\"@time Arg With Case\"", "true"),
+                valid.replace("\"@time Arg With Case\"", "[]"),
+                valid.replace("\"@time Arg With Case\"", "{}"),
+                valid.replace("\"command\":", "\"command\":\"first\",\"command\":"),
                 valid.replace("\"profile_id\":\"primary\"", "\"profile_id\":123"))) {
             assertThrows(Exception.class, () -> mapper.readValue(invalid, DebugCommandRequest.Submission.class), invalid);
         }
