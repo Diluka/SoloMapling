@@ -24,9 +24,9 @@ NPC/任务入口遵守原生点击冷却及实际缓存时钟，不靠立即重�
 
 脚本沿用北斗的Java host access，面向已鉴权管理员提交的受信服务端代码。角色、场景及模块守卫不构成对任意Java对象路径的完整沙盒；所到达对象的行为和副作用仍按调试任务分别验收。
 
-## 先查帮助，再启动
+## 查阅源码并启动
 
-先 `actor_open` 并确认原生角色实际在线，保存 `session_id/session_generation`。然后调用 `script_help`，读取实际 `native_environments`、对象来源、选项和当前 `contexts`。以下均为传给 `script_run` 的参数片段；完整调用另需实际角色会话、`expected_generation` 和每次唯一的 `request_id`。
+先 `actor_open` 并确认原生角色实际在线，保存 `session_id/session_generation`。通过[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)定位实际适配器与北斗对象；环境范围读取 capabilities，后续调用使用执行结果返回的原上下文。以下均为传给 `script_run` 的参数片段；完整调用另需实际角色会话、`expected_generation` 和每次唯一的 `request_id`。
 
 ```json
 {

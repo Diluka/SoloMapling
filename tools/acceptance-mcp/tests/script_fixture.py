@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import socket
 
@@ -8,7 +7,6 @@ from tests.helpers import BridgeStub, envelope
 
 
 RUN_PATH = "/solo/acceptance/v1/script/run"
-HELP_PATH = "/solo/acceptance/v1/script/help"
 CANCEL_PATH = "/solo/acceptance/v1/script/cancel"
 SCRIPT_ARGS = {
     "session_id": "session-script-fixture", "expected_generation": 7,
@@ -17,12 +15,6 @@ SCRIPT_ARGS = {
     "source": "console.log(parameters.label); ({sum: parameters.a + parameters.b})",
     "parameters": {"label": "原生脚本协议桩", "a": 3, "b": 4}, "timeout_ms": 1000,
 }
-SCRIPT_HELP = {
-    "schema_version": 1, "language": "javascript", "maximum_contexts_per_module": 1,
-    "native_environments": [{"kind": "npc", "globals": ["cm"], "host_object": "NPCConversationManager"}],
-    "contexts": [{"context_id": "native-context-fixture-1", "kind": "npc", "context_state": "OPEN"}],
-}
-
 
 def script_operation(request_id: str, *, status: str = "SUCCEEDED", error: dict | None = None,
                      closed: bool = False) -> dict:
@@ -71,8 +63,6 @@ class ScriptStub(BridgeStub):
             return 200, envelope(script_operation(request["body"]["requestId"], status=self.script_status,
                                                   error=self.script_error,
                                                   closed=request["body"]["data"]["operation"] == "close"))
-        if request["path"] == HELP_PATH:
-            return 200, envelope(deepcopy(SCRIPT_HELP))
         if request["path"] == CANCEL_PATH:
             return 200, envelope(script_operation(request["body"]["data"]["target_request_id"],
                                                   status="CANCELLED", closed=True))

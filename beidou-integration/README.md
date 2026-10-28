@@ -106,7 +106,7 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 
 [#139](https://github.com/Diluka/SoloMapling/issues/139) 的 MCP 接入在统一宿主内复用 #117～#119：根角色资源、原生来源和唯一 lane 归 `CharacterRuntime`，MCP 模块消费聊天/观察上下文，外层保留鉴权、profile、请求历史与现有额度。接线与回归/部署约定见 [MCP 模块说明](../docs/mcp-acceptance/runtime-module.md)，交付及各层验收证据以对应 Issue 为准。`runtime_generation` 仍表示世界代次；完整暂停/卸载重挂与复杂关闭留 #140，生产自治、巡逻、刷怪不属于本轮。
 
-[北斗脚本执行](../docs/robot-runtime/script-execution.md)通过现有 `script_run/script_help` 复用原脚本、真实对象与原生API，直接传kind/operation等上下文参数，删除独立纯JS及environment兼容模式。执行消费原模块work，短命令lane保持可用；本次调用结算、持久Context关闭和原调度资源释放分别核验。帮助按实际适配描述列环境及存活上下文。完整EIM、行为模块和现有动作迁移继续按各自任务验收，源码、CI、隔离及实际部署分层留证。
+[北斗脚本执行](../docs/robot-runtime/script-execution.md)通过现有 `script_run` 复用原脚本、真实对象与原生API，直接传kind/operation等上下文参数，删除独立纯JS及environment兼容模式。执行消费原模块work，短命令lane保持可用；本次调用结算、持久Context关闭和原调度资源释放分别核验。技能按实际适配描述导航环境与源码，执行结果提供上下文状态。完整EIM、行为模块和现有动作迁移继续按各自任务验收，源码、CI、隔离及实际部署分层留证。
 
 ## 验证边界
 

@@ -22,7 +22,7 @@ from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 OBSERVATION_TOOLS = {"game_capabilities", "game_observe"}
 ACTOR_TOOLS = {"actor_open", "actor_close", "operation_get", "operation_cancel"}
 TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS | {"game_act"}
-REGISTERED_TOOLS = TOOLS | COMMAND_TOOLS | {"script_run", "script_help"}
+REGISTERED_TOOLS = TOOLS | COMMAND_TOOLS | {"script_run"}
 ACT_PATH = "/solo/acceptance/v1/actor/act"
 MAX_LONG = 2**63 - 1
 REGISTERED_ACTIONS = ["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",

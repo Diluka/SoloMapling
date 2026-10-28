@@ -51,8 +51,6 @@ public final class McpControlModule implements RuntimeModule {
     public ExecutionScope.WorkHandle acceptWork() { return context().acceptWork(); }
     NativeMovementActions movement() { return movement; }
 
-    public Map<String, Object> scriptHelp() { return context().nativeScriptHelp(); }
-
     public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                   NativeScriptAdapter adapter) {
         return context().runNativeScript(work, request, adapter);

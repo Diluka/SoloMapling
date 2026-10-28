@@ -67,25 +67,13 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 错误可附有界 `error={message,line,column}`，无法定位时行列为 `null`。外层 operation 使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`；脚本失败设置 MCP `is_error=true`，同时保留已收集输出、首个已知脚本错误和真实收尾标记。
 
-## 帮助
+## 接口查阅
 
-`script_help(session_id, expected_generation)` 只读返回 `schema_version/language/native_environments/contexts/maximum_contexts_per_module/module_functions`。`native_environments` 与实际适配器说明同源，列出对象类型、选择参数、原入口和所有权；`contexts` 列当前模块的存活上下文。`module_functions` 列运行体内模块声明的共享函数、参数、结果说明、来源实例及代次和当前可用性。帮助不创建脚本工作或 operation。
-
-帮助不接收 `names`。模块函数来自实际装配的定义，说明、参数校验和绑定同源；北斗已有 Java 方法仍使用原对象 API。当前没有业务函数预装时，`module_functions` 返回空列表。
+[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)提供源码导航和连续调用说明。五类环境的 `descriptor()` 同时服务实际 capabilities；对象方法、父类和返回类型直接查北斗源码，生成方法可查匹配构建产物。`script_run` 返回精确 `context_id`、上下文状态和本次结算，原请求及 operation 用于恢复；每模块最多一个持久上下文。
 
 ## 模块函数命名空间
 
-当前受管北斗引擎提供 `modules.help()` 和 `modules.call(name, args)`，后者的 `args` 为 JSON 对象。它们读取与 `script_help.module_functions` 相同的目录，按当前精确实例和执行代次调用：
-
-```javascript
-(() => {
-    const functions = modules.help();
-    const result = modules.call("example.counter.next", {label: "本次调用"});
-    return {functions: functions, call: result};
-})()
-```
-
-这里的函数名来自[模块协议示例](modules.md#最小协议示例)，仅在对应示例模块已装配时可用。成功调用返回 `{status: "SUCCEEDED", result: ...}`；函数缺失、提供者停用或未激活时正常返回 `{status: "UNAVAILABLE", function: name, reason: ...}`，脚本可以据此选择后续流程。未知参数、必填参数缺失、类型不符或执行异常沿现有脚本错误契约报告。
+当前受管北斗引擎提供 `modules.help()` 和 `modules.call(name, args)`，后者的 `args` 为 JSON 对象。Java `ModuleContext.help()` / `call()` 与它们消费同一目录，帮助来自实际装配的模块声明，调用按当前精确实例和执行代次解析。当前没有业务导出预装时，目录返回空列表；具体声明、返回和错误语义见[机器人模块参考](modules.md#共享函数声明与调用)。
 
 `modules` 绑定在原 `kind/operation` 选定的北斗上下文中。`cm/qm/pi/rm/em` 的对象来源和适用范围，以及 `executeCommand` 的现有命令行为保持原契约。模块定义、装配与受管执行见[机器人模块参考](modules.md)。
 
@@ -99,7 +87,7 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 MCP handler 中断通过独立 `/script/cancel` 请求转发到后端，携带原请求 ID 及完整相同的类型、操作、上下文、脚本、参数和期限。取消先到时留下已结算取消检查点，迟到 run 不执行；变参仍冲突。已发生的原生副作用不会撤回，未知结果不换新 ID 自动重放。
 
-提前取消尚未启动的 `invoke/close` 只结算本次调用，不自动关闭它指向的已有 Context。检查点按原 `context_id` 记录当时读到的上下文事实；已有环境保持 `OPEN` 时，不能据 `CANCELLED` 或 `invocation_settled/work_settled` 推导其已关闭。无法确认上下文时返回 `context_state=UNKNOWN`，不宣称已清理；当前状态可通过 `script_help.contexts` 核对，并在需要时显式 `close`。提前取消 `start` 的 `NOT_STARTED` 只表示该次新上下文没有创建。
+提前取消尚未启动的 `invoke/close` 只结算本次调用，不自动关闭它指向的已有 Context。检查点按原 `context_id` 记录当时读到的上下文事实；已有环境保持 `OPEN` 时，不能据 `CANCELLED` 或 `invocation_settled/work_settled` 推导其已关闭。无法确认上下文时返回 `context_state=UNKNOWN`，不宣称已清理；调用方保留原上下文 ID，按原请求或 operation 恢复本次证据，并在需要时显式 `close`。提前取消 `start` 的 `NOT_STARTED` 只表示该次新上下文没有创建。
 
 已取消的 MCP 请求按协议不再返回工具响应。使用相同 `request_id` 和完整原参数恢复原 operation，或用已知 `operation_id` 查询。脚本专用 HTTP 预算至少为执行期限加 5 秒，宿主工具期限另留通信与收尾余量。
 

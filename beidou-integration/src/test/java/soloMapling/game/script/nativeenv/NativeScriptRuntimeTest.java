@@ -94,8 +94,7 @@ class NativeScriptRuntimeTest {
         var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(), Set.of(),
                 new ExecutionScope.Limits(4, 1, 4, 1), config -> {}, NotesModule::new, List.of(record));
         var provider = fixture.runtime.mount(definition, new ModuleSelection<>("notes", new NotesConfig("角色日记"), true));
-        Map<?, ?> advertisedHelp = (Map<?, ?>) ((List<?>) fixture.context.nativeScriptHelp()
-                .get("module_functions")).getFirst();
+        Map<?, ?> advertisedHelp = fixture.context.help().getFirst();
         fixture.adapter.sourceDuringStart = "var initialModuleHelp = modules.help();"
                 + "var initialRecord = modules.call('notes.record', {text:'第一条'});";
 
@@ -105,7 +104,7 @@ class NativeScriptRuntimeTest {
         Map<?, ?> help = (Map<?, ?>) ((List<?>) initial.get("help")).getFirst();
         for (String field : List.of("name", "description", "parameters", "result_description")) {
             assertEquals(advertisedHelp.get(field), help.get(field),
-                    "native_guest_and_mcp_help_share_the_module_declaration:" + field);
+                    "native_guest_and_runtime_help_share_the_module_declaration:" + field);
         }
         assertEquals("notes.record", help.get("name"));
         assertEquals(List.of(Map.of("name", "text", "type", "string", "required", true,

@@ -102,7 +102,7 @@ python3 beidou-integration/scripts/build.py --help
 - 当前候选实现使用 `ModuleDefinition<C, M>` 声明类型、槽位、控制资源、scope 额度、配置验证器、工厂及导出；`ModuleSelection<C>` 选择实例 ID、配置及启用标志。挂载返回 `MountedModule<M>` 的精确引用和实际实例。配置内容由模块验证一次，工厂只构造私有状态；实际工作与资源通过生命周期 hook 和原模块 scope 管理。
 - 首版 9 个槽位容量均为 1，完整定义见 `docs/robot-runtime/modules.md`。自主主控与 MCP 控制共同声明 `controller`；能力模块持续完成既定任务及已启用服务的事件，新角色活动目标由主控选择。兼有两类职责的定义声明多槽位，无独占职责的响应或函数扩展可声明空槽位。
 - 装配先整体校验并预约全部槽位与导出名称，再创建及初始化实例。暂停保留占用，卸载真实完成才释放。停止或卸载清理 hook 失败时保留 `FAILED`、失败原因和占用，根关闭继续等待实际收尾。
-- `ModuleFunction` 的说明、参数校验和精确实例绑定同源；调用按当前有效提供者及代次解析，工作归提供者 scope。`script_help.module_functions` 与北斗原生引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录；缺失、停用或未激活正常返回 `UNAVAILABLE`，参数及执行异常沿现有脚本错误语义报告。
+- `ModuleFunction` 的说明、参数校验和精确实例绑定同源；调用按当前有效提供者及代次解析，工作归提供者 scope。Java `ModuleContext.help()` / `call()` 与北斗原生引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录；缺失、停用或未激活正常返回 `UNAVAILABLE`，参数及执行异常沿现有脚本错误语义报告。
 - 脚本仍按原 `kind/operation` 进入真实北斗环境，复用 `cm/qm/pi/rm/em` 各自对象及 `executeCommand`。MCP 负责协议桥接；共享能力由实际装配的模块声明，本轮没有预装业务模块或游戏函数。源码测试、CI、隔离与实际部署证据按本轮交付记录分别确认，不由候选实现推导已上线。
 
 ## Git 与上游
@@ -138,10 +138,10 @@ python3 beidou-integration/scripts/build.py --help
 ## 北斗脚本执行入口
 
 - MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。`script_run` 只执行北斗脚本，直接接收顶层 `kind/operation/context_id/options/entry/args`，不保留独立纯JS模式或外层 `environment` 兼容分支；缺少kind/operation及旧字段请求明确拒绝。
-- `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。`script_help` 按当前角色列实际 `native_environments/contexts/maximum_contexts_per_module/module_functions`；共享函数来自实际装配的模块定义，目录与 `modules.help()` 同源，不接收 names。
+- `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。环境与接口通过 `skills/solomapling-script-debug/` 的说明书查阅实际适配器及北斗源码；上下文标识和状态来自执行结果。
 - `options/args/parameters` 的16KiB输入预算仅由服务端按其规范化JSON UTF-8编码裁决；客户端保留类型、有限数值、Unicode、节点数和深度校验，不再重复计算本地编码字节数或要求跨语言编码器产生同样长度。语言stdout/stderr使用持续UTF-8编码收集完整字符，游戏聊天的原生字符集限制另行保留。
 - 脚本设施由 `CharacterRuntime` 承载，消费当前模块代次的原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令lane。MCP保留鉴权、协议、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
-- 当前客户端仍为十一工具，既有十三动作及独立管理指令保留。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。
+- 当前客户端为九工具，既有十三动作及独立管理指令保留。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。
 
 ## #216 北斗脚本上下文
 
@@ -154,11 +154,17 @@ python3 beidou-integration/scripts/build.py --help
 ## #207 独立管理指令调试入口
 
 - 管理指令直接复用北斗原生管理服务，与 CharacterRuntime、模块 scope/Grant 和角色 lane 解耦。角色、背包和存档数据仍在北斗服务端；不得以未经验证的并发假设强加运行体前置。后续 #199 只需将同一适配绑定到脚本环境，不复制实现。
-- `game_command_help` / `game_command` 独立于 `game_act`；需本地 `enabled`、`actors-enabled`、`debug-commands-enabled` 三开关同时启用，新增开关默认关闭。沿正常管理员 JWT，目标限已有 profile 登记的在线普通专用角色；首轮仅普通 USE/ETC 可堆叠物品，不透传全服、提权或其他资源分支。
-- 请求携带独立 `expected_command_generation`，从 help/capabilities 获取。按 owner/request_id 保留本进程最多256条历史且不淘汰，原ID同参数恢复事实、变参拒绝、旧进程代次拒绝；未知结果不新ID重发。实际数量前后态和同CID重开存档分开验证。各层交付以 #207 为准，详见 `docs/mcp-acceptance/commands.md`。
+- `game_command` 独立于 `game_act`；需本地 `enabled`、`actors-enabled`、`debug-commands-enabled` 三开关同时启用，新增开关默认关闭。沿正常管理员 JWT，目标限已有 profile 登记的在线普通专用角色；首轮仅普通 USE/ETC 可堆叠物品，不透传全服、提权或其他资源分支。
+- 请求携带独立 `expected_command_generation`，从 capabilities 获取。按 owner/request_id 保留本进程最多256条历史且不淘汰，原ID同参数恢复事实、变参拒绝、旧进程代次拒绝；未知结果不新ID重发。实际数量前后态和同CID重开存档分开验证。各层交付以 #207 为准，详见 `docs/mcp-acceptance/commands.md`。
 
 ## 通用命令桥（取代 #207 受限give包装）
 
-- 脚本注入 `executeCommand(text)`，MCP `game_command` 也调用同一 `NativeCommandExecutor.execute(Client,String)`，完整文本原样交给CommandsExecutor.handle；不逐命令/物品适配，不保留旧give/type5/USE-ETC白名单。脚本不注入帮助；MCP现有只读帮助按需读取真实注册目录。
+- 脚本注入 `executeCommand(text)`，MCP `game_command` 也调用同一 `NativeCommandExecutor.execute(Client,String)`，完整文本原样交给CommandsExecutor.handle；不逐命令/物品适配，不保留旧give/type5/USE-ETC白名单。脚本不注入帮助；技能脚本通过北斗已有只读命令查询定位处理类。
 - 权限按用户本轮要求暂不改动：管理员JWT/已登记普通目标沿现有边界，原生GM/配置检查照常；不提权、不绕过，也不把权限拒绝改称桥不支持。角色数据归北斗，不增加运行体lane或第二队列。
 - RETURNED仅表示void handle返回，command_outcome=UNREPORTED；未知或权限/忙/未知命令反馈不能推导业务成功。MCP旧parameters格式拒绝，历史只存命令摘要；原ID/管理进程代次恢复及容量边界保持。详见docs/mcp-acceptance/commands.md，各层验收以本轮交付记录为准。
+
+## #201 源码开发技能
+
+- `skills/` 提供游戏交互、脚本调试与机器人验收三个技能，`references/` 是所属技能的使用说明书，随源码整套分发。
+- 源码中的方法、继承、返回类型和原脚本直接查阅；生成方法按需查询匹配构建产物，不手写 API 全集。
+- 当前提供九个执行／观察工具、十三动作和实际 capabilities。环境、对象方法与命令查询通过相应技能导航源码或北斗既有只读目录；命令查询脚本不执行命令或改变配置。

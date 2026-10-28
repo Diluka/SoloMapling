@@ -143,11 +143,6 @@ final class AcceptanceActorExecution {
         requireModule().recordResult(work, result);
     }
 
-    Map<String, Object> scriptHelp() {
-        try { return requireModule().scriptHelp(); }
-        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
-    }
-
     NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request) {
         NativeActorHandle exactHandle = adoptedHandle();
         if (exactHandle == null) throw new ObservationException(HttpStatus.CONFLICT, "actor_not_actable");

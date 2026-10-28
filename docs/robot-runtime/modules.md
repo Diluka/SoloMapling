@@ -73,7 +73,7 @@ modules.call("example.counter.next", {label: "本次调用"});
 `UNAVAILABLE` 是该次模块函数调用的结果；脚本可以检查它并决定是否结束流程。调用者仍需具备当前有效的模块和脚本调用资格。
 导出调用的 `SUCCEEDED` 表示 handler 正常返回；具体游戏结果由函数自己的结果契约表达。
 
-`script_help.module_functions` 和 `modules.help()` 读取同一目录。帮助可列出已挂载但暂不可用的导出；当前没有业务导出预装时返回空列表。
+Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出；当前没有业务导出预装时返回空列表。MCP 通过 `script_run` 承接原生上下文中的脚本调用；北斗对象 API 的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
 
 ## 最小协议示例
 

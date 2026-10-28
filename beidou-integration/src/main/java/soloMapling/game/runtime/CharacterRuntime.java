@@ -388,17 +388,13 @@ public final class CharacterRuntime {
             synchronized (monitor) { session = nativeScript; }
             return session == null ? List.of() : List.of(session.describe());
         }
-        public Map<String, Object> nativeScriptHelp() {
-            synchronized (monitor) { requireActive(this, null); }
-            return Map.of("contexts", nativeScriptContexts(), "maximum_contexts_per_module", 1,
-                    "module_functions", help());
-        }
         @Override public List<Map<String, Object>> help() {
             synchronized (monitor) { requireActive(this, null); return moduleFunctionHelp(); }
         }
         @Override public Map<String, Object> call(String name, Map<String, Object> arguments) {
             return invokeModuleFunction(this, name, arguments);
         }
+
         public ExecutionScope.WorkHandle acceptWork() {
             synchronized (monitor) {
                 requireActive(this, null);

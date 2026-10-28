@@ -15,7 +15,6 @@ final class ActorScriptJson {
             "context_id", "options", "entry", "args", "source", "parameters", "timeout_ms");
     static final Set<String> CANCEL_FIELDS = Set.of("session_id", "expected_generation", "target_request_id",
             "kind", "operation", "context_id", "options", "entry", "args", "source", "parameters", "timeout_ms");
-    static final Set<String> HELP_FIELDS = Set.of("session_id", "expected_generation");
 
     private ActorScriptJson() { }
 
