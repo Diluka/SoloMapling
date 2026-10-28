@@ -5,6 +5,8 @@ import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleDefinition;
+import soloMapling.game.runtime.ModuleSlots;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -17,16 +19,17 @@ import java.util.Set;
 
 /** MCP controls consume a host-owned context; role lifetime and execution accounting stay with the host. */
 public final class McpControlModule implements RuntimeModule {
-    private final Spec spec;
+    public static final ModuleDefinition<Map<String, Object>, McpControlModule> DEFINITION =
+            new ModuleDefinition<>("mcp-control", Set.of(ModuleSlots.CONTROLLER),
+                    Set.of("chat", "interaction", "inventory", "movement", "combat"),
+                    new ExecutionScope.Limits(16, 2, 16, 2), config -> {
+                        if (!config.isEmpty()) throw new IllegalArgumentException("invalid_mcp_module_config");
+                    }, config -> new McpControlModule(), List.of());
+
     private volatile CharacterRuntime.ModuleContext context;
     private final NativeMovementActions movement = new NativeMovementActions();
 
-    public McpControlModule(String instanceId) {
-        spec = new Spec("mcp-control", instanceId, Set.of("chat", "interaction", "inventory", "movement", "combat"),
-                new ExecutionScope.Limits(16, 2, 16, 2));
-    }
-
-    public Spec spec() { return spec; }
+    private McpControlModule() { }
 
     @Override
     public void onActivated(CharacterRuntime.ModuleContext context) {

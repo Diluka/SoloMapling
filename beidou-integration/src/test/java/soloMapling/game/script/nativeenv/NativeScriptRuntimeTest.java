@@ -21,6 +21,9 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleDefinition;
+import soloMapling.game.runtime.ModuleFunction;
+import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
@@ -76,6 +79,78 @@ class NativeScriptRuntimeTest {
         assertSame(engine, fixture.adapter.session.engine());
         assertClosed(fixture.closeContext(opened.contextId()));
         assertEquals(1, fixture.adapter.closes.get());
+        fixture.assertDrained();
+    }
+
+    @Test void nativeScriptsConsumeDeclaredModuleFunctionsAndObserveProviderAvailability() throws Exception {
+        Fixture fixture = fixture();
+        var record = new ModuleFunction<NotesModule>("notes.record", "记录模块私有进度",
+                List.of(new ModuleFunction.Parameter("text", ModuleFunction.Type.STRING, true, "记录内容")),
+                "返回实例标题、记录内容和累计次数", (instance, context, work, arguments) -> {
+                    instance.lastNote = (String) arguments.get("text");
+                    return Map.of("title", instance.config.title(), "text", instance.lastNote,
+                            "count", ++instance.count);
+                });
+        var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(), Set.of(),
+                new ExecutionScope.Limits(4, 1, 4, 1), config -> {}, NotesModule::new, List.of(record));
+        var provider = fixture.runtime.mount(definition, new ModuleSelection<>("notes", new NotesConfig("角色日记"), true));
+        Map<?, ?> advertisedHelp = (Map<?, ?>) ((List<?>) fixture.context.nativeScriptHelp()
+                .get("module_functions")).getFirst();
+        fixture.adapter.sourceDuringStart = "var initialModuleHelp = modules.help();"
+                + "var initialRecord = modules.call('notes.record', {text:'第一条'});";
+
+        NativeScriptResult opened = fixture.start("({help:initialModuleHelp, record:initialRecord})", Map.of());
+        assertOpen(opened);
+        Map<?, ?> initial = (Map<?, ?>) opened.result();
+        Map<?, ?> help = (Map<?, ?>) ((List<?>) initial.get("help")).getFirst();
+        for (String field : List.of("name", "description", "parameters", "result_description")) {
+            assertEquals(advertisedHelp.get(field), help.get(field),
+                    "native_guest_and_mcp_help_share_the_module_declaration:" + field);
+        }
+        assertEquals("notes.record", help.get("name"));
+        assertEquals(List.of(Map.of("name", "text", "type", "string", "required", true,
+                "description", "记录内容")), help.get("parameters"));
+        assertEquals("返回实例标题、记录内容和累计次数", help.get("result_description"));
+        assertEquals(true, help.get("available"));
+        Map<?, ?> first = (Map<?, ?>) initial.get("record");
+        assertEquals("SUCCEEDED", first.get("status"));
+        Map<?, ?> firstRecord = (Map<?, ?>) first.get("result");
+        assertEquals("角色日记", firstRecord.get("title"));
+        assertEquals("第一条", firstRecord.get("text"));
+        assertEquals(1, ((Number) firstRecord.get("count")).intValue());
+        Object engine = fixture.adapter.session.engine();
+
+        NativeScriptResult next = fixture.invoke(opened.contextId(), null, List.of(), """
+                (() => {
+                    let invalidType;
+                    try { modules.call('notes.record', {text: 7}); }
+                    catch (failure) { invalidType = String(failure); }
+                    return {invalidType, record: modules.call('notes.record', {text:'第二条'})};
+                })()
+                """);
+        assertOpen(next);
+        Map<?, ?> following = (Map<?, ?>) next.result();
+        assertTrue(((String) following.get("invalidType")).contains("invalid_module_function_argument:text"));
+        Map<?, ?> secondRecord = (Map<?, ?>) ((Map<?, ?>) following.get("record")).get("result");
+        assertEquals(2, ((Number) secondRecord.get("count")).intValue());
+        assertEquals(2, provider.instance().count, "invalid_arguments_do_not_enter_the_provider");
+        assertEquals("第二条", provider.instance().lastNote);
+
+        assertEquals(ExecutionScope.DrainResult.DRAINED,
+                fixture.runtime.stop(provider.reference(), CharacterRuntime.StopMode.PAUSE).await(WAIT));
+        NativeScriptResult unavailable = fixture.invoke(opened.contextId(), null, List.of(), """
+                ({help: modules.help(),
+                  paused: modules.call('notes.record', {text:'不应记录'}),
+                  missing: modules.call('notes.missing', {})})
+                """);
+        assertOpen(unavailable);
+        Map<?, ?> availability = (Map<?, ?>) unavailable.result();
+        assertEquals("UNAVAILABLE", ((Map<?, ?>) availability.get("paused")).get("status"));
+        assertEquals("UNAVAILABLE", ((Map<?, ?>) availability.get("missing")).get("status"));
+        assertEquals(false, ((Map<?, ?>) ((List<?>) availability.get("help")).getFirst()).get("available"));
+        assertSame(engine, fixture.adapter.session.engine());
+        assertEquals(2, provider.instance().count);
+        assertClosed(fixture.closeContext(opened.contextId()));
         fixture.assertDrained();
     }
 
@@ -515,6 +590,15 @@ class NativeScriptRuntimeTest {
         @Override public Map<String, Object> describe(NativeScriptSession session) { return Map.of("kind", "npc"); }
     }
 
+    private record NotesConfig(String title) { }
+
+    private static final class NotesModule implements RuntimeModule {
+        private final NotesConfig config;
+        private int count;
+        private String lastNote;
+        private NotesModule(NotesConfig config) { this.config = config; }
+    }
+
     private static final class Fixture {
         final ExecutorService executor = new ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
         final CharacterRuntime runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
@@ -529,8 +613,9 @@ class NativeScriptRuntimeTest {
                 runtime.reserveOrigin(opening).adopt(role); runtime.bindAdoptedOrigin();
             }, () -> {});
             opening.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            context = runtime.context(runtime.mount(new RuntimeModule.Spec("native-test", "native", Set.of("test-control"),
-                    new ExecutionScope.Limits(16, 4, 16, 4)), new RuntimeModule() {}, true));
+            var definition = new ModuleDefinition<Void, RuntimeModule>("native-test", Set.of(), Set.of("test-control"),
+                    new ExecutionScope.Limits(16, 4, 16, 4), config -> {}, config -> new RuntimeModule() {}, List.of());
+            context = runtime.context(runtime.mount(definition, new ModuleSelection<>("native", null, true)).reference());
         }
         NativeScriptExecution call(NativeScriptRequest request) {
             return context.runNativeScript(context.acceptWork(), request, adapter);

@@ -97,6 +97,14 @@ python3 beidou-integration/scripts/build.py --help
 - 只解码已核实的北斗包布局，并沿角色实际字符集严格解码；未知、畸形包仅保留固定有界摘要，不能打断原生 `sendPacket`。正文截断须显式标明且不切断 Unicode 字符；当前场景是观察时状态，不冒充每条历史包的发生场景。不得以系统消息解码通过代替真实聊天或 NPC 验收。
 - 幂等历史有界且在进程生命周期内不遗忘，进程重启后不能沿用旧去重保证。每个存活会话保留首次关闭额度，额外重试只使用余量；满容量时按明确错误恢复，不绕过校验或静默丢弃旧记录。聊天、NPC 与内置脚本按后续独立 Issue 实现，不借角色生命周期工具执行未开放动作。
 
+## #205 机器人模块框架
+
+- 当前候选实现使用 `ModuleDefinition<C, M>` 声明类型、槽位、控制资源、scope 额度、配置验证器、工厂及导出；`ModuleSelection<C>` 选择实例 ID、配置及启用标志。挂载返回 `MountedModule<M>` 的精确引用和实际实例。配置内容由模块验证一次，工厂只构造私有状态；实际工作与资源通过生命周期 hook 和原模块 scope 管理。
+- 首版 9 个槽位容量均为 1，完整定义见 `docs/robot-runtime/modules.md`。自主主控与 MCP 控制共同声明 `controller`；能力模块持续完成既定任务及已启用服务的事件，新角色活动目标由主控选择。兼有两类职责的定义声明多槽位，无独占职责的响应或函数扩展可声明空槽位。
+- 装配先整体校验并预约全部槽位与导出名称，再创建及初始化实例。暂停保留占用，卸载真实完成才释放。停止或卸载清理 hook 失败时保留 `FAILED`、失败原因和占用，根关闭继续等待实际收尾。
+- `ModuleFunction` 的说明、参数校验和精确实例绑定同源；调用按当前有效提供者及代次解析，工作归提供者 scope。`script_help.module_functions` 与北斗原生引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录；缺失、停用或未激活正常返回 `UNAVAILABLE`，参数及执行异常沿现有脚本错误语义报告。
+- 脚本仍按原 `kind/operation` 进入真实北斗环境，复用 `cm/qm/pi/rm/em` 各自对象及 `executeCommand`。MCP 负责协议桥接；共享能力由实际装配的模块声明，本轮没有预装业务模块或游戏函数。源码测试、CI、隔离与实际部署证据按本轮交付记录分别确认，不由候选实现推导已上线。
+
 ## Git 与上游
 
 - `origin` 为自己的 `Diluka/SoloMapling`，允许提交和推送。
@@ -130,7 +138,7 @@ python3 beidou-integration/scripts/build.py --help
 ## 北斗脚本执行入口
 
 - MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。`script_run` 只执行北斗脚本，直接接收顶层 `kind/operation/context_id/options/entry/args`，不保留独立纯JS模式或外层 `environment` 兼容分支；缺少kind/operation及旧字段请求明确拒绝。
-- `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。`script_help` 只按当前角色列实际 `native_environments/contexts/maximum_contexts_per_module`，不接收names，也不维护已删除的纯函数目录。
+- `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。`script_help` 按当前角色列实际 `native_environments/contexts/maximum_contexts_per_module/module_functions`；共享函数来自实际装配的模块定义，目录与 `modules.help()` 同源，不接收 names。
 - `options/args/parameters` 的16KiB输入预算仅由服务端按其规范化JSON UTF-8编码裁决；客户端保留类型、有限数值、Unicode、节点数和深度校验，不再重复计算本地编码字节数或要求跨语言编码器产生同样长度。语言stdout/stderr使用持续UTF-8编码收集完整字符，游戏聊天的原生字符集限制另行保留。
 - 脚本设施由 `CharacterRuntime` 承载，消费当前模块代次的原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令lane。MCP保留鉴权、协议、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
 - 当前客户端仍为十一工具，既有十三动作及独立管理指令保留。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。

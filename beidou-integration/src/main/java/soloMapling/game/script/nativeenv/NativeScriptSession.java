@@ -9,6 +9,7 @@ import org.gms.util.ThreadLocalUtil;
 import soloMapling.game.command.NativeCommandExecutor;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.runtime.ModuleCapabilities;
 import soloMapling.game.script.ScriptValues;
 import soloMapling.game.script.ScriptResult;
 
@@ -44,6 +45,7 @@ public final class NativeScriptSession {
     private final Runnable requireCurrent;
     private final NativeScriptAdapter adapter;
     private final Runnable released;
+    private final ModuleCapabilities capabilities;
     private final ScopeResources.Registration registration;
     private final ReentrantLock engineLock = new ReentrantLock(true);
     private final AtomicBoolean closing = new AtomicBoolean();
@@ -63,9 +65,11 @@ public final class NativeScriptSession {
     private volatile ScriptResult.Status recordedFailureStatus;
 
     public NativeScriptSession(String kind, ExecutionScope scope, Supplier<ExecutionScope.WorkHandle> acceptWork,
-                        Runnable requireCurrent, NativeScriptAdapter adapter, Runnable released) {
+                        Runnable requireCurrent, NativeScriptAdapter adapter, Runnable released,
+                        ModuleCapabilities capabilities) {
         this.kind = kind; this.scope = scope; this.acceptWork = acceptWork;
         this.requireCurrent = requireCurrent; this.adapter = adapter; this.released = released;
+        this.capabilities = capabilities;
         registration = scope.resources().beginRegistration("native-script-context");
         registration.attach(this, this::requestClose);
     }
@@ -105,7 +109,10 @@ public final class NativeScriptSession {
         selected.getContext().setErrorWriter(new InvocationWriter(true));
         context = selected.getPolyglotContext();
         ENGINES.put(selected, this);
-        if (firstCapture) bindCommandExecutor();
+        if (firstCapture) {
+            bindCommandExecutor();
+            bindModuleCapabilities();
+        }
         NativeScriptExecution call = activeCall;
         if (call != null) bindParameters(call.parameters());
         if (closing.get()) forceCancel();
@@ -118,11 +125,7 @@ public final class NativeScriptSession {
             if (arguments.length != 1 || !arguments[0].isString()) {
                 throw new IllegalArgumentException("executeCommand_requires_one_string");
             }
-            NativeScriptExecution call = activeCall;
-            if (CURRENT.get() != this || call == null || closing.get() || closed || forced || call.shouldStop()) {
-                throw new IllegalStateException("native_command_context_inactive");
-            }
-            validate();
+            requireActiveInvocation("native_command_context_inactive");
             // The native adapter has already installed this invocation's real Client.
             // A returned handler is only a dispatch fact, not proof of a game effect.
             return ScriptValues.json(NativeCommandExecutor.execute(
@@ -145,6 +148,53 @@ public final class NativeScriptSession {
         } finally {
             engine().getBindings(ScriptContext.ENGINE_SCOPE).remove(temporary);
         }
+    }
+
+    /** Only detached JSON crosses the native guest's module directory boundary. */
+    @SuppressWarnings("unchecked")
+    private void bindModuleCapabilities() {
+        String helpBridge = "__soloModuleHelpBridge";
+        String callBridge = "__soloModuleCallBridge";
+        engine().put(helpBridge, (ProxyExecutable) arguments -> {
+            if (arguments.length != 0) throw new IllegalArgumentException("modules_help_requires_no_arguments");
+            requireActiveInvocation("module_function_context_inactive");
+            return ScriptValues.json(capabilities.help());
+        });
+        engine().put(callBridge, (ProxyExecutable) arguments -> {
+            if (arguments.length != 2 || !arguments[0].isString()) {
+                throw new IllegalArgumentException("modules_call_requires_name_and_arguments");
+            }
+            requireActiveInvocation("module_function_context_inactive");
+            Object detached = ScriptValues.detachedJson(arguments[1]);
+            if (!(detached instanceof Map<?, ?>)) throw new IllegalArgumentException("modules_call_requires_object_arguments");
+            return ScriptValues.json(capabilities.call(arguments[0].asString(), (Map<String, Object>) detached));
+        });
+        try {
+            engine().eval("""
+                    (function (help, call, parse) {
+                        globalThis.modules = Object.freeze({
+                            help: function () { return parse(help(...arguments)); },
+                            call: function (name, args) { return parse(call(...arguments)); }
+                        });
+                    })(__soloModuleHelpBridge, __soloModuleCallBridge, JSON.parse);
+                    delete globalThis.__soloModuleHelpBridge;
+                    delete globalThis.__soloModuleCallBridge;
+                    """);
+        } catch (ScriptException failure) {
+            recordFailure(failure);
+            throw new IllegalStateException("module_function_binding_failed");
+        } finally {
+            engine().getBindings(ScriptContext.ENGINE_SCOPE).remove(helpBridge);
+            engine().getBindings(ScriptContext.ENGINE_SCOPE).remove(callBridge);
+        }
+    }
+
+    private void requireActiveInvocation(String inactiveReason) {
+        NativeScriptExecution call = activeCall;
+        if (CURRENT.get() != this || call == null || closing.get() || closed || forced || call.shouldStop()) {
+            throw new IllegalStateException(inactiveReason);
+        }
+        validate();
     }
 
     void bindParameters(Map<String, Object> parameters) {

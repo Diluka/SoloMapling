@@ -36,6 +36,8 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleDefinition;
+import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
@@ -421,8 +423,9 @@ class NativeScriptWorldExecutionTest {
             var work = runtime.acceptOpeningWork();
             runtime.submitOpening(work, () -> { runtime.reserveOrigin(work).adopt(this); runtime.bindAdoptedOrigin(); }, () -> {});
             work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            context = runtime.context(runtime.mount(new RuntimeModule.Spec("script-world", kind, Set.of("native-script"),
-                    new ExecutionScope.Limits(16, 4, 16, 4)), new RuntimeModule() {}, true));
+            var definition = new ModuleDefinition<Void, RuntimeModule>("script-world", Set.of(), Set.of("native-script"),
+                    new ExecutionScope.Limits(16, 4, 16, 4), config -> {}, config -> new RuntimeModule() {}, List.of());
+            context = runtime.context(runtime.mount(definition, new ModuleSelection<>(kind, null, true)).reference());
         }
         Portal portal(String script) {
             Portal portal = mock(Portal.class);

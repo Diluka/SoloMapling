@@ -69,9 +69,25 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 ## 帮助
 
-`script_help(session_id, expected_generation)` 只读返回 `schema_version/language/native_environments/contexts/maximum_contexts_per_module`。`native_environments` 与实际适配器说明同源，列出对象类型、选择参数、原入口和所有权；`contexts` 列当前模块的存活上下文。它不创建脚本工作或 operation。
+`script_help(session_id, expected_generation)` 只读返回 `schema_version/language/native_environments/contexts/maximum_contexts_per_module/module_functions`。`native_environments` 与实际适配器说明同源，列出对象类型、选择参数、原入口和所有权；`contexts` 列当前模块的存活上下文。`module_functions` 列运行体内模块声明的共享函数、参数、结果说明、来源实例及代次和当前可用性。帮助不创建脚本工作或 operation。
 
-帮助不再接收 `names`，不返回已移除的纯函数 `functions/unavailable` 目录，也不为北斗每个已有 Java 方法另造一套同义函数。
+帮助不接收 `names`。模块函数来自实际装配的定义，说明、参数校验和绑定同源；北斗已有 Java 方法仍使用原对象 API。当前没有业务函数预装时，`module_functions` 返回空列表。
+
+## 模块函数命名空间
+
+当前受管北斗引擎提供 `modules.help()` 和 `modules.call(name, args)`，后者的 `args` 为 JSON 对象。它们读取与 `script_help.module_functions` 相同的目录，按当前精确实例和执行代次调用：
+
+```javascript
+(() => {
+    const functions = modules.help();
+    const result = modules.call("example.counter.next", {label: "本次调用"});
+    return {functions: functions, call: result};
+})()
+```
+
+这里的函数名来自[模块协议示例](modules.md#最小协议示例)，仅在对应示例模块已装配时可用。成功调用返回 `{status: "SUCCEEDED", result: ...}`；函数缺失、提供者停用或未激活时正常返回 `{status: "UNAVAILABLE", function: name, reason: ...}`，脚本可以据此选择后续流程。未知参数、必填参数缺失、类型不符或执行异常沿现有脚本错误契约报告。
+
+`modules` 绑定在原 `kind/operation` 选定的北斗上下文中。`cm/qm/pi/rm/em` 的对象来源和适用范围，以及 `executeCommand` 的现有命令行为保持原契约。模块定义、装配与受管执行见[机器人模块参考](modules.md)。
 
 ## 归属、取消和真实收尾
 

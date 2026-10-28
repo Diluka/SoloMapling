@@ -8,6 +8,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
+import org.gms.soloacceptance.actor.McpControlModule;
 import soloMapling.game.action.NativeActionFact;
 import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.context.GameContext;
@@ -169,6 +170,181 @@ class CharacterRuntimeTest {
     }
 
     @Test
+    void assemblyReservesAllDeclaredSlotsAndKeepsPausedMcpControlExclusive() {
+        Fixture fixture = opened();
+        var mcp = fixture.runtime.mount(McpControlModule.DEFINITION,
+                new ModuleSelection<>("mcp", Map.<String, Object>of(), true)).reference();
+        fixture.runtime.stop(mcp, CharacterRuntime.StopMode.PAUSE).await(WAIT);
+        AtomicInteger creations = new AtomicInteger();
+        var composite = definition(Set.of(ModuleSlots.CONTROLLER, ModuleSlots.NAVIGATION), () -> {
+            creations.incrementAndGet();
+            return new RuntimeModule() {};
+        }, List.of());
+        var conflict = assertThrows(CharacterRuntime.Invalid.class,
+                () -> fixture.runtime.mount(composite, new ModuleSelection<>("autonomous", null, true)));
+        assertEquals("module_slot_busy", conflict.reason());
+        assertEquals(0, creations.get());
+        assertTrue(fixture.slot(ModuleSlots.NAVIGATION).occupants().isEmpty());
+        assertEquals(List.of("mcp"), fixture.slot(ModuleSlots.CONTROLLER).occupants());
+
+        fixture.runtime.stop(mcp, CharacterRuntime.StopMode.UNLOAD).await(WAIT);
+        var mounted = fixture.runtime.mount(composite, new ModuleSelection<>("autonomous", null, true));
+        assertEquals(1, creations.get());
+        assertEquals(List.of("autonomous"), fixture.slot(ModuleSlots.CONTROLLER).occupants());
+        assertEquals(List.of("autonomous"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
+        fixture.runtime.stop(mounted.reference(), CharacterRuntime.StopMode.UNLOAD).await(WAIT);
+        assertTrue(fixture.slot(ModuleSlots.CONTROLLER).occupants().isEmpty());
+        assertTrue(fixture.slot(ModuleSlots.NAVIGATION).occupants().isEmpty());
+    }
+
+    @Test
+    void initializationFailureKeepsItsReservationUntilTheCreatedResourceReallyLeaves() {
+        Fixture fixture = opened();
+        AtomicReference<CharacterRuntime.ModuleContext> context = new AtomicReference<>();
+        AtomicReference<ScopeResources.Registration> subscription = new AtomicReference<>();
+        Object listener = new Object();
+        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+            @Override public void onActivated(CharacterRuntime.ModuleContext active) {
+                context.set(active);
+                var resource = active.scope().resources().beginRegistration("module-listener");
+                resource.attach(listener, () -> {});
+                subscription.set(resource);
+                throw new IllegalStateException("initialization failed after subscribing");
+            }
+        }, List.of());
+        assertEquals("module_activation_failed", assertThrows(CharacterRuntime.Invalid.class,
+                () -> fixture.runtime.mount(definition, new ModuleSelection<>("broken", null, true))).reason());
+        assertEquals(List.of("broken"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
+        assertEquals(CharacterRuntime.ModuleState.STOPPING, fixture.module("broken").state());
+
+        var cleanup = subscription.get().acquireCleanup();
+        context.get().submitCleanup(cleanup, () -> subscription.get().confirmReleased(cleanup.permit(), listener), () -> {});
+        fixture.runQueued();
+        assertTrue(fixture.slot(ModuleSlots.NAVIGATION).occupants().isEmpty());
+        var replacement = fixture.runtime.mount(definition(Set.of(ModuleSlots.NAVIGATION),
+                () -> new RuntimeModule() {}, List.of()), new ModuleSelection<>("replacement", null, true));
+        assertNotNull(fixture.runtime.context(replacement.reference()));
+        assertTrue(fixture.role.online);
+    }
+
+    @Test
+    void exportsBecomeAvailableOnlyAfterTheProviderFinishesInitializing() throws Exception {
+        Fixture fixture = opened();
+        var caller = fixture.runtime.context(fixture.mount("caller", Set.of()));
+        CountDownLatch initializing = new CountDownLatch(1), initialized = new CountDownLatch(1);
+        var function = new ModuleFunction<RuntimeModule>("sample.ready", "Read initialized module state", List.of(),
+                "Returns ready after module initialization", (instance, context, work, arguments) -> "ready");
+        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+            @Override public void onActivated(CharacterRuntime.ModuleContext context) {
+                initializing.countDown();
+                await(initialized);
+            }
+        }, List.of(function));
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var mounting = executor.submit(() -> fixture.runtime.mount(definition, new ModuleSelection<>("provider", null, true)));
+            try {
+                await(initializing);
+                assertEquals("module_initializing", caller.call("sample.ready", Map.of()).get("reason"));
+                assertEquals(false, caller.help().getFirst().get("available"));
+                initialized.countDown();
+                mounting.get(5, TimeUnit.SECONDS);
+                assertEquals("ready", caller.call("sample.ready", Map.of()).get("result"));
+            } finally { initialized.countDown(); }
+        }
+    }
+
+    @Test
+    void failedInitializationCannotEraseItsCleanupFailureWhenUpgradingToUnload() {
+        Fixture fixture = opened();
+        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+            @Override public void onActivated(CharacterRuntime.ModuleContext context) {
+                throw new IllegalStateException("initialization failed");
+            }
+            @Override public void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) {
+                throw new IllegalStateException("cleanup remains unverified");
+            }
+        }, List.of());
+        assertThrows(CharacterRuntime.Invalid.class,
+                () -> fixture.runtime.mount(definition, new ModuleSelection<>("broken", null, true)));
+        assertEquals(CharacterRuntime.ModuleState.FAILED, fixture.module("broken").state());
+        assertEquals("module_stop_hook_failed", fixture.module("broken").reason());
+        assertEquals(List.of("broken"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
+        assertEquals("module_slot_busy", assertThrows(CharacterRuntime.Invalid.class,
+                () -> fixture.runtime.mount(definition, new ModuleSelection<>("replacement", null, true))).reason());
+    }
+
+    @Test
+    void reusableDefinitionKeepsConfigurationAndPrivateProgressSeparateAcrossRoles() {
+        Fixture first = opened(), second = opened();
+        class Counter implements RuntimeModule {
+            int value;
+            Counter(int initial) { value = initial; }
+        }
+        var add = new ModuleFunction<Counter>("sample.add", "Advance this module's private progress",
+                List.of(new ModuleFunction.Parameter("amount", ModuleFunction.Type.INTEGER, true, "Progress increment")),
+                "Returns the updated private progress", (instance, context, work, arguments) ->
+                instance.value += ((Number) arguments.get("amount")).intValue());
+        var definition = new ModuleDefinition<Integer, Counter>("counter", Set.of(), Set.of(),
+                new ExecutionScope.Limits(8, 2, 8, 2), initial -> {}, Counter::new, List.of(add));
+        var providerOne = first.runtime.mount(definition, new ModuleSelection<>("counter", 1, true));
+        second.runtime.mount(definition, new ModuleSelection<>("counter", 10, true));
+        var callerOne = first.runtime.context(first.mount("caller", Set.of()));
+        var callerTwo = second.runtime.context(second.mount("caller", Set.of()));
+        assertEquals(3, callerOne.call("sample.add", Map.of("amount", 2)).get("result"));
+        assertEquals(12, callerTwo.call("sample.add", Map.of("amount", 2)).get("result"));
+        assertEquals(5, callerOne.call("sample.add", Map.of("amount", 2)).get("result"));
+        assertEquals("sample.add", callerOne.help().getFirst().get("name"));
+        assertThrows(IllegalArgumentException.class, () -> callerOne.call("sample.add", Map.of("amount", "two")));
+        assertEquals(5, providerOne.instance().value);
+        assertEquals("function_missing", callerOne.call("missing.function", Map.of()).get("reason"));
+        var duplicate = assertThrows(CharacterRuntime.Invalid.class,
+                () -> first.runtime.mount(definition, new ModuleSelection<>("duplicate", 0, true)));
+        assertEquals("module_function_exists", duplicate.reason());
+
+        first.runtime.stop(providerOne.reference(), CharacterRuntime.StopMode.PAUSE).await(WAIT);
+        assertEquals(false, callerOne.help().getFirst().get("available"));
+        assertEquals("UNAVAILABLE", callerOne.call("sample.add", Map.of("amount", 2)).get("status"));
+        var resumed = first.runtime.activate(providerOne.reference());
+        assertEquals(7, callerOne.call("sample.add", Map.of("amount", 2)).get("result"));
+        first.runtime.stop(resumed, CharacterRuntime.StopMode.UNLOAD).await(WAIT);
+        assertTrue(callerOne.help().isEmpty());
+        assertEquals("function_missing", callerOne.call("sample.add", Map.of()).get("reason"));
+    }
+
+    @Test
+    void unloadingAnExportProviderWaitsForItsActualInvocationToExit() throws Exception {
+        Fixture fixture = opened();
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        AtomicBoolean unloaded = new AtomicBoolean();
+        var function = new ModuleFunction<RuntimeModule>("sample.wait", "Finish an accepted task", List.of(),
+                "Completes after the accepted task exits", (instance, context, work, arguments) -> {
+                    entered.countDown();
+                    await(release);
+                    return "finished";
+                });
+        var provider = fixture.runtime.mount(definition(Set.of(ModuleSlots.COMBAT), () -> new RuntimeModule() {
+            @Override public void onUnloaded() { unloaded.set(true); }
+        }, List.of(function)), new ModuleSelection<>("provider", null, true));
+        var caller = fixture.runtime.context(fixture.mount("caller", Set.of()));
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var invocation = executor.submit(() -> caller.call("sample.wait", Map.of()));
+            try {
+                await(entered);
+                var stop = fixture.runtime.stop(provider.reference(), CharacterRuntime.StopMode.UNLOAD);
+                assertFalse(stop.complete());
+                assertFalse(unloaded.get());
+                assertEquals(List.of("provider"), fixture.slot(ModuleSlots.COMBAT).occupants());
+                assertEquals("UNAVAILABLE", caller.call("sample.wait", Map.of()).get("status"));
+                release.countDown();
+                assertEquals("finished", invocation.get(5, TimeUnit.SECONDS).get("result"));
+                assertEquals(ExecutionScope.DrainResult.DRAINED, stop.await(WAIT));
+                assertTrue(unloaded.get());
+                assertTrue(fixture.slot(ModuleSlots.COMBAT).occupants().isEmpty());
+            } finally { release.countDown(); }
+        }
+    }
+
+    @Test
     void cancellingQueuedWorkSkipsItsBodyButKeepsTheCarrierUntilPhysicalSettlement() {
         Fixture fixture = opened();
         var context = fixture.runtime.context(fixture.mount("mcp", Set.of("chat")));
@@ -224,7 +400,7 @@ class CharacterRuntimeTest {
     void completedPauseCanUpgradeToUnloadWithoutInvokingTheStopHookTwice() {
         Fixture fixture = opened();
         AtomicInteger stopped = new AtomicInteger(), unloaded = new AtomicInteger();
-        var reference = fixture.runtime.mount(spec("mcp", Set.of("chat")), new RuntimeModule() {
+        var reference = fixture.mount("mcp", Set.of("chat"), new RuntimeModule() {
             @Override public void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) { stopped.incrementAndGet(); }
             @Override public void onUnloaded() { unloaded.incrementAndGet(); }
         }, true);
@@ -321,12 +497,11 @@ class CharacterRuntimeTest {
     @Test
     void activationFailureReleasesControlWithoutClosingTheOrigin() {
         Fixture fixture = opened();
-        var failure = assertThrows(CharacterRuntime.Invalid.class, () -> fixture.runtime.mount(spec("bad", Set.of("chat")),
-                new RuntimeModule() {
+        var failure = assertThrows(CharacterRuntime.Invalid.class, () -> fixture.mount("bad", Set.of("chat"), new RuntimeModule() {
                     @Override public void onActivated(CharacterRuntime.ModuleContext context) { throw new IllegalStateException("private hook text"); }
                 }, true));
         assertEquals("module_activation_failed", failure.reason());
-        assertNotEquals(CharacterRuntime.ModuleState.ACTIVE, fixture.module("bad").state());
+        assertTrue(fixture.runtime.snapshot().modules().isEmpty());
         assertEquals("module_activation_failed", fixture.runtime.snapshot().failure());
         assertNotNull(fixture.runtime.context(fixture.mount("replacement", Set.of("chat"))));
         assertTrue(fixture.role.online);
@@ -336,7 +511,7 @@ class CharacterRuntimeTest {
     @Test
     void stopHookFailureRemainsVisibleWhileDrainedControlCanBeReused() {
         Fixture fixture = opened();
-        var reference = fixture.runtime.mount(spec("bad", Set.of("chat")), new RuntimeModule() {
+        var reference = fixture.mount("bad", Set.of("chat"), new RuntimeModule() {
             @Override public void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) {
                 throw new IllegalStateException("private hook text");
             }
@@ -351,16 +526,21 @@ class CharacterRuntimeTest {
     }
 
     @Test
-    void unloadHookFailureDoesNotRestoreAnUnloadedModuleOrLogOutItsRole() {
+    void unloadHookFailureKeepsTheFailedInstanceUntilItsCleanupIsVerified() {
         Fixture fixture = opened();
-        var reference = fixture.runtime.mount(spec("bad", Set.of("chat")), new RuntimeModule() {
+        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
             @Override public void onUnloaded() { throw new IllegalStateException("private hook text"); }
-        }, true);
-        assertTrue(fixture.runtime.stop(reference, CharacterRuntime.StopMode.UNLOAD).complete());
-        assertTrue(fixture.runtime.snapshot().modules().isEmpty());
+        }, List.of());
+        var reference = fixture.runtime.mount(definition, new ModuleSelection<>("bad", null, true)).reference();
+        var stop = fixture.runtime.stop(reference, CharacterRuntime.StopMode.UNLOAD);
+        assertFalse(stop.complete());
+        assertEquals(ExecutionScope.DrainResult.UNVERIFIED, stop.await(Duration.ZERO));
+        assertEquals(CharacterRuntime.ModuleState.FAILED, fixture.module("bad").state());
         assertEquals("module_unload_hook_failed", fixture.runtime.snapshot().failure());
         assertTrue(fixture.role.online);
-        assertNotNull(fixture.runtime.context(fixture.mount("replacement", Set.of("chat"))));
+        assertEquals(List.of("bad"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
+        assertEquals("module_slot_busy", assertThrows(CharacterRuntime.Invalid.class,
+                () -> fixture.runtime.mount(definition, new ModuleSelection<>("replacement", null, true))).reason());
     }
 
     @Test
@@ -489,7 +669,7 @@ class CharacterRuntimeTest {
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
         AtomicReference<CharacterRuntime.ModuleContext> activating = new AtomicReference<>();
         try (ExecutorService caller = Executors.newSingleThreadExecutor()) {
-            var mounting = caller.submit(() -> fixture.runtime.mount(spec("mcp", Set.of("chat")), new RuntimeModule() {
+            var mounting = caller.submit(() -> fixture.mount("mcp", Set.of("chat"), new RuntimeModule() {
                 @Override public void onActivated(CharacterRuntime.ModuleContext context) {
                     activating.set(context);
                     entered.countDown();
@@ -523,7 +703,7 @@ class CharacterRuntimeTest {
     void anUnloadHookStillRunningIsNeitherCompletedNorPermissionToReleaseTheRole() throws Exception {
         Fixture fixture = opened();
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
-        var reference = fixture.runtime.mount(spec("mcp", Set.of("chat")), new RuntimeModule() {
+        var reference = fixture.mount("mcp", Set.of("chat"), new RuntimeModule() {
             @Override public void onUnloaded() { entered.countDown(); await(release); }
         }, true);
         try (ExecutorService caller = Executors.newSingleThreadExecutor()) {
@@ -602,7 +782,7 @@ class CharacterRuntimeTest {
     void concurrentModuleUnloadCannotAbortTheRemainingRootCloseAndDrain() throws Exception {
         Fixture fixture = opened();
         CountDownLatch stopping = new CountDownLatch(1), release = new CountDownLatch(1);
-        fixture.runtime.mount(spec("first", Set.of("movement")), new RuntimeModule() {
+        fixture.mount("first", Set.of("movement"), new RuntimeModule() {
             @Override public void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) {
                 stopping.countDown();
                 await(release);
@@ -745,8 +925,10 @@ class CharacterRuntimeTest {
         return fixture;
     }
     private Fixture opened() { Fixture fixture = manual(); fixture.open(); return fixture; }
-    private static RuntimeModule.Spec spec(String name, Set<String> controls) {
-        return new RuntimeModule.Spec("test-module", name, controls, new ExecutionScope.Limits(16, 4, 16, 4));
+    private static ModuleDefinition<Void, RuntimeModule> definition(Set<String> slots,
+            java.util.function.Supplier<RuntimeModule> factory, List<ModuleFunction<RuntimeModule>> functions) {
+        return new ModuleDefinition<>("test-module", slots, Set.of(), new ExecutionScope.Limits(16, 4, 16, 4),
+                ignored -> {}, ignored -> factory.get(), functions);
     }
 
     private static void await(CountDownLatch latch) {
@@ -787,10 +969,18 @@ class CharacterRuntimeTest {
             assertEquals(CharacterRuntime.State.BOUND, runtime.snapshot().state());
         }
         CharacterRuntime.ModuleRef mount(String instance, Set<String> controls) {
-            return runtime.mount(spec(instance, controls), new RuntimeModule() {}, true);
+            return mount(instance, controls, new RuntimeModule() {}, true);
+        }
+        CharacterRuntime.ModuleRef mount(String instance, Set<String> controls, RuntimeModule module, boolean enabled) {
+            var definition = new ModuleDefinition<Void, RuntimeModule>("test-module", Set.of(), controls,
+                    new ExecutionScope.Limits(16, 4, 16, 4), ignored -> {}, ignored -> module, List.of());
+            return runtime.mount(definition, new ModuleSelection<>(instance, null, enabled)).reference();
         }
         CharacterRuntime.ModuleSnapshot module(String instance) {
             return runtime.snapshot().modules().stream().filter(module -> module.instanceId().equals(instance)).findFirst().orElseThrow();
+        }
+        CharacterRuntime.SlotSnapshot slot(String id) {
+            return runtime.snapshot().slots().stream().filter(slot -> slot.id().equals(id)).findFirst().orElseThrow();
         }
         ScopeResources.CleanupAttempt cleanupOrigin() {
             var attempt = runtime.acquireOriginCleanup();
