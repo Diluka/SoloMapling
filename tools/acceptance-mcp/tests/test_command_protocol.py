@@ -226,4 +226,3 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.structured_content["error"]["outcome_unknown"])
         self.assertEqual(self.args["request_id"], response.structured_content["request_id"])
         self.assertEqual(1, len(self.command_requests()))
-
