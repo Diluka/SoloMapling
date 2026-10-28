@@ -13,6 +13,11 @@ import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeInventoryActions;
 import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.action.InventoryMoveResult;
+import soloMapling.game.action.NativeBasicActions;
+import soloMapling.game.action.NativeBasicResult;
+import soloMapling.game.action.NativeMovementActions;
+import soloMapling.game.action.NativeAttackActions;
+import soloMapling.game.action.NativeItemActions;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
@@ -280,7 +285,12 @@ public final class ActorControlService {
                 text == null ? null : textDigest(text), dialogueVersion, replyKind, selection,
                 request.parameters() == null ? null : request.parameters().inventoryType(),
                 request.parameters() == null ? null : request.parameters().sourceSlot(),
-                request.parameters() == null ? null : request.parameters().targetSlot(), context);
+                request.parameters() == null ? null : request.parameters().targetSlot(),
+                request.parameters() == null ? null : request.parameters().direction(),
+                request.parameters() == null ? null : request.parameters().durationMs(),
+                request.parameters() == null ? null : request.parameters().targetOid(),
+                request.parameters() == null ? null : request.parameters().objectId(),
+                request.parameters() == null ? null : request.parameters().quantity(), context);
         RequestKey key = new RequestKey("ACTION", owner, request.sessionId(), requestId);
         Operation prior;
         Session session;
@@ -309,6 +319,7 @@ public final class ActorControlService {
         try {
             validateNativeAction(handle, request.action(), text, dialogueVersion, replyKind, selection);
             if ("inventory_move".equals(request.action())) backend.validateInventoryMove(handle, inventoryMove(request.parameters()));
+            if (ActorBasicRequests.supports(request.action())) backend.validateBasic(handle, request.action(), request.parameters());
             validateActionContext(handle, context);
         } catch (RuntimeException failure) {
             synchronized (monitor) { prior = duplicate(key, fingerprint); }
@@ -355,6 +366,20 @@ public final class ActorControlService {
                             inventoryMove(request.parameters()), context);
                     if (receipt != null && receipt.status() == NativeActionService.SubmissionStatus.REJECTED) {
                         throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
+                    }
+                } else if (ActorBasicRequests.supports(accepted.action)) {
+                    NativeActionService.SubmissionReceipt receipt = submitBasic(acceptedSession, accepted, acceptedHandle,
+                            request.parameters(), context);
+                    if (receipt != null && receipt.status() == NativeActionService.SubmissionStatus.REJECTED) {
+                        if (receipt.rejection() == NativeActionService.SubmissionRejection.CAPACITY
+                                || receipt.rejection() == NativeActionService.SubmissionRejection.EXECUTOR) {
+                            throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
+                        }
+                        synchronized (monitor) {
+                            // Inline authority/state rejection may already have a precise native
+                            // result (for example movement_busy). Preserve that same operation.
+                            if (!terminal(accepted.status)) throw error(HttpStatus.CONFLICT, "actor_command_rejected");
+                        }
                     }
                 } else {
                     try {
@@ -514,7 +539,11 @@ public final class ActorControlService {
             if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
-            result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"));
+            result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
+                    "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip"));
+            result.put("movement", NativeMovementActions.capabilities());
+            result.put("attack", NativeAttackActions.capabilities());
+            result.put("items", NativeItemActions.capabilities());
             result.put("inventory_move", Map.of("inventory_types", List.of("EQUIP", "USE", "SETUP", "ETC", "CASH"),
                     "minimum_slot", 1, "maximum_slot", 127, "native_minimum_interval_ms", 300,
                     "semantics", "native_whole_slot_move_swap_or_merge"));
@@ -753,6 +782,108 @@ public final class ActorControlService {
         }
     }
 
+    private NativeActionService.SubmissionReceipt submitBasic(Session session, Operation operation, NativeActorHandle handle,
+                                                              ActorActRequest.Parameters parameters,
+                                                              ActorActRequest.ExpectedContext context) {
+        ExecutionScope.WorkHandle actualWork = operation.work;
+        try {
+            NativeBasicActions.Handle action = session.execution.prepareBasic(actualWork, handle, operation.action, parameters,
+                    () -> validateActionEntry(session, operation, handle, context));
+            synchronized (monitor) { operation.basicAction = action; }
+            action.result().whenComplete((result, failure) -> basicCompleted(operation, action, result, failure));
+            validateActionContext(handle, context);
+            return session.execution.submitBasic(action);
+        } catch (Throwable failure) {
+            ExecutionScope.WorkSnapshot fact = actualWork.snapshot();
+            synchronized (monitor) {
+                if (!terminal(operation.status)) {
+                    if (fact.carrierClaimed() && !fact.settled() && !fact.rejected()) {
+                        operation.step = "native_basic_submission_confirmation_pending";
+                        event(operation, operation.step);
+                    } else if (actionCancelled(session, operation)) cancelledBeforeAction(operation);
+                    else basicFailedBeforeDispatch(operation, safeReason(failure, "native_basic_validation_failed"));
+                }
+            }
+            if (!fact.carrierClaimed()) {
+                synchronized (monitor) { operation.basicAction = null; }
+                actualWork.reject();
+            }
+            return null;
+        }
+    }
+
+    private void basicCompleted(Operation operation, NativeBasicActions.Handle source, NativeBasicResult result, Throwable failure) {
+        CharacterRuntime.ModuleContext acceptedContext;
+        ExecutionScope.WorkHandle acceptedWork;
+        synchronized (monitor) {
+            if (operation.basicAction != source || terminal(operation.status)) return;
+            acceptedContext = operation.moduleContext;
+            acceptedWork = operation.work;
+        }
+        if (failure == null && result != null && acceptedContext != null && acceptedWork != null) {
+            try { acceptedContext.recordResult(acceptedWork, result); }
+            catch (RuntimeException diagnosticFailure) { /* A late native fact does not restore control authority. */ }
+        }
+        synchronized (monitor) {
+            if (operation.basicAction != source || terminal(operation.status)) return;
+            if (failure == null && result != null) finishBasic(operation, result);
+            else basicResultUnavailable(operation, source.dispatchStarted());
+        }
+    }
+
+    private void finishBasic(Operation operation, NativeBasicResult outcome) {
+        operation.dispatchStarted = outcome.dispatch() == NativeActionResult.Dispatch.STARTED;
+        if (outcome.outcome() == NativeActionResult.Outcome.CANCELLED && !operation.dispatchStarted) {
+            cancelledBeforeAction(operation);
+            return;
+        }
+        String reason = !operation.dispatchStarted && operation.actionEntryFailure != null
+                ? operation.actionEntryFailure : outcome.fixedReason();
+        if (outcome.outcome() == NativeActionResult.Outcome.FAILED && !operation.dispatchStarted) {
+            basicFailedBeforeDispatch(operation, reason == null ? "native_basic_validation_failed" : reason);
+            return;
+        }
+        String observed = switch (outcome.outcome()) {
+            case SUCCEEDED -> "native_" + operation.action + "_observed";
+            case FAILED -> "native_" + operation.action + "_not_observed";
+            case CANCELLED -> "native_" + operation.action + "_stopped";
+            default -> "native_" + operation.action + "_outcome_unknown";
+        };
+        Map<String, Object> fields = new LinkedHashMap<>(outcome.facts());
+        fields.put("observed_outcome", observed);
+        fields.put("native_dispatch_started", operation.dispatchStarted);
+        fields.put("sender_character_id", outcome.senderCharacterId());
+        fields.put("native_handler_error", outcome.handlerError());
+        fields.put("native_cancel_requested", outcome.cancelRequested());
+        boolean stoppedMovement = "move".equals(operation.action) && Boolean.TRUE.equals(outcome.facts().get("movement_stopped"))
+                && !Boolean.TRUE.equals(outcome.facts().get("completed_duration"));
+        fields.put("cancel_too_late", operation.dispatchStarted && operation.cancelRequested && !stoppedMovement);
+        operation.result = fields;
+        operation.error = outcome.outcome() == NativeActionResult.Outcome.SUCCEEDED
+                || outcome.outcome() == NativeActionResult.Outcome.CANCELLED ? null
+                : Map.of("reason", reason == null ? observed : reason);
+        finish(operation, outcome.outcome().name(), reason == null ? observed : reason);
+    }
+
+    private void basicFailedBeforeDispatch(Operation operation, String reason) {
+        operation.result = Map.of("observed_outcome", "action_not_dispatched", "native_dispatch_started", false,
+                "cancel_too_late", false);
+        operation.error = Map.of("reason", reason);
+        finish(operation, "FAILED", reason);
+    }
+
+    private void basicResultUnavailable(Operation operation, boolean started) {
+        operation.dispatchStarted = started;
+        if (!started && actionCancelled(operation.session, operation)) cancelledBeforeAction(operation);
+        else if (!started) basicFailedBeforeDispatch(operation, "native_basic_result_unavailable");
+        else {
+            operation.result = Map.of("observed_outcome", "native_" + operation.action + "_outcome_unknown",
+                    "native_dispatch_started", true, "cancel_too_late", operation.cancelRequested);
+            operation.error = Map.of("reason", "native_basic_outcome_unknown");
+            finish(operation, "INDETERMINATE", "native_basic_outcome_unknown");
+        }
+    }
+
     private void validateActionEntry(Session session, Operation operation, NativeActorHandle handle,
                                    ActorActRequest.ExpectedContext context) {
         try {
@@ -770,8 +901,7 @@ public final class ActorControlService {
                 requireActionSession(session, handle);
             }
         } catch (ObservationException failure) {
-            synchronized (monitor) { operation.actionEntryFailure = safeReason(failure, "inventory_move".equals(operation.action)
-                        ? "native_inventory_validation_failed" : "native_chat_validation_failed"); }
+            synchronized (monitor) { operation.actionEntryFailure = safeReason(failure, "native_action_validation_failed"); }
             throw failure;
         } catch (RuntimeException unavailable) {
             synchronized (monitor) { operation.actionEntryFailure = "actor_observation_unavailable"; }
@@ -951,6 +1081,7 @@ public final class ActorControlService {
 
     private void validateNativeAction(NativeActorHandle handle, String action, String text, Long dialogueVersion,
                                       String replyKind, Integer selection) {
+        if (ActorBasicRequests.supports(action)) return; // Typed parameters are checked by validateBasic.
         switch (action) {
             case "chat" -> backend.validateChat(handle, text);
             case "inventory_move" -> { /* The typed inventory parameters are validated separately. */ }
@@ -962,10 +1093,18 @@ public final class ActorControlService {
     }
 
     private static void validateActionParameters(String action, ActorActRequest.Parameters parameters) {
+        if (ActorBasicRequests.supports(action)) {
+            ActorBasicRequests.validate(action, parameters);
+            return;
+        }
         if (action == null || !List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move").contains(action)) {
             throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
         }
         if (parameters == null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+        if (parameters.direction() != null || parameters.durationMs() != null || parameters.targetOid() != null
+                || parameters.objectId() != null || parameters.quantity() != null) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+        }
         if ("inventory_move".equals(action)) {
             if (parameters.text() != null || parameters.dialogueVersion() != null
                     || parameters.kind() != null || parameters.selection() != null) {
@@ -1200,14 +1339,17 @@ public final class ActorControlService {
                 if (operation != null) operation.work = attempt.work();
             }
             attempt.work().completion().whenComplete((fact, failure) -> closeCompleted(session, operation, attempt.work()));
-            CharacterCommandLane.Submission submission = session.execution.submitCleanup(attempt,
-                    () -> runClose(session, operation, exactHandle, attempt),
-                    () -> cleanupSettled(session, operation, attempt.work()));
-            if (submission.status() == CharacterCommandLane.Status.REJECTED
-                    || submission.status() == CharacterCommandLane.Status.CLEANUP_PENDING
-                    || submission.status() == CharacterCommandLane.Status.DUPLICATE) {
-                synchronized (monitor) { cleanupSubmissionFailed(session, operation, "actor_queue_full"); }
-            }
+            session.execution.submitCleanup(attempt, () -> runClose(session, operation, exactHandle, attempt),
+                    () -> cleanupSettled(session, operation, attempt.work())).whenComplete((submission, failure) -> {
+                if (failure != null) {
+                    if (!attempt.work().snapshot().carrierClaimed()) attempt.work().reject();
+                    synchronized (monitor) { cleanupSubmissionFailed(session, operation, "actor_close_cleanup_unverified_scope"); }
+                } else if (submission.status() == CharacterCommandLane.Status.REJECTED
+                        || submission.status() == CharacterCommandLane.Status.CLEANUP_PENDING
+                        || submission.status() == CharacterCommandLane.Status.DUPLICATE) {
+                    synchronized (monitor) { cleanupSubmissionFailed(session, operation, "actor_queue_full"); }
+                }
+            });
         } catch (RuntimeException unavailable) {
             synchronized (monitor) { cleanupSubmissionFailed(session, operation, "actor_close_cleanup_unverified_scope"); }
         }
@@ -1303,10 +1445,14 @@ public final class ActorControlService {
             if ("inventory_move".equals(operation.action) && !terminal(operation.status)) {
                 inventoryResultUnavailable(operation, nativeDispatchStarted(operation));
             }
+            if (ActorBasicRequests.supports(operation.action) && !terminal(operation.status)) {
+                basicResultUnavailable(operation, nativeDispatchStarted(operation));
+            }
             releaseActionSlot(operation);
             operation.work = null;
             operation.chatAction = null;
             operation.inventoryAction = null;
+            operation.basicAction = null;
             operation.moduleContext = null;
             monitor.notifyAll();
         }
@@ -1401,6 +1547,10 @@ public final class ActorControlService {
         if (!terminal(operation.status) && !operation.cancelRequested && nativeDispatchStarted(operation)
                 && !"native_chat_dispatch_started".equals(operation.step) && "chat".equals(operation.action)) {
             running(operation, "native_chat_dispatch_started");
+        }
+        if (!terminal(operation.status) && !operation.cancelRequested && nativeDispatchStarted(operation)
+                && ActorBasicRequests.supports(operation.action) && !"native_basic_dispatch_started".equals(operation.step)) {
+            running(operation, "native_basic_dispatch_started");
         }
         Session session = operation.session;
         Map<String, Object> sessionData = new LinkedHashMap<>();
@@ -1507,6 +1657,7 @@ public final class ActorControlService {
     private static boolean nativeDispatchStarted(Operation operation) {
         if (operation.chatAction != null && operation.chatAction.dispatchStarted()) operation.dispatchStarted = true;
         if (operation.inventoryAction != null && operation.inventoryAction.dispatchStarted()) operation.dispatchStarted = true;
+        if (operation.basicAction != null && operation.basicAction.dispatchStarted()) operation.dispatchStarted = true;
         return operation.dispatchStarted;
     }
 
@@ -1541,7 +1692,8 @@ public final class ActorControlService {
     private record RequestRecord(Object fingerprint, String operationId) { }
     private record ActionFingerprint(long generation, String action, String textHash, Long dialogueVersion,
                                      String replyKind, Integer selection, String inventoryType, Integer sourceSlot,
-                                     Integer targetSlot, ActorActRequest.ExpectedContext context) { }
+                                     Integer targetSlot, String direction, Integer durationMs, Integer targetOid,
+                                     Integer objectId, Integer quantity, ActorActRequest.ExpectedContext context) { }
     private static final class Session {
         final String id;
         final long generation;
@@ -1585,6 +1737,7 @@ public final class ActorControlService {
         ExecutionScope.WorkHandle work;
         NativeActionService.ActionHandle chatAction;
         NativeInventoryActions.MoveHandle inventoryAction;
+        NativeBasicActions.Handle basicAction;
         CharacterRuntime.ModuleContext moduleContext;
         String actionEntryFailure;
         String action;

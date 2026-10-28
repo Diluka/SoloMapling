@@ -423,9 +423,9 @@ class AcceptanceActorExecutionTest {
 
             execution.beginDrain(Optional.empty());
             cleanup = execution.cleanupAttempt();
-            assertEquals(CharacterCommandLane.Status.ENQUEUED,
-                    execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, handle), () -> { }).status());
-            assertEquals(1, executor.getQueue().size());
+            var pendingCleanup = execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, handle), () -> { });
+            assertFalse(pendingCleanup.toCompletableFuture().isDone());
+            assertEquals(0, executor.getQueue().size());
             assertFalse(execution.scope().snapshot().unloadComplete());
             assertNotEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ZERO));
             verify(backend, never()).close(any(), any());

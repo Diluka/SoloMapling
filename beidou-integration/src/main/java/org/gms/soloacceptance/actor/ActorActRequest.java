@@ -12,7 +12,7 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.Set;
 
-/** Fixed owner-scoped payloads for chat and the native center dialogue actions. */
+/** Finite owner-scoped payloads for the native dialogue and basic role actions. */
 @JsonDeserialize(using = ActorActRequest.Deserializer.class)
 public record ActorActRequest(
         @JsonProperty("session_id") String sessionId,
@@ -26,7 +26,18 @@ public record ActorActRequest(
                              String kind, Integer selection,
                              @JsonProperty("inventory_type") String inventoryType,
                              @JsonProperty("source_slot") Integer sourceSlot,
-                             @JsonProperty("target_slot") Integer targetSlot) {
+                             @JsonProperty("target_slot") Integer targetSlot,
+                             String direction,
+                             @JsonProperty("duration_ms") Integer durationMs,
+                             @JsonProperty("target_oid") Integer targetOid,
+                             @JsonProperty("object_id") Integer objectId,
+                             Integer quantity) {
+        public Parameters(String text, Long dialogueVersion, String kind, Integer selection,
+                          String inventoryType, Integer sourceSlot, Integer targetSlot) {
+            this(text, dialogueVersion, kind, selection, inventoryType, sourceSlot, targetSlot,
+                    null, null, null, null, null);
+        }
+
         public Parameters(String text, Long dialogueVersion, String kind, Integer selection) {
             this(text, dialogueVersion, kind, selection, null, null, null);
         }
@@ -55,6 +66,12 @@ public record ActorActRequest(
         private static final Set<String> NPC_REPLY_PARAMETER_FIELDS = Set.of("dialogue_version", "kind");
         private static final Set<String> NPC_SELECT_PARAMETER_FIELDS = Set.of("dialogue_version", "kind", "selection");
         private static final Set<String> INVENTORY_MOVE_FIELDS = Set.of("inventory_type", "source_slot", "target_slot");
+        private static final Set<String> MOVE_FIELDS = Set.of("direction", "duration_ms");
+        private static final Set<String> ATTACK_FIELDS = Set.of("target_oid");
+        private static final Set<String> PICKUP_FIELDS = Set.of("object_id");
+        private static final Set<String> DROP_FIELDS = Set.of("inventory_type", "source_slot", "quantity");
+        private static final Set<String> USE_FIELDS = Set.of("source_slot");
+        private static final Set<String> EQUIPMENT_FIELDS = Set.of("source_slot", "target_slot");
         private static final Set<String> KNOWN_PARAMETER_FIELDS = Set.of("text", "dialogue_version");
         private static final Set<String> CONTEXT_FIELDS = Set.of("scene_ref", "runtime_generation");
 
@@ -69,7 +86,13 @@ public record ActorActRequest(
             Set<String> parameterFields = switch (action == null ? "" : action) {
                 case "chat" -> CHAT_PARAMETER_FIELDS;
                 case "inventory_move" -> INVENTORY_MOVE_FIELDS;
-                case "npc_center_open" -> Set.of();
+                case "move" -> MOVE_FIELDS;
+                case "attack" -> ATTACK_FIELDS;
+                case "pickup" -> PICKUP_FIELDS;
+                case "drop" -> DROP_FIELDS;
+                case "use_item" -> USE_FIELDS;
+                case "equip", "unequip" -> EQUIPMENT_FIELDS;
+                case "npc_center_open", "stop" -> Set.of();
                 case "npc_cancel" -> NPC_CANCEL_PARAMETER_FIELDS;
                 case "npc_reply" -> "select".equals(kind) ? NPC_SELECT_PARAMETER_FIELDS : NPC_REPLY_PARAMETER_FIELDS;
                 default -> KNOWN_PARAMETER_FIELDS;
@@ -84,7 +107,10 @@ public record ActorActRequest(
                             string(parameters.get("text"), context), integer(parameters.get("dialogue_version"), context),
                             kind, selection(parameters.get("selection"), context),
                             string(parameters.get("inventory_type"), context),
-                            selection(parameters.get("source_slot"), context), selection(parameters.get("target_slot"), context)),
+                            selection(parameters.get("source_slot"), context), selection(parameters.get("target_slot"), context),
+                            string(parameters.get("direction"), context), selection(parameters.get("duration_ms"), context),
+                            selection(parameters.get("target_oid"), context), selection(parameters.get("object_id"), context),
+                            selection(parameters.get("quantity"), context)),
                     expectedContext == null ? null : new ExpectedContext(
                             string(expectedContext.get("scene_ref"), context),
                             string(expectedContext.get("runtime_generation"), context)));

@@ -91,3 +91,7 @@ actor 观察结果的 `actor.runtime` 和操作响应的 `session.runtime` 投�
 ## 背包动作接入
 
 #164 为 MCP 模块增加 `inventory` 控制资源，经原 `ModuleContext.prepareNative` 准备共享 `NativeInventoryActions.MoveHandle`，直接提交原 lane 一次，保留同 work 的真实结算与外部 ACTION 配额。中立动作持有短命原生证据，运行体仅记录 `NativeActionFact` 摘要；MCP 不维护另一份库存或物品规则。具体协议与分层验收见[背包移位](../shared-game-foundation/inventory-move.md)。
+
+## #200 持续移动与基本短命令
+
+MCP模块额外声明movement/combat控制资源并为调度资源与cleanup工作保留额度。移动控制器只管理本模块的有界移动编排，原生帧共用宿主lane；根角色关闭待 `whenModulesDrained` 后再提交原根cleanup，避免lane暂空时抢先退出。物品与普攻经相同basic Handle映射事实结果，不增加物理队列或工作账本。完整边界见[基本操作](../shared-game-foundation/basic-control.md)。

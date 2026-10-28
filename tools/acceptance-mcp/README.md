@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、中心、有限回复及背包移位，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、已审NPC回复与基本动作，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -10,13 +10,32 @@
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
-| `game_act` | 在真实 actor 场景中排队 `chat`、`npc_center_open`、`npc_cancel`、`npc_reply` 或 `inventory_move` | 写操作；必须有 request_id 和实际 expected_context |
+| `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC及运行体基本动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
 
 基本调试入口按 [#200](https://github.com/Diluka/SoloMapling/issues/200) 逐片交付，后续同步脚本由 [#199](https://github.com/Diluka/SoloMapling/issues/199) 单独验收；能力公告只列实际已实现的工具、动作和观察范围。
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]`、三种动作 `chat/npc_center_open/npc_cancel`、增加 `npc_reply` 的四动作组合，或再增加 `inventory_move` 的五动作组合，顶层和 `actor_control` 公告必须一致。客户端 schema 存在不代表后端已开启。回复仅包含已审查路径的 `select/decline`；没有礼包 accept、任意 NPC、未审查选项、移动或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]`、三种动作 `chat/npc_center_open/npc_cancel`、增加 `npc_reply` 的四动作组合，或再增加 `inventory_move` 的五动作组合；五动作后端也可独立公告已实现的移动、停止、普攻及物品动作。顶层和 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅包含已审查路径的 `select/decline`；没有礼包 accept、任意 NPC、未审查选项、任意封包或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
-`inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；工具不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
+`inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；此动作不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
+
+## #200 运行体基本动作
+
+以下协议是候选能力；实际动作及支持范围以 `game_capabilities.actions` 和后端限制公告为准，不能因为工具注册了 schema 就视为已部署。所有动作复用同一角色运行体的 scope、控制 Grant 与唯一 lane，MCP 只做参数、鉴权和结果透传。
+
+| action | parameters | 受控范围 |
+|---|---|---|
+| `move` | `{"direction":"LEFT","duration_ms":1000}` | 方向为 `LEFT/RIGHT`，时长为 `100..3000` 整数毫秒；连续同一可行走 foothold 的有界步行，无任意坐标或自治导航 |
+| `stop` | `{}` | 停止当前移动；必须从原 operation 及实际位置确认已停止，不能把取消 Future 当作停止 |
+| `attack` | `{"target_oid":123}` | 当前场景单目标近战普通攻击；运行体按 `basic_melee_v1` 计算，不接受 `damage`、`skill` 或原始包，不表示完整远程/技能战斗支持 |
+| `pickup` | `{"object_id":123}` | 拾取当前场景普通库存地物，沿原生归属、距离、容量等规则；不包含金币、NX及拾取即触发脚本/消耗的物品 |
+| `drop` | `{"inventory_type":"ETC","source_slot":1,"quantity":1}` | 五类普通背包、槽位 `1..127`、数量 `1..32767`；实际地物生成或原生消失分别报告，不保证丢弃后均可拾回 |
+| `use_item` | `{"source_slot":1}` | USE背包中普通单角色HP/MP恢复药剂；不连带开放回城、礼包、全图效果或脚本物品；实际消耗与恢复量分别核实 |
+| `equip` | `{"source_slot":1,"target_slot":-11}` | EQUIP正槽位穿到合法普通装备位，资格、冲突卸装和属性沿原生规则 |
+| `unequip` | `{"source_slot":-11,"target_slot":1}` | 从合法普通装备位卸至EQUIP正槽位，沿原生容量和冲突规则 |
+
+OID必须为 `1..2147483647` 整数；正背包槽位为 `1..127`。普通装备位白名单为 `-1..-13`、`-15..-19`、`-49/-50`，`-14`、现金位和未知位均拒绝。布尔值、浮点数、额外字段和跨动作参数不会被隐式转换；本工具不接受任意CID、模板ID、物品ID、封包或脚本。
+
+受理、原生派发、命中/位移/库存变化、work真实结算和存档分别由后端事实表达。排队取消及移动停止需继续查询原 operation；已发生的攻击、消耗或丢弃不因取消而撤销。HTTP超时或断连保留原请求ID，不自动再执行。装备和物品持久化通过正常退出后同CID重开核验，不能以既有保存标志替代具体槽位、数量和属性证据。
 
 ## 安装与启动
 

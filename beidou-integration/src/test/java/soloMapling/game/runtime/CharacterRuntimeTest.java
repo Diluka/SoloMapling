@@ -630,6 +630,74 @@ class CharacterRuntimeTest {
     }
 
     @Test
+    void closingBarrierWaitsForTheOrchestrationCarrierAfterItsBodyHasExited() throws Exception {
+        Fixture fixture = opened();
+        var context = fixture.runtime.context(fixture.mount("movement", Set.of("movement")));
+        var parent = context.acceptWork();
+        assertTrue(parent.claimCarrier());
+        assertTrue(context.scope().runTracked(parent, () -> {}));
+        assertEquals(ExecutionScope.BodyState.EXITED, parent.snapshot().bodyState());
+        assertFalse(parent.isSettled());
+        var barrier = fixture.runtime.whenModulesDrained().toCompletableFuture();
+
+        fixture.runtime.beginClose(Optional.empty());
+        assertFalse(barrier.isDone());
+        assertEquals(CharacterRuntime.State.CLOSING, fixture.runtime.snapshot().state());
+        assertEquals(CharacterRuntime.ModuleState.STOPPING, fixture.module("movement").state());
+        assertEquals(0, fixture.role.releases.get());
+        assertFalse(fixture.runtime.originReleased());
+
+        parent.carrierSettled();
+        barrier.get(5, TimeUnit.SECONDS);
+        assertTrue(parent.isSettled());
+        assertTrue(fixture.runtime.snapshot().modules().isEmpty());
+        assertEquals(0, fixture.role.releases.get(), "Module drain is not proof of native role release");
+        assertFalse(fixture.runtime.originReleased());
+
+        fixture.cleanupOrigin();
+        fixture.runQueued();
+        assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
+        assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+        assertEquals(1, fixture.role.releases.get());
+    }
+
+    @Test
+    void closingBarrierRunsSubscribersOutsideTheHostMonitorAndMayQueueNormalRootCleanup() throws Exception {
+        Fixture fixture = opened();
+        var context = fixture.runtime.context(fixture.mount("movement", Set.of("movement")));
+        var parent = context.acceptWork();
+        assertTrue(parent.claimCarrier());
+        assertTrue(context.scope().runTracked(parent, () -> {}));
+        CountDownLatch observed = new CountDownLatch(1);
+        AtomicReference<CharacterRuntime.Snapshot> snapshot = new AtomicReference<>();
+        AtomicReference<Throwable> observerFailure = new AtomicReference<>();
+        try (ExecutorService observer = Executors.newSingleThreadExecutor()) {
+            var callback = fixture.runtime.whenModulesDrained().thenRun(() -> {
+                observer.submit(() -> {
+                    try { snapshot.set(fixture.runtime.snapshot()); }
+                    catch (Throwable failure) { observerFailure.set(failure); }
+                    finally { observed.countDown(); }
+                });
+                // A lock-held completion would block this other thread while its subscriber is waiting.
+                await(observed);
+                assertNull(observerFailure.get());
+                assertEquals(CharacterRuntime.State.CLOSING, snapshot.get().state());
+                assertTrue(snapshot.get().modules().isEmpty());
+                fixture.cleanupOrigin();
+                assertEquals(0, fixture.role.releases.get());
+            });
+            fixture.runtime.beginClose(Optional.empty());
+            assertFalse(callback.toCompletableFuture().isDone());
+            parent.carrierSettled();
+            callback.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            fixture.runQueued();
+            assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
+            assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+            assertEquals(1, fixture.role.releases.get());
+        }
+    }
+
+    @Test
     void actionFactsRemainNeutralAndBoundToTheOriginalRoleWorldAndModuleWork() {
         Fixture fixture = opened();
         var context = fixture.runtime.context(fixture.mount("inventory", Set.of("inventory")));

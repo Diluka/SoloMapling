@@ -62,8 +62,8 @@ class McpControlModuleTest {
         McpControlModule inactive = new McpControlModule("primary");
         assertEquals("mcp-control", inactive.spec().typeId());
         assertEquals("primary", inactive.spec().instanceId());
-        assertEquals(Set.of("chat", "interaction", "inventory"), inactive.spec().controls());
-        assertEquals(new ExecutionScope.Limits(16, 0, 16, 0), inactive.spec().limits());
+        assertEquals(Set.of("chat", "interaction", "inventory", "movement", "combat"), inactive.spec().controls());
+        assertEquals(new ExecutionScope.Limits(16, 2, 16, 2), inactive.spec().limits());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::context).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::acceptWork).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::reference).reason());
@@ -99,7 +99,7 @@ class McpControlModuleTest {
                 (lane, permit, work, character) -> new Prepared(lane, permit, work, character));
         assertSame(chatWork, prepared.work());
         assertSame(role.character, prepared.character());
-        assertEquals(1L, executor.getTaskCount()); // Only the preceding root OPEN has been submitted.
+        assertFalse(chatWork.snapshot().carrierClaimed()); // Preparing never attaches a physical carrier.
         assertEquals(0, runtime.snapshot().lane().pending());
         assertEquals(0, preflights.get());
         assertFalse(chatWork.isSettled());
@@ -115,7 +115,10 @@ class McpControlModuleTest {
         assertEquals(CharacterCommandLane.Status.ENQUEUED, prepared.lane().submit(prepared.work(), prepared.permit(),
                 bodies::incrementAndGet, settlements::incrementAndGet).status());
         await(chatWork);
-        assertEquals(3L, executor.getTaskCount());
+        // ThreadPoolExecutor task counts are approximate while a worker finalizes its task.
+        // Native command identity and body/settlement counts prove single execution below.
+        assertTrue(chatWork.isSettled());
+        assertTrue(interaction.isSettled());
         assertEquals(2, preflights.get());
         assertEquals(2, bodies.get());
         assertEquals(2, settlements.get());

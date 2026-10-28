@@ -109,3 +109,9 @@ python3 beidou-integration/scripts/build.py --help
 - #164 的候选背包移位能力位于中立 `soloMapling.game.action.NativeInventoryActions`，经运行体原模块 scope、Grant 与唯一 lane 执行；MCP 仅适配身份、请求、场景及结果，不实现第二份物品规则。实际部署以对应 Issue 和能力公告为准。
 - `inventory_move` 仅接受五类普通背包内不同的正槽位1..127；零/负槽位属于其他原生分流，必须拒绝，不提前开放丢弃或穿脱。原生整槽移动、交换、合堆与300ms限频保持原样。
 - 成功必须核同一原生背包锁内的两槽前后事实，派发后取消不撤回；原生事实与work真实结算分开。背包存档另核正常退出及同CID重开，既有 `persisted_state_verified` 不包含背包。详见 `docs/shared-game-foundation/inventory-move.md`。
+
+## #200 其余基本操作候选
+
+- `move/stop/attack/pickup/drop/use_item/equip/unequip` 经运行体共享 Java 能力执行，短命令共用 `NativeBasicActions`，移动控制器在模块scope内登记编排work和定时资源，每个原生帧仍走原角色lane；MCP不另建动作队列或角色账本。实际交付与能力公告分别核对。
+- 移动取消可保留已发生位移并报告已真实停止，不以Future.cancel或lane暂空当排空。根退出需等待 `whenModulesDrained` 真实信号再向原lane提交根cleanup。
+- 攻击 `basic_melee_v1` 是共享后端基于原生属性和怪物数据的基础近战政策，不宣称与全部客户端算法等价；不接受damage/skill/任意包。物品使用只开放普通HP/MP药剂，拾取只普通库存地物，装备沿原生元数据和有限普通槽位。具体参数、事实与验收见 `docs/shared-game-foundation/basic-control.md`。
