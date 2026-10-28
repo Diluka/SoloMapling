@@ -34,6 +34,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * Neither Future cancellation nor an engine cancellation request is used as exit evidence.
  */
 public final class ScriptExecution {
+    /** Shared detached projection, also used by native script environments. */
+    public static Object detachedJson(Value value) { return readJson(value, 0, new ArrayList<>(), new int[]{0}); }
+    public static String json(Object value) { return encodeJson(value); }
+    public static String errorText(String value) { return bounded(value, 1_024); }
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int JSON_LIMIT = 16_384;
     private static final int OUTPUT_LIMIT = 16_384;
@@ -334,7 +338,9 @@ public final class ScriptExecution {
         private InvalidJson(String message) { super(message); }
     }
 
-    private static final class CapturedOutput extends OutputStream {
+    public static final class CapturedOutput extends OutputStream {
+        public CapturedOutput() { }
+        public synchronized boolean isTruncated() { return truncated; }
         private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         private boolean truncated;
         @Override public synchronized void write(int value) {
@@ -345,7 +351,7 @@ public final class ScriptExecution {
             bytes.write(data, offset, accepted);
             truncated |= accepted < length;
         }
-        private synchronized String text() {
+        public synchronized String text() {
             byte[] data = bytes.toByteArray();
             int end = data.length;
             // Output can be cut in the middle of one UTF-8 code point. Drop only that incomplete tail.

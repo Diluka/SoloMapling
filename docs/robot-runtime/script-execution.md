@@ -2,15 +2,15 @@
 
 本页描述 [#199](https://github.com/Diluka/SoloMapling/issues/199) 与 [#204](https://github.com/Diluka/SoloMapling/issues/204) 的本轮源码基础切片。源码测试、CI、隔离 MCP 和实际部署结果由 Issue 分别留证，不能由本页推导部署已完成。
 
-本片让已有角色上的 MCP 调用执行纯 JavaScript、传入 JSON 参数、收集语言输出并取得可序列化结果。生产函数目录为空。现有 `game_act` 保留，具体游戏函数、动作迁移、行为模块脚本和共享观察/事件目录另行推进；本片不等待 #200 全部完成。
+本片让已有角色上的 MCP 调用执行纯 JavaScript、传入 JSON 参数、收集语言输出并取得可序列化结果。本文约定适用于未传 `environment` 的纯脚本模式；[#216 北斗脚本环境](beidou-script-environment.md) 另按真实入口绑定原生对象并保留必要上下文。纯函数注册目录为空，现有 `game_act` 保留；动作迁移、行为模块脚本和共享观察/事件目录另行推进。
 
 ## 归属与执行
 
 `CharacterRuntime.ModuleContext.runScript(work, request)` 消费调用模块已经接纳的原 `ExecutionScope.WorkHandle`。角色、世界来源与模块执行代次仍由该 Context 核验，不另建角色宿主、scope 或工作账本。
 
-`ScriptExecution` 使用运行体管理的执行载体运行 guest，并等待 guest 真正退出。纯计算、解析和结果转换不进入角色短命令 lane；本片没有原生游戏调用，也不授予脚本新的原生入口。后续游戏能力仍须复用既有角色控制与唯一 lane。
+`ScriptExecution` 使用运行体管理的执行载体运行 guest，并等待 guest 真正退出。纯计算、解析和结果转换不进入角色短命令 lane；本模式没有原生游戏调用，也不授予脚本新的原生入口。需要真实北斗对象时显式使用原生环境，角色来源和工作归属仍由同一运行体管理。
 
-每次调用创建独立 GraalJS Context，不保留此前脚本的变量、函数或闭包。Java host access、类查找、IO、guest 建线程、native access 和 polyglot access 均关闭。不会注入现有 NPC/任务/事件脚本的 `cm/im/qm/rm/em` 或原生角色对象；#201 对旧游戏脚本环境的调查不能当作此 Context 的能力目录。
+纯脚本模式每次调用创建独立 GraalJS Context，不保留此前脚本的变量、函数或闭包。Java host access、类查找、IO、guest 建线程、native access 和 polyglot access 均关闭。此模式不会注入现有 NPC/任务/事件脚本的 `cm/im/qm/rm/em` 或原生角色对象；#201 对旧游戏脚本环境的调查不能当作这个 Context 的能力目录。传入原生 `environment` 时按另一份契约复用北斗加载器、host access 和对应真实绑定，不据纯模式的限制推断其能力。
 
 ## 语言输入和结果
 
@@ -77,7 +77,7 @@ MCP 使用既有 operation 外壳，`kind=SCRIPT`。`result` 为本次脚本的�
 
 执行载体监视期限、原 work 的取消请求及模块 scope 状态。停止使用 `Context.close(true)` 中断 guest；纯 JavaScript 无限循环即使捕获普通异常，也不能因此吞掉引擎取消。最终收尾还必须等待实际 guest 执行退出、Context 关闭以及原 work 的 carrier 结算。
 
-`ScriptExecution.completion()` 的结果区分 `engine_exited/context_closed/work_settled`。全部为真才证明本次脚本收尾完成；`Future.cancel()`、`isDone()`、取消通知或请求返回不是替代证据。清理无法核实时保留原 scope 债务和 `INDETERMINATE`，不清空句柄假报完成。
+纯模式 `ScriptExecution.completion()` 的结果区分 `engine_exited/context_closed/work_settled`。全部为真才证明本次脚本收尾完成；`Future.cancel()`、`isDone()`、取消通知或请求返回不是替代证据。清理无法核实时保留原 scope 债务和 `INDETERMINATE`，不清空句柄假报完成。原生模式可以在本次 `invocation_settled/work_settled` 后保留 `OPEN` Context，最终环境关闭另行核验，见[原生结果与收尾](beidou-script-environment.md#结果帮助与收尾)。
 
 模块停止撤销其当前调用资格并取消、排空原 scope。根 `actor_close` 继续等待模块真实退出后释放角色；旧 Context 和旧模块代次不能恢复或作用于新模块。Context 是原 work 的词法资源，在退出路径显式关闭，不另立可独立修改的资源账本。
 

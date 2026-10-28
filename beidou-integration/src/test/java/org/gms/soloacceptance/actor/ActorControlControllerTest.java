@@ -526,6 +526,121 @@ class ActorControlControllerTest {
         }
     }
 
+    @Test
+    void nativeScriptDescriptorPreservesJsonArgumentsAndAllowsAnOmittedSource() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        ActorScriptRequest request = mapper.readValue("""
+                {"session_id":"session","expected_generation":7,
+                 "environment":{"kind":"npc","operation":"invoke","context_id":"native-context",
+                    "options":{"npc_id":9010000,"nested":{"flag":true}},"entry":"action",
+                    "args":[1,0,{"selection":2},null,"中文"]}}
+                """, ActorScriptRequest.class);
+        assertEquals("", request.source());
+        assertEquals(1000L, request.timeoutMs());
+        assertEquals(Map.of(), request.parameters());
+        ActorScriptEnvironment environment = request.environment();
+        assertEquals("npc", environment.kind());
+        assertEquals("invoke", environment.operation());
+        assertEquals("native-context", environment.contextId());
+        assertEquals(Map.of("npc_id", 9010000, "nested", Map.of("flag", true)), environment.options());
+        assertEquals("action", environment.entry());
+        assertEquals(java.util.Arrays.asList(1, 0, Map.of("selection", 2), null, "中文"), environment.args());
+        assertEquals(request, mapper.readValue(mapper.writeValueAsString(request), ActorScriptRequest.class));
+
+        ActorScriptRequest minimal = mapper.readValue("""
+                {"session_id":"session","expected_generation":7,"source":null,
+                 "environment":{"kind":"event","operation":"start"}}
+                """, ActorScriptRequest.class);
+        assertEquals("", minimal.source());
+        assertEquals(Map.of(), minimal.environment().options());
+        assertEquals(List.of(), minimal.environment().args());
+        assertNull(minimal.environment().contextId());
+        assertNull(minimal.environment().entry());
+    }
+
+    @Test
+    void nativeDescriptorsRejectUnknownFieldsAndTypeCoercionWhenTheGlobalMapperIsLenient() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        String valid = """
+                {"session_id":"session","expected_generation":7,
+                 "environment":{"kind":"npc","operation":"start","context_id":"context",
+                    "options":{},"entry":"start","args":[]}}
+                """;
+        for (String field : List.of("kind", "operation", "context_id", "entry")) {
+            for (String value : List.of("1", "true", "{}", "[]")) {
+                ObjectNode request = (ObjectNode) mapper.readTree(valid);
+                ((ObjectNode) request.get("environment")).set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(request, ActorScriptRequest.class), field + "=" + value);
+            }
+        }
+        for (String field : List.of("options", "args")) {
+            for (String value : field.equals("options") ? List.of("null", "[]", "1", "true", "\"text\"")
+                    : List.of("null", "{}", "1", "true", "\"text\"")) {
+                ObjectNode request = (ObjectNode) mapper.readTree(valid);
+                ((ObjectNode) request.get("environment")).set(field, mapper.readTree(value));
+                assertThrows(Exception.class, () -> mapper.treeToValue(request, ActorScriptRequest.class), field + "=" + value);
+            }
+        }
+        for (String field : List.of("kind", "operation")) {
+            ObjectNode missing = (ObjectNode) mapper.readTree(valid);
+            ((ObjectNode) missing.get("environment")).remove(field);
+            assertThrows(Exception.class, () -> mapper.treeToValue(missing, ActorScriptRequest.class));
+            ObjectNode explicitNull = (ObjectNode) mapper.readTree(valid);
+            ((ObjectNode) explicitNull.get("environment")).putNull(field);
+            assertThrows(Exception.class, () -> mapper.treeToValue(explicitNull, ActorScriptRequest.class));
+        }
+        ObjectNode unknown = (ObjectNode) mapper.readTree(valid);
+        ((ObjectNode) unknown.get("environment")).put("arbitrary_target", 73);
+        assertThrows(Exception.class, () -> mapper.treeToValue(unknown, ActorScriptRequest.class));
+        for (String value : List.of("[]", "1", "true", "\"npc\"")) {
+            ObjectNode request = (ObjectNode) mapper.readTree(valid);
+            request.set("environment", mapper.readTree(value));
+            assertThrows(Exception.class, () -> mapper.treeToValue(request, ActorScriptRequest.class));
+        }
+    }
+
+    @Test
+    void nativeCancellationForwardsTheExactEnvironmentAndControllerKeepsItsOwnerAndRequestId() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        ActorScriptCancelRequest cancel = mapper.readValue("""
+                {"session_id":"session","expected_generation":7,"target_request_id":"original-native",
+                 "parameters":{"selection":3},"timeout_ms":2000,
+                 "environment":{"kind":"quest","operation":"invoke","context_id":"quest-context",
+                    "options":{"quest_id":1000},"entry":"end","args":[1,0,3]}}
+                """, ActorScriptCancelRequest.class);
+        ActorScriptRequest invocation = cancel.invocation();
+        assertEquals("", invocation.source());
+        assertEquals(cancel.environment(), invocation.environment());
+        assertEquals(Map.of("selection", 3), invocation.parameters());
+        assertEquals(2000L, invocation.timeoutMs());
+        assertEquals("quest-context", invocation.environment().contextId());
+        assertEquals(List.of(1, 0, 3), invocation.environment().args());
+
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("native-admin", "ROLE_ADMIN");
+        when(service.scriptRun("native-admin", "original-native", invocation)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
+        when(service.scriptCancel("native-admin", "native-cancel", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
+        assertEquals("original-native", controller.scriptRun(new SubmitBody<>("original-native", invocation)).getResponseId());
+        assertEquals("native-cancel", controller.scriptCancel(new SubmitBody<>("native-cancel", cancel)).getResponseId());
+        verify(service).scriptRun("native-admin", "original-native", invocation);
+        verify(service).scriptCancel("native-admin", "native-cancel", cancel);
+    }
+
+    @Test
+    void originalScriptConstructorsRetainTheirPureScriptDefaultsAndNoEnvironment() throws Exception {
+        ActorScriptRequest original = new ActorScriptRequest("session", 7L, "1+1", null, null);
+        assertNull(original.environment());
+        assertEquals(Map.of(), original.parameters());
+        assertEquals(1000L, original.timeoutMs());
+        ActorScriptCancelRequest cancel = new ActorScriptCancelRequest("session", 7L, "original", "1+1", null, null);
+        assertEquals(original, cancel.invocation());
+        ObjectMapper mapper = new ObjectMapper();
+        ActorScriptRequest pureNullSource = mapper.readValue("{\"session_id\":\"session\",\"expected_generation\":7}", ActorScriptRequest.class);
+        assertNull(pureNullSource.source(), "the service still rejects missing source for a pure script");
+        assertNull(pureNullSource.environment());
+    }
+
     private static ObjectNode npcActionJson(ObjectMapper mapper, String action) throws Exception {
         ObjectNode body = (ObjectNode) mapper.readTree(actionJson());
         body.put("action", action);

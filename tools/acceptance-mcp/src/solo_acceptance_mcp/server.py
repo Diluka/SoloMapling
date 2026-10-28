@@ -30,6 +30,9 @@ Limit = Annotated[int, Field(ge=1, le=500, strict=True)]
 ScriptFunctionName = Annotated[
     str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$", strict=True),
 ]
+NativeScriptEntry = Annotated[
+    str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z_$][A-Za-z0-9_$]{0,127}$", strict=True),
+]
 InventorySlot = Annotated[int, Field(ge=1, le=127, strict=True)]
 EquippedSlot = Literal[*EQUIPMENT_SLOTS]
 ObjectId = Annotated[int, Field(ge=1, le=MAX_INT, strict=True)]
@@ -125,10 +128,20 @@ class GiveItemParameters(BaseModel):
     quantity: Annotated[int, Field(ge=1, le=32767, strict=True)]
 
 
+class NativeScriptEnvironment(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    kind: Literal["npc", "quest", "portal", "reactor", "event"]
+    operation: Literal["start", "invoke", "close"]
+    context_id: Identifier | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
+    entry: NativeScriptEntry | None = None
+    args: list[Any] = Field(default_factory=list)
+
+
 CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
 COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "parameters", "expected_command_generation"})
 SCRIPT_RUN_REQUIRED = frozenset({"session_id", "expected_generation", "request_id", "source"})
-SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"parameters", "timeout_ms"}
+SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"parameters", "timeout_ms", "environment"}
 SCRIPT_HELP_REQUIRED = frozenset({"session_id", "expected_generation"})
 SCRIPT_HELP_ARGUMENTS = SCRIPT_HELP_REQUIRED | {"names"}
 
@@ -218,8 +231,9 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
                       "取消操作不等于结束NPC对话。game_act 支持普通聊天、已审NPC回复、背包移位，以及受控移动/停止、单次近战普通攻击、库存物品拾取/丢弃、普通HP/MP药剂使用和装备穿脱；实际能力以桥公告为准。"
                       "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
-                      "script_run 在同一角色运行体中执行有期限的纯 JavaScript，script_help 返回真实函数目录；"
-                      "当前尚无游戏脚本函数，参数使用 parameters，输出使用 console/print，结果为最后表达式。"
+                      "script_run 在同一角色运行体中执行有期限的 JavaScript；省略 environment 保持纯脚本模式，"
+                      "原生环境按实际 script_help 提供 NPC、任务、门户、机关或独占事件的真实对象与原入口。"
+                      "持久 context_id 用于后续回调或关闭，原生副作用按实际结果核验，不由工具返回成功推导玩法完成。"
                       "game_command_help 与 game_command 是独立管理员调试入口，按服务端实际配置向专用 profile 提供原生 give 物品能力，不经过角色运行体或 lane。"),
         log_level="WARNING",
         lifespan=lifespan,
@@ -329,15 +343,17 @@ def build_server(config: BridgeConfig) -> MCPServer:
     @server.tool(annotations=open_annotations)
     async def script_run(
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
-        source: Annotated[str, Field(min_length=1, max_length=SCRIPT_MAX_SOURCE_UNITS, strict=True)],
+        source: Annotated[str, Field(max_length=SCRIPT_MAX_SOURCE_UNITS, strict=True)],
         parameters: dict[str, Any] | None = None,
         timeout_ms: Annotated[int, Field(ge=1, le=SCRIPT_MAX_TIMEOUT_MS, strict=True)] = 1000,
+        environment: NativeScriptEnvironment | None = None,
     ) -> CallToolResult:
-        """在当前角色运行体执行一次纯 JavaScript，parameters 为 JSON 参数对象，收集 console/print 输出及最后表达式的 JSON 结果。期限或取消后等待引擎、上下文和原 work 真实收尾；脚本错误直接返回。函数目录以 script_help 为准，当前不绑定游戏函数。使用相同 request_id 和完整相同参数恢复结果，不自动重放未知请求。"""
+        """在当前角色运行体执行脚本。省略 environment 执行纯 JavaScript；指定 environment 按 script_help 选择真实北斗环境，start 创建所属上下文，invoke 沿原 context_id 执行回调或 source，close 收尾。原生模式 source 可为空；parameters 为 JSON 参数，输出使用 console/print。保留的原生 Context 尚未关闭是正常状态，本次调用退出与上下文最终释放分别核对；超时或取消等待真实执行收尾，无法确认时返回未知。使用相同 request_id 和完整相同参数恢复结果，不重放未知请求。"""
         try:
             data = await bridge.script_run(
                 session_id, expected_generation, request_id=request_id, source=source,
                 parameters=parameters, timeout_ms=timeout_ms,
+                environment=environment.model_dump(exclude_unset=True) if environment is not None else None,
             )
             return result(data, is_error=data.get("status") != "SUCCEEDED")
         except BridgeError as failure:
@@ -348,7 +364,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         session_id: Identifier, expected_generation: Generation,
         names: Annotated[list[ScriptFunctionName], Field(max_length=64)] | None = None,
     ) -> CallToolResult:
-        """查询当前角色运行体实际绑定的脚本函数。省略 names 返回函数目录，传名称返回对应说明及 unavailable；目录与绑定同源，尚无游戏函数时返回空目录。"""
+        """查询当前角色运行体实际函数、native_environments 与 contexts。省略 names 返回实际目录，传名称返回函数说明及 unavailable；原生环境说明真实入口、全局对象和上下文生命周期，不为已有 Java API 编造同义函数。实际开放范围以后端结果为准。"""
         try:
             return result(await bridge.script_help(session_id, expected_generation, names=names))
         except BridgeError as failure:

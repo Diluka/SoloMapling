@@ -14,9 +14,16 @@ public record ActorScriptRequest(
         @JsonDeserialize(using = ActorObserveRequest.StrictStringDeserializer.class) String source,
         Map<String, Object> parameters,
         @JsonProperty("timeout_ms")
-        @JsonDeserialize(using = ActorObserveRequest.StrictLongDeserializer.class) Long timeoutMs) {
+        @JsonDeserialize(using = ActorObserveRequest.StrictLongDeserializer.class) Long timeoutMs,
+        ActorScriptEnvironment environment) {
     public ActorScriptRequest {
+        if (source == null && environment != null) source = "";
         parameters = parameters == null ? Map.of() : parameters;
         timeoutMs = timeoutMs == null ? 1000L : timeoutMs;
+    }
+
+    public ActorScriptRequest(String sessionId, Long expectedGeneration, String source,
+                              Map<String, Object> parameters, Long timeoutMs) {
+        this(sessionId, expectedGeneration, source, parameters, timeoutMs, null);
     }
 }

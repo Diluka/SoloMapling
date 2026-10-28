@@ -2,7 +2,7 @@
 
 新增 #207 独立管理指令入口的配置、参数和恢复规则见[管理指令说明](commands.md)。该入口直接复用原生服务，与角色运行体解耦；实际启用和部署状态以 `debug_commands` 能力公告及 #207 验收记录为准。
 
-**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。本轮源码新增 `script_run`、`script_help`，与 #207 两项独立管理工具合计十一工具，首片只执行纯脚本与返回空函数目录。实际开放项始终以 `game_capabilities.enabled_tools/actions` 为准；脚本切片的源码测试、CI、隔离及实际部署结果按 [#199](https://github.com/Diluka/SoloMapling/issues/199) 分别记录。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。`script_run`、`script_help` 与 #207 两项独立管理工具合计十一工具；纯脚本基础之外，[#216](https://github.com/Diluka/SoloMapling/issues/216) 在同一脚本工具上接入北斗原生环境。实际开放项始终以 `game_capabilities` 和 `script_help` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -103,7 +103,7 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 当前工具接口
 
-下表列出当前客户端的九工具，脚本两工具为本轮源码实现的基础切片；实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关。
+下表列出角色、动作和脚本工具；加上 #207 的两个独立管理工具，当前客户端共十一工具，实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关；管理工具另需其专用开关。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
@@ -114,8 +114,8 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 | `operation_get` | operation_id、since_cursor、limit | 操作终态、实时 session、原生角色快照及有界生命周期事件 | R2a |
 | `operation_cancel` | operation_id、request_id | 请求取消；继续查询实际终态与清理结果 | R2a |
 | `game_act` | session_id、expected_generation、request_id、action、parameters、expected_context | 同 session 排队，返回 ACTION 与实际原生结果 | 原五动作加 move/stop/attack/pickup/drop/use_item/equip/unequip，实际范围以能力公告为准 |
-| `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 本轮基础切片：纯 JavaScript，无游戏函数 |
-| `script_help` | session_id、expected_generation、可选 names | 查询同源函数描述，未注册时 functions 为空 | 本轮基础切片：只读，不分配脚本工作 |
+| `script_run` | session_id、expected_generation、request_id、source、可选 parameters/timeout_ms/environment | 同步返回 SCRIPT 的实际脚本结果、输出或错误及收尾证据 | 无 environment 为纯 JS；原生环境按真实入口绑定 cm/qm/pi/rm/em |
+| `script_help` | session_id、expected_generation、可选 names | 同源函数描述、实际 native_environments 与本模块 contexts | 只读，不分配脚本工作；functions 可为空 |
 
 R2a 的 HTTP 路由、信封与逐项调用例子见 [工具契约](../../tools/acceptance-mcp/README.md#原生鉴权与操作契约)。#70 沿用 `game_observe` 扩展 actor 只读观察，不新增第七个工具；具体契约见下文。
 
@@ -377,9 +377,9 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 
 [#199](https://github.com/Diluka/SoloMapling/issues/199) 的本轮基础切片直接提供 `script_run` 和 `script_help`，不等待 #200 全部完成；[#204](https://github.com/Diluka/SoloMapling/issues/204) 只补本片需要的运行体支撑。Agent 使用已有专用角色提交纯 JavaScript，通过 `parameters` 读取 JSON 参数，以 `console`/`print` 输出，以最后表达式返回可序列化结果。解析错误、运行错误和期限结束随本次调用返回，帮助与实际绑定共用一份注册描述。
 
-生产函数目录为空，`script_help()` 正常返回 `functions=[]`；指定未知名称会列入 `unavailable`。本轮不绑定移动、攻击、背包、NPC、加点等游戏函数，不迁移或删除 `game_act`。行为模块脚本、共享事实/事件目录和具体游戏函数继续留在 #199/#204 及相应后续任务，本片通过不代表这些范围完成。
+纯函数目录未注册时，`script_help()` 正常返回 `functions=[]`；指定未知名称会列入 `unavailable`。[#216 北斗环境](../robot-runtime/beidou-script-environment.md) 另通过 `native_environments/contexts` 说明原生对象、入口和实际会话，不为每个原有 Java 方法重写同义函数。现有 `game_act` 和管理工具保留；行为模块、共享事实/事件大全与直接动作迁移仍在各自任务推进。
 
-脚本使用 `CharacterRuntime` 当前模块代次和原 scope/work，在管理载体执行；短原生命令仍沿唯一 lane。取消或超时须等脚本引擎退出、Context 关闭及原 work 真实结算，不以 Future 或请求提前返回替代。调用例子和恢复规则见[脚本工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，内部协议见[运行体脚本设施](../robot-runtime/script-execution.md)。源码、CI、隔离和实际部署验收分别留证。
+脚本使用 `CharacterRuntime` 当前模块代次和原 scope/work，在管理载体执行；短原生命令仍沿唯一 lane。纯模式每次关闭 Context；原生模式可在本次调用真实结算后保留 OPEN Context，最终关闭与调度资源释放另行核验，不以 Future 或请求提前返回替代。调用例子和恢复规则见[脚本工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，内部协议见[纯脚本设施](../robot-runtime/script-execution.md)和[北斗环境](../robot-runtime/beidou-script-environment.md)。源码、CI、隔离和实际部署验收分别留证。
 
 ## 螺旋迭代计划
 
@@ -467,4 +467,4 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 
 ## #200 其余基本操作
 
-PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，本轮再增加两个脚本工具后共九工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。本轮不增减这些直接动作，也没有对应游戏脚本函数。
+PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，脚本基础随后增加两工具，#207 再增加两项独立管理工具，当前客户端共十一工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。#216 原生脚本环境不增减这些直接动作，也不把它们逐项迁移为同义脚本函数。

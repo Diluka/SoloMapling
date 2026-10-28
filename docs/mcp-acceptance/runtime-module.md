@@ -100,8 +100,10 @@ MCP模块额外声明movement/combat控制资源并为调度资源与cleanup工�
 
 ## 脚本基础接入
 
-#199/#204 本轮源码只贯通 `script_run/script_help` 和必要运行体支撑，不等待 #200 全部完成。`AcceptanceActorExecution` 经 MCP 模块将已接纳的原 work 交给 `ModuleContext.runScript`，脚本不再申请第二份工作，也不排入角色短命令 lane。外层沿既有 request/operation 历史保留幂等、鉴权与有界结果投影，首次 close 的历史名额仍保留。
+#199/#204 的纯脚本首片贯通 `script_run/script_help` 和必要运行体支撑，不等待 #200 全部完成。`AcceptanceActorExecution` 经 MCP 模块将已接纳的原 work 交给 `ModuleContext.runScript`，脚本不再申请第二份工作，也不排入角色短命令 lane。外层沿既有 request/operation 历史保留幂等、鉴权与有界结果投影，首次 close 的历史名额仍保留。
 
-MCP 中断通过独立取消请求转发；取消先到时建立原请求的取消检查点，迟到 run 不能复活执行。正常返回须核 `engine_exited/context_closed/work_settled`，未知收尾保留原债务；角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 投影同一原作用域的工作与资源计数，不能把计数快照单独当作执行事实。
+MCP 中断通过独立取消请求转发；取消先到时建立原请求的取消检查点，迟到 run 不能复活执行。纯模式正常返回须核 `engine_exited/context_closed/work_settled`；原生模式的持久 Context 可以在本次 `invocation_settled/work_settled` 后保持 `OPEN`，不能误报为清理失败。最终关闭与未知收尾仍分别核实，未知债务保留；角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 投影同一原作用域的工作与资源计数，不能把计数快照单独当作执行事实。
 
-帮助与绑定来自运行体的一份最小注册描述，生产目录为空。具体游戏函数、行为模块脚本、共享事实/事件目录和现有动作迁移均留待后续，本片不改变旧 `game_act`。详细契约见[运行体脚本设施](../robot-runtime/script-execution.md)与[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
+纯函数帮助与绑定来自运行体的一份最小注册描述，未注册时目录为空。行为模块脚本、共享事实/事件目录和现有动作迁移仍留待各自任务，本片不改变旧 `game_act`。详细契约见[运行体脚本设施](../robot-runtime/script-execution.md)与[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
+
+#216 的[北斗环境接入](../robot-runtime/beidou-script-environment.md) 复用原管理器、原脚本和实际对象，帮助的 `native_environments/contexts` 与适配器说明同源。纯函数目录 `functions=[]` 不再表示没有可用原生环境；这也不等于完整共享能力目录或直接动作迁移已完成。

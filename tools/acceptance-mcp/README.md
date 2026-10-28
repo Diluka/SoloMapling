@@ -11,16 +11,16 @@
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 | `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC 及运行体基本动作，当前源码包含十三动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
-| `script_run` | 在现有角色运行体中同步执行有期限的纯 JavaScript，收集输出和 JSON 结果 | 必须有 request_id；本片无游戏函数，仍按受管调用记录 |
-| `script_help` | 查询同源函数目录或指定函数说明，未注册时返回空目录 | 只读；不创建脚本 work 或 operation |
+| `script_run` | 在现有角色运行体中执行纯 JavaScript，或按 `environment` 运行北斗原脚本，收集输出和 JSON 结果 | 必须有 request_id；原生脚本可保留会话并产生实际游戏副作用 |
+| `script_help` | 查询同源函数说明、实际原生环境和本模块上下文 | 只读；不创建脚本 work 或 operation |
 | `game_command_help` | 查询独立管理指令的实际范围、参数和管理进程代次 | 只读；需启用 debug-commands-enabled |
 | `game_command` | 对已登记在线调试角色调用原生 give 物品服务 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
 
 管理指令的配置、目标、真实结果与原 ID 恢复见[管理指令说明](../../docs/mcp-acceptance/commands.md)。新增工具不扩大 `game_act` 范围，后端未启用时不公告为可用能力。
 
-MCP 用于机器人开发调试，让 Agent 进入游戏，与待测机器人交互并检查实际行为。[#199](https://github.com/Diluka/SoloMapling/issues/199) 首片直接贯通纯脚本基础，不等待 [#200](https://github.com/Diluka/SoloMapling/issues/200) 全部完成；次要游戏操作以后按需进入脚本环境。本片保留现有 `game_act`，不迁移具体游戏函数，能力公告只列实际实现范围。
+MCP 用于机器人开发调试，让 Agent 进入游戏，与待测机器人交互并检查实际行为。[#199](https://github.com/Diluka/SoloMapling/issues/199) 首片贯通纯脚本基础；[#216](https://github.com/Diluka/SoloMapling/issues/216) 在同一工具上接入北斗已有脚本环境与原生对象。本片保留现有 `game_act` 和管理入口，不迁移直接动作，能力公告只列实际实现范围。
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及分别开放两个脚本工具、两个管理工具的组合，全部开启时为十一工具。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅含已审查路径的 select/decline；礼包 accept、任意 NPC、未审查选项、任意封包、SocialBot 完整互动及游戏脚本函数仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及分别开放两个脚本工具、两个管理工具的组合，全部开启时为十一工具。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。`game_act` 的回复仍只含已审查路径的 select/decline，不扩成任意 NPC、选项或封包；显式北斗脚本环境按其原生入口与实际帮助另行使用。礼包、SocialBot 完整互动及具体玩法仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 `inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；此动作不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
 
@@ -103,7 +103,7 @@ enabled = true
 | `game_act(…, action="npc_cancel", parameters={"dialogue_version":123})` | 同一路由，版本必须来自当前实际 actor 对话 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":123,"kind":"select","selection":0})` | 同一路由，只能选择当前完整 offer 中已审查的项目 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":124,"kind":"decline"})` | 同一路由，拒绝实际 type12 按钮，不带 selection |
-| `script_run(session_id="…", expected_generation=1, request_id="script-unique-1", source="parameters.a + parameters.b", parameters={"a":2,"b":3}, timeout_ms=1000)` | `POST /solo/acceptance/v1/script/run`，data 为角色目标、source、parameters 和 timeout_ms |
+| `script_run(session_id="…", expected_generation=1, request_id="script-unique-1", source="parameters.a + parameters.b", parameters={"a":2,"b":3}, timeout_ms=1000)` | `POST /solo/acceptance/v1/script/run`，data 为角色目标、source、parameters、timeout_ms 与可选 environment |
 | `script_help(session_id="…", expected_generation=1, names=[])` | `POST /solo/acceptance/v1/script/help`，只读查询，不占操作历史 |
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
@@ -136,7 +136,7 @@ capabilities 的 `npc_dialogue` 继续公告版本和入口规则，回复阶段
 
 ## 脚本基础调用
 
-先正常 `actor_open` 并查询到实际在线角色，保存返回的 `session_id/session_generation`；脚本工具的 `expected_generation` 使用该会话代次。它不接受任意角色 ID，继续沿管理端 JWT/admin、owner、当前角色、世界来源与模块代次核验。脚本首片没有游戏函数，不需要或接受 `expected_context`。
+先正常 `actor_open` 并查询到实际在线角色，保存返回的 `session_id/session_generation`；脚本工具的 `expected_generation` 使用该会话代次。它不接受任意角色 ID，继续沿管理端 JWT/admin、owner、当前角色、世界来源与模块代次核验。纯脚本模式不需要或接受 `expected_context`；北斗环境按下面的真实对象选择与有效期核验。
 
 一次纯运算调用：
 
@@ -147,7 +147,7 @@ script_run(session_id="实际session_id", expected_generation=实际session_gene
            parameters={"label":"首环","values":[2,3,5]}, timeout_ms=1000)
 ```
 
-`source` 非空，最多 65,536 个 UTF-16 单元。`parameters` 为 JSON 对象，默认 `{}`，在 guest 中使用同名对象；`timeout_ms` 为 1～5,000 的严格整数，默认 1,000，包含创建、绑定、计算和结果转换。`console`/`print` 输出在 `stdout/stderr` 收集，每路最多 16,384 字节并显式标记截断。返回值来自最后表达式；参数与结果各受 16,384 个 UTF-8 字节等边界限制，具体见[运行体参考](../../docs/robot-runtime/script-execution.md#语言输入和结果)。函数、循环对象、Promise 等结果会失败，不把语言对象或宿主引用序列化出去。
+未传 `environment` 时，`source` 必须非空，最多 65,536 个 UTF-16 单元。`parameters` 为 JSON 对象，默认 `{}`，在 guest 中使用同名对象；`timeout_ms` 为 1～5,000 的严格整数，默认 1,000，包含创建、绑定、计算和结果转换。`console`/`print` 输出在 `stdout/stderr` 收集，每路最多 16,384 字节并显式标记截断。返回值来自最后表达式；参数与结果各受 16,384 个 UTF-8 字节等边界限制，具体见[运行体参考](../../docs/robot-runtime/script-execution.md#语言输入和结果)。函数、循环对象、Promise 等结果会失败，不把语言对象或宿主引用序列化出去。
 
 工具返回现有 operation 结构，`kind=SCRIPT`；其 `result` 包含：
 
@@ -164,7 +164,7 @@ script_run(session_id="实际session_id", expected_generation=实际session_gene
 }
 ```
 
-语法错误为 `PARSE_ERROR`，执行异常为 `RUNTIME_ERROR`，不可序列化结果为 `RESULT_ERROR`；错误可带有界 `error={message,line,column}`，无法定位时行列为 `null`。期限、取消及清理失败分别为 `TIMED_OUT/CANCELLED/CLEANUP_ERROR`。外层 operation 使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`，脚本失败同时设置 MCP `is_error=true`，输出与收尾标记仍保留。只有 `engine_exited/context_closed/work_settled` 全部为真，才确认本次脚本真实结束。
+语法错误为 `PARSE_ERROR`，执行异常为 `RUNTIME_ERROR`，不可序列化结果为 `RESULT_ERROR`；错误可带有界 `error={message,line,column}`，无法定位时行列为 `null`。期限、取消及清理失败分别为 `TIMED_OUT/CANCELLED/CLEANUP_ERROR`。外层 operation 使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`，脚本失败同时设置 MCP `is_error=true`，输出与收尾标记仍保留。纯模式只有 `engine_exited/context_closed/work_settled` 全部为真，才确认本次脚本真实结束；原生持久环境另区分本次调用结算与最终关闭。
 
 函数帮助查询：
 
@@ -174,11 +174,38 @@ script_help(session_id="实际session_id", expected_generation=实际session_gen
             names=["missing_fn"])
 ```
 
-`names` 默认 `[]`，最多 64 项。不传名称时列目录；生产本片没有注册游戏函数，所以返回 `schema_version=1,language="javascript",functions=[],unavailable=[]`。指定未注册名称时在 `unavailable` 中列出，`functions` 仍为空。帮助与绑定同源，`cm/im/qm/rm/em`、Java 类访问、移动、背包等旧游戏脚本能力不自动进入此环境。
+`names` 默认 `[]`，最多 64 项。不传名称时列目录；未注册纯函数时 `functions=[]`，指定未注册名称在 `unavailable` 中列出。帮助还用 `native_environments` 描述真实北斗环境，用 `contexts` 列本模块已有的原生上下文。纯模式不会自动取得 `cm/im/qm/rm/em` 和 Java 类访问；显式 `environment` 按实际适配器绑定，不从旧调查推导可用能力。
 
-取消等待中的官方 SDK task 会发送 MCP 取消通知。桥在受保护的收尾段内向内部 `POST /solo/acceptance/v1/script/cancel` 发送原请求 ID 和完整原 run 参数，等待真实收尾并回收原 HTTP 请求；无需也没有新增 MCP `script_cancel` 工具。取消先到的检查点阻止迟到 run 开始执行。已取消的 MCP 请求按协议不再返回响应；使用相同 `request_id`、source、parameters 和 timeout_ms 再次调用，可恢复原 operation，变参仍返回冲突。已知 `operation_id` 时也可 `operation_get`。传输或取消失败仍是结果未知，不能改用新 ID 重放或据此宣布后台已停止。
+取消等待中的官方 SDK task 会发送 MCP 取消通知。桥在受保护的收尾段内向内部 `POST /solo/acceptance/v1/script/cancel` 发送原请求 ID 和完整原 run 参数，等待真实收尾并回收原 HTTP 请求；无需也没有新增 MCP `script_cancel` 工具。取消先到的检查点阻止迟到 run 开始执行。已取消的 MCP 请求按协议不再返回响应；使用相同 `request_id`、source、parameters、timeout_ms 和原 `environment` 再次调用，可恢复原 operation，变参仍返回冲突。已知 `operation_id` 时也可 `operation_get`。传输或取消失败仍是结果未知，不能改用新 ID 重放或据此宣布后台已停止。
 
-模块停止与根角色关闭沿原 scope 取消并等待脚本实际退出；脚本不占短命令 lane。正常完成后继续使用该 session，最后仍须 `actor_close` 并核原生清理和存档。无限循环、断连与世界停启探针只在隔离环境运行，实际部署只做正常角色与纯脚本循环。完整行为模块、共享事实/事件、具体游戏函数和直接动作迁移仍留待后续，基础完成不代表 #199/#204 全部完成。
+模块停止与根角色关闭沿原 scope 取消并等待脚本实际退出；脚本不占短命令 lane。正常完成后继续使用该 session，最后仍须 `actor_close` 并核原生清理和存档。无限循环、断连与世界停启探针只在隔离环境运行；实际部署只做该轮已授权的正常闭环。完整行为模块、共享事实/事件和直接动作迁移仍留待后续，基础完成不代表 #199/#204 全部完成。
+
+## 北斗原生脚本调用
+
+先用 `script_help` 确认实际 `native_environments`。[#216](https://github.com/Diluka/SoloMapling/issues/216) 的 [#219 首环](https://github.com/Diluka/SoloMapling/issues/219) 让 `environment` 选择五类真实上下文中的一种，并保留原脚本对象和方法；详细选项、来源及入口见[北斗环境参考](../../docs/robot-runtime/beidou-script-environment.md)。本接入不新增工具，已有十一工具与十三动作继续保留，源码存在不能代替隔离或实际部署验收。
+
+例如启动已有无收益 NPC 脚本，并从返回的 `operation.result.context_id` 保存该上下文：
+
+```text
+script_run(session_id="实际session_id", expected_generation=实际session_generation,
+           request_id="npc-start-唯一ID", source="",
+           environment={"kind":"npc","operation":"start","options":{"npc_id":1032110}})
+```
+
+原生会话保留同一 CM 和脚本全局状态。下一次回复使用新的请求 ID，仍引用这个精确上下文：
+
+```text
+script_run(session_id="实际session_id", expected_generation=实际session_generation,
+           request_id="npc-reply-唯一ID", source="",
+           environment={"kind":"npc","operation":"invoke","context_id":"实际context_id",
+                        "entry":"reply","args":[1,0,0]})
+```
+
+`start` 不带 `context_id`；`invoke/close` 必须带。`invoke` 可以指定原 `entry/args`，或在同一引擎执行非空 `source`，两者不可同时。`close` 的 `source` 必须是空字符串，`options/args` 为空且不得指定 `entry`。`environment` 拒绝额外字段；其中 `options`、`args` 与外层 `parameters` 合计不超过 16,384 个 UTF-8 字节，各根 JSON 深度最多 16。`entry` 匹配 `[A-Za-z_$][A-Za-z0-9_$]{0,127}`，不是任意属性路径。
+
+成功的原生调用可返回 `context_state="OPEN",context_closed=false`：本次 `invocation_settled/work_settled` 已结算，环境仍留给下一次回复或回调。环境仍为 OPEN 时，用 `operation="close"` 关闭，并核 Context、原生资源和工作均已真实退出；原脚本已自行 dispose 时以实际 `context_state` 为准。不要为了取得三项全部为真而盲目重放入口。
+
+门户、机关只使用角色当前地图的真实对象；事件环境有自己的原生 EventManager 和引擎，不接管频道共享事件。北斗脚本 API 保留实际副作用：开 UI 不等于完成交易，服务端脚本主动 warp 不等于玩家门户准入，任务脚本入口不等于普通任务资格检查。纯 guest 循环的强制终止也不能证明任意 host Java 方法已退出；未核实的 Java 调用和调度回调必须保留债务。首环明确拒绝未接入的 EIM 实例创建；完整实例地图与延迟清理、实际机器人交互及真实客户端玩法留后续验收，#216 不随首环自动完成。
 
 ## 本地测试和只读协议冒烟
 
@@ -188,7 +215,7 @@ script_help(session_id="实际session_id", expected_generation=实际session_gen
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、九工具读写注解与脚本取消转发，以及官方 SDK 的真实 stdio 正反例。引擎真实停止及游戏后态由运行体测试和隔离端到端另行验证。
+测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、十一工具读写注解与脚本取消转发，以及官方 SDK 的真实 stdio 正反例。引擎真实停止及游戏后态由运行体测试和隔离端到端另行验证。
 
 实际后端的只读检查不打开角色：
 
@@ -198,7 +225,7 @@ script_help(session_id="实际session_id", expected_generation=实际session_gen
   --output /absolute/evidence/mcp-observation.json
 ```
 
-它检查客户端九工具及桥当前合法的两项、六项、七项或九项开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色或脚本执行已通过。
+它检查客户端十一工具及桥当前合法的观察、角色、脚本和管理工具开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色或脚本执行已通过。
 
 ## 显式目标的原生角色验收
 
