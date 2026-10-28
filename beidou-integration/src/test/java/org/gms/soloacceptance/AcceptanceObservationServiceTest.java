@@ -2,6 +2,7 @@ package org.gms.soloacceptance;
 
 import org.gms.client.Character;
 import org.gms.client.Client;
+import org.gms.client.inventory.Item;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -10,7 +11,14 @@ import org.gms.scripting.event.EventInstanceManager;
 import org.gms.soloacceptance.command.DebugCommandService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.gms.server.maps.MapManager;
+import org.gms.server.life.Monster;
+import org.gms.server.life.NPC;
+import org.gms.server.maps.MapItem;
+import org.gms.server.maps.MapObject;
+import org.gms.server.maps.MapObjectType;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Portal;
+import org.gms.server.maps.Reactor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -118,6 +126,120 @@ class AcceptanceObservationServiceTest {
         verify(maps, never()).getMap(anyInt());
         verify(maps, never()).getDisposableMap(anyInt());
         verify(maps, never()).resetMap(anyInt());
+    }
+
+    @Test
+    void issuedSceneReferenceExposesNativeObjectsAndKeepsTheCapturedDropPosition() {
+        MapleMap actual = map(100000000);
+        Character player = mock(Character.class);
+        when(player.getObjectId()).thenReturn(21);
+        when(player.getId()).thenReturn(501);
+        when(player.getName()).thenReturn("ActorOne");
+        when(player.getType()).thenReturn(MapObjectType.PLAYER);
+        NPC npc = mock(NPC.class);
+        when(npc.getObjectId()).thenReturn(12);
+        when(npc.getId()).thenReturn(1012000);
+        when(npc.getType()).thenReturn(MapObjectType.NPC);
+        Monster monster = mock(Monster.class);
+        when(monster.getObjectId()).thenReturn(1);
+        when(monster.getType()).thenReturn(MapObjectType.MONSTER);
+        when(monster.getId()).thenReturn(100100);
+        when(monster.getHp()).thenReturn(5);
+        when(monster.getMaxHp()).thenReturn(10);
+        Reactor reactor = mock(Reactor.class);
+        when(reactor.getObjectId()).thenReturn(2);
+        when(reactor.getType()).thenReturn(MapObjectType.REACTOR);
+        when(reactor.getState()).thenReturn((byte) 2);
+        when(reactor.isAlive()).thenReturn(true);
+        MapItem money = mock(MapItem.class);
+        Point position = new Point(35, -20);
+        when(money.getObjectId()).thenReturn(4);
+        when(money.getType()).thenReturn(MapObjectType.ITEM);
+        when(money.getPosition()).thenReturn(position);
+        when(money.getMeso()).thenReturn(200);
+        MapItem drop = mock(MapItem.class);
+        Item item = mock(Item.class);
+        when(drop.getObjectId()).thenReturn(5);
+        when(drop.getType()).thenReturn(MapObjectType.ITEM);
+        when(drop.getItem()).thenReturn(item);
+        when(item.getItemId()).thenReturn(4000000);
+        when(item.getQuantity()).thenReturn((short) 3);
+        MapObject unsupported = mock(MapObject.class);
+        when(unsupported.getType()).thenReturn(MapObjectType.DOOR);
+        Portal portal = mock(Portal.class);
+        when(portal.getId()).thenReturn(0);
+        when(portal.getName()).thenReturn("west00");
+        when(portal.getTargetMapId()).thenReturn(101000000);
+        when(actual.getMapObjects()).thenReturn(List.of(player, drop, npc, unsupported, reactor, money, monster));
+        when(actual.getPortals()).thenReturn(List.of(portal));
+
+        Map<String, Object> snapshot = observeLoadedScene(actual, 10);
+        position.translate(500, 500);
+
+        assertEquals(501, sceneEntries(snapshot, "players").getFirst().get("id"));
+        assertEquals("ActorOne", sceneEntries(snapshot, "players").getFirst().get("name"));
+        assertEquals(false, sceneEntries(snapshot, "players").getFirst().get("is_bot"));
+        assertEquals(1012000, sceneEntries(snapshot, "npcs").getFirst().get("template_id"));
+        assertEquals(100100, sceneEntries(snapshot, "monsters").getFirst().get("template_id"));
+        assertEquals(5, sceneEntries(snapshot, "monsters").getFirst().get("hp"));
+        assertEquals(10, sceneEntries(snapshot, "monsters").getFirst().get("max_hp"));
+        assertEquals((byte) 2, sceneEntries(snapshot, "reactors").getFirst().get("state"));
+        assertEquals(true, sceneEntries(snapshot, "reactors").getFirst().get("alive"));
+        Map<String, Object> capturedMoney = sceneEntries(snapshot, "items").getFirst();
+        assertNull(capturedMoney.get("item_id"));
+        assertEquals(200, capturedMoney.get("meso"));
+        assertEquals(0, capturedMoney.get("quantity"));
+        assertEquals(Map.of("x", 35, "y", -20), capturedMoney.get("position"));
+        assertEquals(4000000, sceneEntries(snapshot, "items").get(1).get("item_id"));
+        assertEquals(3, sceneEntries(snapshot, "items").get(1).get("quantity"));
+        assertEquals("west00", sceneEntries(snapshot, "portals").getFirst().get("name"));
+        assertEquals(101000000, sceneEntries(snapshot, "portals").getFirst().get("target_map_id"));
+        assertEquals(1, snapshot.get("unsupported_object_count"));
+        assertEquals(Map.of("DOOR", 1), snapshot.get("unsupported_object_types"));
+    }
+
+    @Test
+    void sceneLimitBoundsEachCategoryIndependentlyAndUsesNativeObjectOrder() {
+        MapleMap actual = map(100000000);
+        Character first = mock(Character.class);
+        Character second = mock(Character.class);
+        when(first.getObjectId()).thenReturn(21);
+        when(first.getId()).thenReturn(501);
+        when(second.getObjectId()).thenReturn(31);
+        NPC npc = mock(NPC.class);
+        when(npc.getObjectId()).thenReturn(12);
+        when(npc.getId()).thenReturn(1012000);
+        Portal west = mock(Portal.class);
+        Portal east = mock(Portal.class);
+        when(west.getId()).thenReturn(1);
+        when(east.getId()).thenReturn(2);
+        when(actual.getMapObjects()).thenReturn(List.of(second, npc, first));
+        when(actual.getPortals()).thenReturn(List.of(east, west));
+
+        Map<String, Object> snapshot = observeLoadedScene(actual, 1);
+
+        assertEquals(2, envelope(snapshot, "players").get("total_count"));
+        assertEquals(true, envelope(snapshot, "players").get("truncated"));
+        assertEquals(List.of(21), sceneEntries(snapshot, "players").stream().map(row -> row.get("oid")).toList());
+        assertEquals(1, sceneEntries(snapshot, "npcs").size());
+        assertEquals(false, envelope(snapshot, "npcs").get("truncated"));
+        assertEquals(2, envelope(snapshot, "portals").get("total_count"));
+        assertEquals(true, envelope(snapshot, "portals").get("truncated"));
+        assertEquals(List.of(1), sceneEntries(snapshot, "portals").stream().map(row -> row.get("id")).toList());
+        assertEquals(0, envelope(snapshot, "monsters").get("total_count"));
+    }
+
+    private Map<String, Object> observeLoadedScene(MapleMap actual, int limit) {
+        int mapId = actual.getId();
+        when(maps.getMaps()).thenReturn(Map.of(mapId, actual));
+        String ref = (String) sceneItems(observations.observe(new ObservationRequest("world", null, 100)))
+                .getFirst().get("scene_ref");
+        return observations.observe(new ObservationRequest("scene", ref, limit));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> sceneEntries(Map<String, Object> result, String category) {
+        return (List<Map<String, Object>>) envelope(result, category).get("items");
     }
 
     @Test

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure, checkpoint, require_persistence_summaries, run_actor_smoke
+from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure, checkpoint, run_actor_smoke
 from solo_acceptance_mcp.smoke import ACTOR_IMPLEMENTED_TOOLS
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 
@@ -26,7 +26,7 @@ class ActorSmokeStub(BridgeStub):
         super().__init__()
 
     def actor(self, number: int) -> dict:
-        return {
+        actor = {
             "character_id": 42, "account_id": 12, "profile_id": "primary", "name": "McpPrimary",
             "world_id": 0, "channel_id": 1, "map_id": 10000,
             "position": {"x": 10, "y": 20}, "level": 2 if self.mode == "reset" and number > 1 else 1,
@@ -47,6 +47,11 @@ class ActorSmokeStub(BridgeStub):
                 "runtime_generation": "generation-fixture-1",
             },
         }
+        if self.mode == "missing_inventory":
+            actor["inventory_summary"] = None
+        elif self.mode == "truncated_quests":
+            actor["quest_summary"]["truncated"] = True
+        return actor
 
     def response(self, operation: dict, *, queued: bool = False) -> dict:
         result = deepcopy(operation)
@@ -259,22 +264,14 @@ class ActorSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, stub.creations)
         self.assertEqual("EVIDENCE_UNAVAILABLE_BEFORE_WRITE", report["failure"])
 
-    def test_missing_or_truncated_persistence_data_cannot_pass_by_equal_null_values(self):
-        stub = ActorSmokeStub()
-        try:
-            for field in ["inventory_summary", "quest_summary"]:
-                actor = stub.actor(1)
-                actor[field] = None
-                with self.subTest(field=field), self.assertRaises(ActorSmokeFailure):
-                    require_persistence_summaries(actor)
-            actor = stub.actor(1)
-            actor["inventory_summary"]["cash"].update(count=101, truncated=True)
-            with self.assertRaises(ActorSmokeFailure):
-                require_persistence_summaries(actor)
-            actor = stub.actor(1)
-            actor["quest_summary"].update(count=True)
-            with self.assertRaises(ActorSmokeFailure):
-                require_persistence_summaries(actor)
-        finally:
-            # This fixture is never started; close its bound random socket explicitly.
-            stub.http.server_close()
+    async def test_incomplete_persistence_evidence_fails_and_closes_the_known_actor(self):
+        for mode, failure in [("missing_inventory", "INVENTORY_SUMMARY_MISSING"),
+                              ("truncated_quests", "QUEST_SUMMARY_NOT_COMPLETE")]:
+            with self.subTest(mode=mode):
+                stub, report = await self.run_fixture(mode)
+                self.assertFalse(report["passed"])
+                self.assertEqual(failure, report["failure"])
+                self.assertTrue(report["cleanup"]["verified"])
+                self.assertEqual(1, stub.creations)
+                self.assertEqual(1, len(stub.close_requests))
+                self.assertTrue(all(session["state"] == "CLOSED" for session in stub.sessions.values()))

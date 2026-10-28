@@ -7,6 +7,7 @@ import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.gms.client.Character;
 import org.gms.client.Client;
+import org.gms.client.command.CommandsExecutor;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.util.ThreadLocalUtil;
@@ -15,7 +16,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import soloMapling.beidou.CharacterTestContext;
-import soloMapling.game.command.NativeCommandExecutor;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -24,9 +24,7 @@ import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
-import soloMapling.game.script.ScriptValues;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -58,7 +56,7 @@ class NativeScriptRuntimeTest {
 
     @AfterEach void closeRuntimes() throws Exception {
         for (Fixture fixture : fixtures) fixture.close();
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
     }
 
     @Test void nativeContextRetainsOneEngineAndGlobalsUntilExplicitClose() throws Exception {
@@ -115,47 +113,64 @@ class NativeScriptRuntimeTest {
         assertClosed(fixture.closeContext(opened.contextId()));
     }
 
-    @Test void nativeRequestJsonBudgetCountsOnlyTheThreeDeclaredRoots() {
-        Map<String, Object> options = Map.of("selector", "native");
-        List<Object> args = Arrays.asList(null, "中文");
-        Map<String, Object> parameters = new LinkedHashMap<>();
-        parameters.put("payload", "");
-        int overhead = ScriptValues.json(options).getBytes(StandardCharsets.UTF_8).length
-                + ScriptValues.json(args).getBytes(StandardCharsets.UTF_8).length
-                + ScriptValues.json(parameters).getBytes(StandardCharsets.UTF_8).length;
-        String payload = "x".repeat(16_384 - overhead);
-        parameters.put("payload", payload);
-
-        NativeScriptRequest accepted = request("start", null, options, null, args, "", parameters, 1000);
-        assertEquals(16_384, ScriptValues.json(accepted.options()).getBytes(StandardCharsets.UTF_8).length
-                + ScriptValues.json(accepted.args()).getBytes(StandardCharsets.UTF_8).length
-                + ScriptValues.json(accepted.parameters()).getBytes(StandardCharsets.UTF_8).length);
-        assertNull(accepted.args().get(0));
-        parameters.put("payload", payload + "x");
-        assertThrows(IllegalArgumentException.class,
-                () -> request("start", null, options, null, args, "", parameters, 1000));
+    @Test void parametersAreBoundAsDataWithoutChargingTheirSourceEscapingAgain() throws Exception {
+        for (String payload : List.of("x".repeat(5_000), "\\".repeat(5_000), "\"".repeat(5_000), "中文😀".repeat(500))) {
+            Fixture fixture = fixture();
+            NativeScriptResult opened = fixture.start("parameters.payload", Map.of("payload", payload));
+            assertOpen(opened);
+            assertEquals(payload, opened.result());
+            assertClosed(fixture.closeContext(opened.contextId()));
+        }
     }
 
-    @Test void separateNativeJsonRootsRemainDetachedFromCallerMutation() {
-        Map<String, Object> nestedOption = new LinkedHashMap<>(Map.of("value", 21));
-        Map<String, Object> options = new LinkedHashMap<>(Map.of("nested", nestedOption));
-        List<Object> args = new ArrayList<>(Arrays.asList(null, nestedOption));
-        List<Object> values = new ArrayList<>(List.of("original"));
-        Map<String, Object> parameters = new LinkedHashMap<>(Map.of("values", values));
-        NativeScriptRequest captured = request("start", null, options, null, args, "", parameters, 1000);
+    @Test void returnedJsonRemainsUsableAfterTheNativeContextCloses() throws Exception {
+        Fixture fixture = fixture();
+        NativeScriptResult opened = fixture.start(
+                "({nullable:null, enabled:true, total:42, fraction:1.25, items:['中文','😀',null]})", Map.of());
+        assertOpen(opened);
+        assertClosed(fixture.closeContext(opened.contextId()));
+        Map<?, ?> result = assertInstanceOf(Map.class, opened.result());
+        assertNull(result.get("nullable"));
+        assertEquals(true, result.get("enabled"));
+        assertEquals(42, ((Number) result.get("total")).intValue());
+        assertEquals(1.25, ((Number) result.get("fraction")).doubleValue());
+        assertEquals(Arrays.asList("中文", "😀", null), result.get("items"));
+    }
 
-        nestedOption.put("value", 99);
-        options.clear();
-        args.clear();
-        values.add("later");
-        parameters.clear();
-        assertEquals(Map.of("nested", Map.of("value", 21)), captured.options());
-        assertEquals(Arrays.asList(null, Map.of("value", 21)), captured.args());
-        assertEquals(Map.of("values", List.of("original")), captured.parameters());
+    @Test void nativeJavaResultsCannotExportHostObjectsOrCyclicGraphs() throws Exception {
+        List<Object> cycle = new ArrayList<>(); cycle.add(cycle);
+        for (Object invalid : List.of(cycle, new Object(), Map.of("number", Double.NaN))) {
+            Fixture fixture = fixture();
+            fixture.adapter.startResult = invalid;
+            NativeScriptResult result = fixture.start("", Map.of());
+            assertEquals(ScriptResult.Status.RESULT_ERROR, result.status());
+            assertClosed(result);
+            fixture.assertDrained();
+        }
+    }
+
+    @Test void nativeResultLimitsApplyToEncodedUtf8AndNesting() throws Exception {
+        Fixture fixture = fixture();
+        NativeScriptResult opened = fixture.start("'x'.repeat(16382)", Map.of());
+        assertOpen(opened);
+        assertEquals("x".repeat(16_382), opened.result());
+        assertClosed(fixture.closeContext(opened.contextId()));
+
+        for (String source : List.of("'x'.repeat(16383)", "'中'.repeat(5461)",
+                "(() => { let value=0; for(let i=0;i<40;i++) value={nested:value}; return value; })()")) {
+            Fixture failed = fixture();
+            NativeScriptResult result = failed.start(source, Map.of());
+            assertEquals(ScriptResult.Status.RESULT_ERROR, result.status());
+            assertClosed(result);
+            failed.assertDrained();
+        }
     }
 
     @Test void errorsAndInvalidUnicodeRemainSerializableAndSettleTheirInvocation() throws Exception {
-        for (String source : List.of("const = ;", "throw new Error('expected_failure');", "'\\uD800'", "1n")) {
+        for (String source : List.of("const = ;", "throw new Error('expected_failure');", "'\\uD800'", "1n",
+                "(() => 1)", "Promise.resolve(1)", "NaN", "Infinity", "({'\\uD800': 1})",
+                "throw new Error('bad\\uD800text\\uDC00' + '😀'.repeat(2000));",
+                "(() => { const value={}; value.self=value; return value; })()")) {
             Fixture fixture = fixture();
             NativeScriptResult result = fixture.start(source, Map.of());
             assertNotEquals(ScriptResult.Status.SUCCEEDED, result.status(), source);
@@ -164,6 +179,12 @@ class NativeScriptRuntimeTest {
             assertNotNull(result.error());
             if (source.contains("expected_failure")) {
                 assertTrue(result.error().message().contains("expected_failure"), "retain_original_guest_failure");
+            }
+            if (source.contains("bad\\uD800text")) {
+                String message = result.error().message();
+                assertTrue(message.contains("bad\ufffdtext\ufffd"));
+                assertEquals(1_024, message.codePointCount(0, message.length()));
+                assertFalse(java.lang.Character.isHighSurrogate(message.charAt(message.length() - 1)));
             }
             assertNotNull(result.toMap());
             if (!"CLOSED".equals(result.contextState())) fixture.closeContext(result.contextId());
@@ -423,6 +444,7 @@ class NativeScriptRuntimeTest {
         volatile boolean loopDuringClose;
         volatile Client commandClient;
         String sourceDuringStart = "";
+        Object startResult;
         final List<String> commands = new ArrayList<>();
         boolean sawNullOption;
 
@@ -430,12 +452,14 @@ class NativeScriptRuntimeTest {
             if (commandClient == null) return () -> { };
             Client previous = ThreadLocalUtil.getCurrentClient();
             ThreadLocalUtil.setCurrentClient(commandClient);
-            MockedStatic<NativeCommandExecutor> bridge = mockStatic(NativeCommandExecutor.class);
-            bridge.when(() -> NativeCommandExecutor.execute(eq(commandClient), anyString())).thenAnswer(call -> {
+            CommandsExecutor dispatcher = mock(CommandsExecutor.class);
+            MockedStatic<CommandsExecutor> bridge = mockStatic(CommandsExecutor.class);
+            bridge.when(CommandsExecutor::getInstance).thenReturn(dispatcher);
+            doAnswer(call -> {
                 assertSame(commandClient, ThreadLocalUtil.getCurrentClient());
                 commands.add(call.getArgument(1));
-                return new NativeCommandExecutor.Result("RETURNED", true, true, "UNREPORTED", "native_handler_returned");
-            });
+                return null;
+            }).when(dispatcher).handle(eq(commandClient), anyString());
             return () -> {
                 bridge.close();
                 if (previous == null) ThreadLocalUtil.removeCurrentClient();
@@ -467,7 +491,7 @@ class NativeScriptRuntimeTest {
             });
             engine.eval("var count = 0; function next(value) { return {count: ++count, value: value}; }"
                     + "function nullable(value) { return value; }");
-            return null;
+            return startResult;
         }
         @Override public Object invoke(NativeScriptSession session, NativeScriptRequest request) throws Exception {
             return session.invocable().invokeFunction(request.entry(), request.args().toArray());
@@ -494,7 +518,7 @@ class NativeScriptRuntimeTest {
     private static final class Fixture {
         final ExecutorService executor = new ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
         final CharacterRuntime runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 128, 8), executor);
+                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
         final TestRole role = new TestRole(runtime.acceptedEpoch());
         final NeutralAdapter adapter = new NeutralAdapter();
         CharacterRuntime.ModuleContext context;
@@ -548,7 +572,9 @@ class NativeScriptRuntimeTest {
         volatile boolean online = true;
         TestRole(WorldEpoch.Token epoch) {
             Character actor = mock(Character.class); when(actor.getId()).thenReturn(101);
-            character = new GameContext.CharacterRef(epoch, actor, mock(Client.class), mock(World.class), mock(Channel.class));
+            Client client = mock(Client.class);
+            when(client.getPlayer()).thenReturn(actor); when(actor.getClient()).thenReturn(client);
+            character = new GameContext.CharacterRef(epoch, actor, client, mock(World.class), mock(Channel.class));
         }
         @Override public String kind() { return "native-test"; }
         @Override public Object identity() { return identity; }

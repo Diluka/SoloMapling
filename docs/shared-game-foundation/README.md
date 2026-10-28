@@ -28,7 +28,6 @@ V2/PQ 不经 Python、HTTP 或 MCP 发动作，也不复制整个 `ActorControlS
 ```java
 public final class WorldEpoch {
     public static void onWorldStarted();
-    public static void onWorldStopping();
     public static State snapshot();
     public static StopTransition stopTransition();
     public record StopTransition(State source, State stopped, boolean transitioned) {}

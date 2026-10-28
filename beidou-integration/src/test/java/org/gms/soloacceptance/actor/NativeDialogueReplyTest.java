@@ -301,12 +301,47 @@ class NativeDialogueReplyTest {
 
     @Test
     void invalidOffersCannotSelectButCanStillUseTheTrustedNativeCancel() {
-        for (String text : List.of("#L0#未闭合", "#L0#a#L71#nested#l#l", "#L0#a#l#L0#duplicate#l")) {
+        for (String text : List.of("#L0#未闭合", "#L0#a#L71#nested#l#l", "#L0#a#l#L00#duplicate#l",
+                "#L-1#negative#l", "#L2147483648#overflow#l", "#l#L0#stray#l")) {
             open(text);
             assertEquals(true,state().get("active")); assertEquals(false,options().get("complete"));
+            assertEquals(List.of(), options().get("offered_selections"));
             error(HttpStatus.CONFLICT,"npc_menu_incomplete", () -> reply("select",0));
             assertEquals(-1,client.validateNativeDialogueCancel(version()).action());
         }
+    }
+
+    @Test
+    void nativeMenuCapacityIsCheckedOnCompleteDecodedPackets() {
+        StringBuilder menu = new StringBuilder();
+        for (int id = 0; id < 128; id++) menu.append("#L").append(id).append("##l");
+        open(menu.toString());
+        assertEquals(false, latest().get("text_truncated"));
+        assertEquals(true, options().get("complete"));
+        assertEquals(128, ((List<?>) options().get("offered_selections")).size());
+        assertEquals(List.of(0, 71), options().get("allowed_selections"));
+        assertEquals("welfare", reply("select", 0).expectedPath());
+
+        menu.append("#L128##l");
+        open(menu.toString());
+        assertEquals(false, latest().get("text_truncated"));
+        assertEquals(false, options().get("complete"));
+        assertEquals(List.of(), options().get("offered_selections"));
+        error(HttpStatus.CONFLICT, "npc_menu_incomplete", () -> reply("select", 0));
+        assertEquals(-1, client.validateNativeDialogueCancel(version()).action());
+    }
+
+    @Test
+    void decodedMenuLabelsDoNotInventSelectionsOrGrantUnreviewedReplies() {
+        open("#b#L0##i2000000# 福利说明71#l#L2147483647#最大编号#l");
+        assertEquals(List.of(0, Integer.MAX_VALUE), options().get("offered_selections"));
+        assertEquals(List.of(0), options().get("allowed_selections"));
+        error(HttpStatus.CONFLICT, "npc_selection_not_offered", () -> reply("select", 71));
+        error(HttpStatus.CONFLICT, "npc_reply_path_not_supported", () -> reply("select", Integer.MAX_VALUE));
+        open("只有说明，0和71不是选项");
+        assertEquals(true, options().get("complete"));
+        assertEquals(List.of(), options().get("offered_selections"));
+        assertEquals(List.of(), options().get("kinds"));
     }
 
     @Test

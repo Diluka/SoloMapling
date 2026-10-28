@@ -5,6 +5,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
+from threading import Barrier
 import unittest
 
 from mcp import Client
@@ -128,3 +129,67 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 data["unrelated_metadata"] = {"scene_ref": "scene-fixture-1"}
         await self.run_negative_smoke(change)
 
+
+    async def test_observation_refresh_preserves_request_and_concurrent_calls_share_new_token(self) -> None:
+        expired_requests = Barrier(2)
+
+        def reject_old_token(request):
+            if request["headers"].get("authorization") == "Bearer " + TOKEN + "-2":
+                expired_requests.wait(timeout=2)
+                return 401, {"message": PASSWORD + TOKEN}
+            return self.stub.default_response(request)
+
+        def reject_first_token(request):
+            if request["headers"].get("authorization") == "Bearer " + TOKEN + "-1":
+                return 401, {"message": PASSWORD + TOKEN}
+            return self.stub.default_response(request)
+
+        self.stub.responder = reject_first_token
+        async with Client(build_server(self.stub.config())) as client:
+            observation = await client.call_tool("game_observe", {"limit": 17})
+            self.assertFalse(observation.is_error)
+            observations = [request for request in self.stub.requests if request["path"].endswith("observe")]
+            self.assertEqual(2, len(observations))
+            self.assertEqual(observations[0]["body"], observations[1]["body"])
+            self.assertNotEqual(observations[0]["headers"]["authorization"],
+                                observations[1]["headers"]["authorization"])
+            self.assertEqual(2, self.stub.login_count)
+            self.stub.responder = reject_old_token
+            responses = await asyncio.gather(client.call_tool("game_capabilities", {}),
+                                             client.call_tool("game_capabilities", {}))
+            self.assertTrue(all(not response.is_error for response in responses))
+        self.assertEqual(3, self.stub.login_count)
+
+    async def test_invalid_login_results_never_reach_game_resources_or_expose_credentials(self) -> None:
+        for payload, code in [({"code": 50001, "message": PASSWORD + TOKEN}, "BACKEND_REJECTED"),
+                              ({"code": 20000, "data": {"token": "bad\ntoken"}}, "INVALID_RESPONSE")]:
+            with self.subTest(code=code):
+                self.stub.requests.clear()
+                self.stub.responder = lambda request: (200, payload)
+                async with Client(build_server(self.stub.config())) as client:
+                    response = await client.call_tool("game_capabilities", {})
+                self.assertTrue(response.is_error)
+                self.assertEqual(code, response.structured_content["error"]["code"])
+                self.assertNotIn(PASSWORD, response.model_dump_json())
+                self.assertNotIn(TOKEN, response.model_dump_json())
+                self.assertTrue(all(request["path"] == "/auth/v1/login" for request in self.stub.requests))
+
+    async def test_untrusted_http_responses_are_bounded_sanitized_and_keep_http_failures(self) -> None:
+        cases = [(200, PASSWORD.encode(), "INVALID_RESPONSE"),
+                 (200, {"code": 20000, "data": []}, "INVALID_RESPONSE"),
+                 (200, {"code": 20000, "data": {"large": "x" * (4 * 1024 * 1024)}}, "INVALID_RESPONSE"),
+                 (302, {"message": PASSWORD + TOKEN}, "HTTP_ERROR")]
+        async with Client(build_server(self.stub.config())) as client:
+            for status, payload, code in cases:
+                with self.subTest(code=code, status=status):
+                    self.stub.responder = lambda request: (
+                        self.stub.default_response(request) if request["path"] == "/auth/v1/login"
+                        else (status, payload)
+                    )
+                    before = self.stub.resource_count
+                    response = await client.call_tool("game_capabilities", {})
+                    self.assertTrue(response.is_error)
+                    self.assertEqual(code, response.structured_content["error"]["code"])
+                    self.assertNotIn(PASSWORD, response.model_dump_json())
+                    self.assertNotIn(TOKEN, response.model_dump_json())
+                    self.assertEqual(before + 1, self.stub.resource_count)

@@ -89,25 +89,27 @@ class AcceptanceActorExecutionTest {
             execution.finalized();
         } finally {
             if (!executor.isShutdown()) {
-                CharacterRuntime.Snapshot state = execution.runtime().snapshot();
-                if (state.state() == CharacterRuntime.State.CLOSED) {
+                execution.refresh();
+                Map<String, Object> state = execution.diagnostics();
+                Map<?, ?> lane = (Map<?, ?>) state.get("lane");
+                if ("CLOSED".equals(state.get("state"))) {
                     // The host publishes CLOSED before shutting its executor down outside the host lock.
                     // A concurrent finalizer can observe that legitimate interval; termination is awaited below.
                     assertTrue(execution.resourceReleased());
-                    assertTrue(state.rootScope().unloadComplete());
-                    assertTrue(state.lane().closed());
+                    assertTrue(execution.scope().snapshot().unloadComplete());
+                    assertEquals(true, lane.get("closed"));
                 } else {
                     // Unknown native ownership remains visible. Only terminate this completed test's private executor;
                     // this does not prove root close or erase its outstanding resource registration.
-                    assertEquals(CharacterRuntime.State.CLOSING, state.state());
-                    assertFalse(state.lane().closed());
+                    assertEquals("CLOSING", state.get("state"));
+                    assertEquals(false, lane.get("closed"));
                     assertTrue(executor.getQueue().isEmpty());
-                    assertEquals(0, state.rootScope().acceptedWork());
+                    assertEquals(0, execution.scope().snapshot().acceptedWork());
                     executor.shutdown();
                 }
             }
             assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
         }
     }
 
@@ -232,7 +234,7 @@ class AcceptanceActorExecutionTest {
         }, () -> { });
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            ExecutionScope.WorldStopTicket stop = ExecutionScope.beginWorldStop();
+            ExecutionScope.WorldStopTicket stop = ExecutionScope.tryBeginWorldStop().orElseThrow();
             execution.beginDrain(Optional.of(stop));
         } finally { complete.countDown(); }
         await(open);
@@ -267,7 +269,7 @@ class AcceptanceActorExecutionTest {
         }, () -> { });
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            execution.beginDrain(Optional.of(ExecutionScope.beginWorldStop()));
+            execution.beginDrain(Optional.of(ExecutionScope.tryBeginWorldStop().orElseThrow()));
             WorldEpoch.onWorldStarted();
         } finally { complete.countDown(); }
         await(open);
@@ -450,37 +452,6 @@ class AcceptanceActorExecutionTest {
         assertTrue(execution.resourceReleased());
         assertEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ZERO));
         verify(backend).submitChat(action);
-        verify(backend).close(eq(handle), any());
-    }
-
-    @Test
-    void moduleUnloadKeepsTheSameOriginObservableAndRootCloseRemainsIndependentlyAvailable() throws Exception {
-        bindOwnedActor();
-        doReturn(Map.of("character_id", 73, "level", 1)).when(backend).snapshot(handle);
-        var context = execution.moduleContext();
-        assertNotSame(execution.scope(), context.scope());
-        assertEquals(73, execution.observeOrigin().get("character_id"));
-        assertSame(handle, execution.adoptedHandle());
-
-        CharacterRuntime.ModuleStop stopped = execution.runtime().stop(context.reference(), CharacterRuntime.StopMode.UNLOAD);
-        assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
-        assertEquals(CharacterRuntime.State.BOUND, execution.runtime().snapshot().state());
-        assertTrue(execution.runtime().snapshot().modules().isEmpty());
-        assertFalse(execution.resourceReleased());
-        assertFalse(executor.isShutdown());
-        verify(backend, never()).close(any(), any());
-        assertThrows(CharacterRuntime.Invalid.class, context::acceptWork);
-
-        doReturn(Map.of("character_id", 73, "level", 2)).when(backend).snapshot(handle);
-        assertEquals(2, execution.observeOrigin().get("level"), "origin projection must remain fresh after module unload");
-        execution.beginDrain(Optional.empty());
-        ScopeResources.CleanupAttempt cleanup = execution.cleanupAttempt();
-        execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, handle), () -> { });
-        await(cleanup.work());
-        assertEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ofSeconds(5)));
-        assertTrue(execution.finalized());
-        assertEquals(CharacterRuntime.State.CLOSED, execution.runtime().snapshot().state());
-        assertTrue(execution.resourceReleased());
         verify(backend).close(eq(handle), any());
     }
 

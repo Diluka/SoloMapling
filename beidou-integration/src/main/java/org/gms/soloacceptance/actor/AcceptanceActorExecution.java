@@ -42,11 +42,10 @@ final class AcceptanceActorExecution {
         this.backend = backend;
         this.moduleInstance = moduleInstance;
         runtime = new CharacterRuntime(epoch, new CharacterRuntime.Options(8, 1,
-                new ExecutionScope.Limits(16, 1, 16, 1), 64, 1), executor);
+                new ExecutionScope.Limits(16, 1, 16, 1), 1), executor);
         refreshDiagnostics();
     }
 
-    CharacterRuntime runtime() { return runtime; }
     ExecutionScope scope() { return runtime.lifecycleScope(); }
     ExecutionScope moduleScope() { return requireModule().context().scope(); }
     CharacterRuntime.ModuleContext moduleContext() { return requireModule().context(); }
@@ -280,7 +279,7 @@ final class AcceptanceActorExecution {
         info.put("module", java.util.Collections.unmodifiableMap(attached));
         info.put("lane", Map.of("pending", state.lane().pending(), "ordinary", state.lane().ordinary(),
                 "cleanup", state.lane().cleanup(), "closed", state.lane().closed()));
-        RuntimeEvents.Window window = runtime.events(0, 64);
+        RuntimeEvents.Window window = runtime.events();
         List<Map<String, Object>> items = window.events().stream().map(event -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("sequence", event.sequence()); item.put("kind", event.kind().name());

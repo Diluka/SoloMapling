@@ -14,7 +14,7 @@ import java.util.function.Supplier;
 /** Actual accepted work and owned-result registration for the native adapter contract tests. */
 final class NativeActorExecutionFixture implements NativeActorBackend.OpenOwnership {
     final ExecutionScope scope = new ExecutionScope(WorldEpoch.snapshot().token(),
-            new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(32, 8, 16, 1));
+            new ExecutionScope.Limits(32, 8, 16, 1));
     final ExecutionScope.WorkHandle openWork = scope.acceptWork();
     private ScopeResources.Registration registration;
     private World world;
@@ -65,7 +65,7 @@ final class NativeActorExecutionFixture implements NativeActorBackend.OpenOwners
     }
 
     void stopWorld() {
-        scope.joinWorldStop(ExecutionScope.beginWorldStop());
+        scope.joinWorldStop(ExecutionScope.tryBeginWorldStop().orElseThrow());
         scope.beginDrain();
     }
 

@@ -1,5 +1,7 @@
 package org.gms.soloacceptance.actor;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.gms.client.Character;
 import org.gms.client.Client;
@@ -132,7 +134,7 @@ class NativeActorNpcScriptTest {
                 assertNull(client.getQM());
             }
         } finally {
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
             ThreadLocalUtil.removeCurrentClient();
             engines.forEach(GraalJSScriptEngine::close);
             if (extensions != null) extensions.close();

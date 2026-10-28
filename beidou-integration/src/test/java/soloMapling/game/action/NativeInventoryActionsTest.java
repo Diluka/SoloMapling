@@ -80,14 +80,14 @@ class NativeInventoryActionsTest {
         inventory.addItemFromDB(new Item(2000000, (short) 1, (short) 10));
         var actor = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), character, client, world, channel);
         scene = new GameContext.SceneRef(actor, map, null, null);
-        scope = new ExecutionScope(actor.epoch(), new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(16, 1, 8, 1));
+        scope = new ExecutionScope(actor.epoch(), new ExecutionScope.Limits(16, 1, 8, 1));
         executor = new ManualExecutor(); lane = new CharacterCommandLane(8, 1, executor);
         permit = lane.bindGrantedPermit(scope, actor, lane.declareGrant(scope), () -> NativeContextChecks.requireCharacterCurrent(server, actor));
     }
 
     @AfterEach void cleanup() {
         if (lane != null) lane.close(); if (executor != null) executor.shutdown(); ThreadLocalUtil.removeCurrentClient();
-        if (itemStatic != null) itemStatic.close(); if (serverStatic != null) serverStatic.close(); WorldEpoch.onWorldStopping();
+        if (itemStatic != null) itemStatic.close(); if (serverStatic != null) serverStatic.close(); ExecutionScope.tryBeginWorldStop();
     }
 
     @Test void nativeMoveHasImmutableFactsAndConsumerCompletionPrecedesRealSettlement() {
@@ -169,7 +169,7 @@ class NativeInventoryActionsTest {
     }
 
     @Test void completedMoveFactsSurviveWorldStopWithoutRefreshingTheirEpoch() {
-        doAnswer(call -> { WorldEpoch.onWorldStopping(); return null; }).when(client).sendPacket(any());
+        doAnswer(call -> { ExecutionScope.tryBeginWorldStop(); return null; }).when(client).sendPacket(any());
         InventoryMoveResult result = run();
         assertEquals(SUCCEEDED, result.outcome()); assertTrue(result.evidence().identityVerified());
         assertEquals(scene.actor().epoch().value(), result.epoch()); assertFalse(WorldEpoch.snapshot().active());

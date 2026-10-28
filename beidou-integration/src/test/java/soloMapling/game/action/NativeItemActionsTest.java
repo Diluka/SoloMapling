@@ -111,8 +111,7 @@ class NativeItemActionsTest {
         when(worldPlayers.getCharacterById(41)).thenReturn(actor); when(channelPlayers.getCharacterById(41)).thenReturn(actor);
         var reference = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), actor, client, world, channel);
         scene = new GameContext.SceneRef(reference, map, null, null);
-        scope = new ExecutionScope(reference.epoch(), new ExecutionScope.OwnerStamp(new Object(), new Object()),
-                new ExecutionScope.Limits(16, 1, 8, 1));
+        scope = new ExecutionScope(reference.epoch(), new ExecutionScope.Limits(16, 1, 8, 1));
         executor = new ManualExecutor(); lane = new CharacterCommandLane(8, 1, executor);
         permit = lane.bindGrantedPermit(scope, reference, lane.declareGrant(scope),
                 () -> NativeContextChecks.requireCharacterCurrent(server, reference));
@@ -122,7 +121,7 @@ class NativeItemActionsTest {
         if (lane != null) lane.close(); if (executor != null) executor.shutdown();
         ThreadLocalUtil.removeCurrentClient();
         if (slotMetadata != null) slotMetadata.close(); if (metadata != null) metadata.close(); if (servers != null) servers.close();
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
     }
 
     @Test void finiteTypedArgumentsRejectImplicitDropEquipAndZeroQuantity() {

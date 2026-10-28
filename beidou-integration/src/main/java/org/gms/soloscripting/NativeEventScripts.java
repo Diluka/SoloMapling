@@ -1,6 +1,5 @@
 package org.gms.soloscripting;
 
-import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.gms.client.Client;
 import org.gms.scripting.event.EventManager;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
@@ -11,17 +10,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
 
 /** An independently owned native event manager, never a channel's shared EventManager. */
 public final class NativeEventScripts implements NativeScriptAdapter {
     private final Client client;
-    private final Function<String, GraalJSScriptEngine> loader;
 
-    public NativeEventScripts(Client client) { this(client, NativeScriptLoader::load); }
-    NativeEventScripts(Client client, Function<String, GraalJSScriptEngine> loader) {
+    public NativeEventScripts(Client client) {
         this.client = Objects.requireNonNull(client);
-        this.loader = Objects.requireNonNull(loader);
     }
 
     @Override public AutoCloseable enter(NativeScriptSession session) {
@@ -34,7 +29,7 @@ public final class NativeEventScripts implements NativeScriptAdapter {
         String name = NativeWorldScriptSupport.scriptName(request.options().get("script"));
         var role = NativeWorldScriptSupport.role(client);
         String path = "event/" + name + ".js";
-        NativeWorldScriptSupport.load(session, loader, path);
+        NativeWorldScriptSupport.load(session, path);
         EventManager manager = new EventManager(role.channel(), session.invocable(), name);
         session.attachment(new Bound(role, manager, path));
         session.ownEventManager(manager);

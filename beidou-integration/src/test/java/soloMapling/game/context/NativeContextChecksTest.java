@@ -1,5 +1,7 @@
 package soloMapling.game.context;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.client.Client;
@@ -86,7 +88,7 @@ class NativeContextChecksTest {
             verify(map, never()).addPlayer(any());
             verify(map, never()).removePlayer(any());
         } finally {
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
             singleton.close();
         }
     }
@@ -183,7 +185,7 @@ class NativeContextChecksTest {
 
     @Test
     void anOfflineWorldAndAnOldEpochRemainDistinctEvenIfAllObjectsAreReused() {
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         assertReason(WORLD_OFFLINE, () -> NativeContextChecks.requireCharacterCurrent(server, ref));
         WorldEpoch.onWorldStarted();
         assertReason(WORLD_CHANGED, () -> NativeContextChecks.requireCharacterCurrent(server, ref));
@@ -198,7 +200,7 @@ class NativeContextChecksTest {
     void anEpochChangeDuringNativeReadsIsReportedAsRuntimeChanged() {
         AtomicBoolean changed = new AtomicBoolean();
         doAnswer(call -> {
-            if (changed.compareAndSet(false, true)) WorldEpoch.onWorldStopping();
+            if (changed.compareAndSet(false, true)) ExecutionScope.tryBeginWorldStop();
             return call.callRealMethod();
         }).when(map).getCharacterById(73);
         assertReason(RUNTIME_CHANGED, () -> NativeContextChecks.requireCharacterCurrent(server, ref));
@@ -207,7 +209,7 @@ class NativeContextChecksTest {
     @Test
     void aKnownEpochChangeStillWinsWhenTheNativeGetterThenThrows() {
         when(world.getChannel(1)).thenAnswer(call -> {
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
             throw new IllegalStateException("private-native-context-detail");
         });
         assertReason(RUNTIME_CHANGED, () -> NativeContextChecks.requireCharacterCurrent(server, ref));

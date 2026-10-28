@@ -12,13 +12,20 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpInputMessage;
+import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import soloMapling.beidou.CharacterTestContext;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -152,7 +159,8 @@ class ActorControlControllerTest {
         ActorControlController controller = new ActorControlController(service);
         authenticate("operator-a", "ROLE_ADMIN");
         ActorActRequest data = new ActorActRequest("session-id", 7L, "chat",
-                new ActorActRequest.Parameters("聊天验收 abc123"),
+                new ActorActRequest.Parameters("聊天验收 abc123", null, null, null, null, null, null,
+                        null, null, null, null, null),
                 new ActorActRequest.ExpectedContext("scene-id", "runtime-id"));
         Map<String, Object> operation = Map.of("kind", "ACTION", "status", "QUEUED", "action", "chat");
         when(service.act("operator-a", "action-request", data)).thenReturn(operation);
@@ -280,7 +288,8 @@ class ActorControlControllerTest {
                 "{\"requestId\":\"action-request\",\"data\":" + data + "}", new TypeReference<>() {});
         assertEquals("action-request", envelope.getRequestId());
         assertEquals(new ActorActRequest("session-id", 7L, "chat",
-                new ActorActRequest.Parameters("聊天验收 abc123"),
+                new ActorActRequest.Parameters("聊天验收 abc123", null, null, null, null, null, null,
+                        null, null, null, null, null),
                 new ActorActRequest.ExpectedContext("scene-id", "runtime-id")), envelope.getData());
         assertEquals(new ActorActRequest(null, null, null, null, null),
                 mapper.readValue("{}", ActorActRequest.class));
@@ -336,25 +345,6 @@ class ActorControlControllerTest {
     }
 
     @Test
-    void actionParametersFollowTheirTagsAndPreserveTheExistingChatConstructor() throws Exception {
-        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        for (ActorActRequest request : List.of(
-                new ActorActRequest("session-id", 7L, "chat", new ActorActRequest.Parameters("聊天验收 abc123"),
-                        new ActorActRequest.ExpectedContext("scene-id", "runtime-id")),
-                new ActorActRequest("session-id", 7L, "npc_center_open", new ActorActRequest.Parameters(null, null),
-                        new ActorActRequest.ExpectedContext("scene-id", "runtime-id")),
-                new ActorActRequest("session-id", 7L, "npc_cancel", new ActorActRequest.Parameters(null, Long.MAX_VALUE),
-                        new ActorActRequest.ExpectedContext("scene-id", "runtime-id")))) {
-            String serialized = mapper.writeValueAsString(request);
-            assertEquals(request, mapper.readValue(serialized, ActorActRequest.class));
-            assertEquals("npc_center_open".equals(request.action()) ? 0 : 1,
-                    mapper.readTree(serialized).get("parameters").size());
-        }
-        assertEquals(new ActorActRequest.Parameters("chat", null), new ActorActRequest.Parameters("chat"));
-        assertEquals(mapper.readValue(actionJson(), ActorActRequest.class).parameters().text(), "聊天验收 abc123");
-    }
-
-    @Test
     void npcDialogueVersionRejectsCoercionAndOverflowWhileRangesRemainWithTheService() throws Exception {
         ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         for (String value : List.of("1.0", "\"7\"", "true", "{}", "[]",
@@ -396,29 +386,11 @@ class ActorControlControllerTest {
         ObjectNode parameters = (ObjectNode) body.get("parameters");
         parameters.put("text", "保留给服务校验");
         parameters.put("dialogue_version", 7);
-        assertEquals(new ActorActRequest.Parameters("保留给服务校验", 7L),
-                mapper.treeToValue(body, ActorActRequest.class).parameters());
+        ActorActRequest request = mapper.treeToValue(body, ActorActRequest.class);
+        assertEquals("保留给服务校验", request.parameters().text());
+        assertEquals(7L, request.parameters().dialogueVersion());
         parameters.put("script", "unavailable");
         assertThrows(Exception.class, () -> mapper.treeToValue(body, ActorActRequest.class));
-    }
-
-    @Test
-    void npcReplyParametersRoundTripAndPreserveTheExistingParameterConstructors() throws Exception {
-        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        for (ActorActRequest.Parameters parameters : List.of(
-                new ActorActRequest.Parameters(null, 7L, "select", Integer.MAX_VALUE),
-                new ActorActRequest.Parameters(null, 7L, "decline", null))) {
-            ActorActRequest request = new ActorActRequest("session-id", 7L, "npc_reply", parameters,
-                    new ActorActRequest.ExpectedContext("scene-id", "runtime-id"));
-            String serialized = mapper.writeValueAsString(request);
-            assertEquals(request, mapper.readValue(serialized, ActorActRequest.class));
-            assertEquals("select".equals(parameters.kind()) ? 3 : 2,
-                    mapper.readTree(serialized).get("parameters").size());
-        }
-        assertEquals(new ActorActRequest.Parameters("chat", null, null, null),
-                new ActorActRequest.Parameters("chat"));
-        assertEquals(new ActorActRequest.Parameters(null, 7L, null, null),
-                new ActorActRequest.Parameters(null, 7L));
     }
 
     @Test
@@ -641,6 +613,104 @@ class ActorControlControllerTest {
         assertEquals("native-cancel", controller.scriptCancel(new SubmitBody<>("native-cancel", cancel)).getResponseId());
         verify(service).scriptRun("native-admin", "original-native", invocation);
         verify(service).scriptCancel("native-admin", "native-cancel", cancel);
+    }
+
+    @Test
+    void httpActionInputsReachTheOwnedServiceWithTheirNativeIdentifiersAndSignedEquipmentSlots() throws Exception {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("operator-a", "ROLE_ADMIN");
+        when(service.act(eq("operator-a"), eq("http-action"), any())).thenReturn(Map.of("status", "QUEUED"));
+        Map<String, String> inputs = Map.of(
+                "move", "{\"direction\":\"LEFT\",\"duration_ms\":3000}",
+                "stop", "{}", "attack", "{\"target_oid\":42}", "pickup", "{\"object_id\":43}",
+                "drop", "{\"inventory_type\":\"USE\",\"source_slot\":127,\"quantity\":5}",
+                "use_item", "{\"source_slot\":1}",
+                "equip", "{\"source_slot\":1,\"target_slot\":-11}",
+                "unequip", "{\"source_slot\":-11,\"target_slot\":127}");
+        for (var input : inputs.entrySet()) {
+            SubmitBody<ActorActRequest> envelope = readActionHttp(input.getKey(), input.getValue());
+            ActorActRequest data = envelope.getData();
+            assertEquals("session-id", data.sessionId());
+            assertEquals(7L, data.expectedGeneration());
+            assertEquals(input.getKey(), data.action());
+            assertEquals(new ActorActRequest.ExpectedContext("scene-id", "runtime-id"), data.expectedContext());
+            ActorActRequest.Parameters parameters = data.parameters();
+            switch (input.getKey()) {
+                case "move" -> { assertEquals("LEFT", parameters.direction()); assertEquals(3000, parameters.durationMs()); }
+                case "attack" -> assertEquals(42, parameters.targetOid());
+                case "pickup" -> assertEquals(43, parameters.objectId());
+                case "drop" -> {
+                    assertEquals("USE", parameters.inventoryType()); assertEquals(127, parameters.sourceSlot());
+                    assertEquals(5, parameters.quantity());
+                }
+                case "use_item" -> assertEquals(1, parameters.sourceSlot());
+                case "equip" -> { assertEquals(1, parameters.sourceSlot()); assertEquals(-11, parameters.targetSlot()); }
+                case "unequip" -> { assertEquals(-11, parameters.sourceSlot()); assertEquals(127, parameters.targetSlot()); }
+            }
+            assertEquals("http-action", controller.act(envelope).getResponseId());
+            verify(service).act("operator-a", "http-action", data);
+        }
+        for (String inventory : List.of("EQUIP", "USE", "SETUP", "ETC", "CASH")) {
+            SubmitBody<ActorActRequest> envelope = readActionHttp("inventory_move",
+                    "{\"inventory_type\":\"" + inventory + "\",\"source_slot\":1,\"target_slot\":127}");
+            assertEquals(inventory, envelope.getData().parameters().inventoryType());
+            assertEquals(1, envelope.getData().parameters().sourceSlot());
+            assertEquals(127, envelope.getData().parameters().targetSlot());
+            controller.act(envelope);
+            verify(service).act("operator-a", "http-action", envelope.getData());
+        }
+    }
+
+    @Test
+    void malformedActionNumbersStringsAndCrossActionControlsAreRejectedBeforeCallingTheService() throws Exception {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        authenticate("operator-a", "ROLE_ADMIN");
+        Map<String, List<String>> integerFields = Map.of(
+                "move", List.of("duration_ms"), "attack", List.of("target_oid"),
+                "pickup", List.of("object_id"), "drop", List.of("source_slot", "quantity"),
+                "use_item", List.of("source_slot"), "equip", List.of("source_slot", "target_slot"),
+                "unequip", List.of("source_slot", "target_slot"),
+                "inventory_move", List.of("source_slot", "target_slot"));
+        for (var action : integerFields.entrySet()) {
+            for (String field : action.getValue()) {
+                for (String invalid : List.of("true", "1.0", "\"1\"", "2147483648", "-2147483649")) {
+                    var failure = assertThrows(HttpMessageNotReadableException.class,
+                            () -> controller.act(readActionHttp(action.getKey(), "{\"" + field + "\":" + invalid + "}")),
+                            action.getKey() + "." + field + "=" + invalid);
+                    assertEquals(HttpStatus.BAD_REQUEST, controller.malformedRequest(failure).getStatusCode());
+                }
+            }
+        }
+        for (var action : Map.of("move", "direction", "drop", "inventory_type", "inventory_move", "inventory_type").entrySet()) {
+            assertThrows(HttpMessageNotReadableException.class,
+                    () -> controller.act(readActionHttp(action.getKey(), "{\"" + action.getValue() + "\":1}")));
+        }
+        for (var action : Map.of(
+                "stop", "direction", "pickup", "quantity", "chat", "target_oid", "inventory_move", "quantity",
+                "npc_reply", "inventory_type", "attack", "damage", "move", "packet", "equip", "script", "unequip", "handler").entrySet()) {
+            assertThrows(HttpMessageNotReadableException.class,
+                    () -> controller.act(readActionHttp(action.getKey(), "{\"" + action.getValue() + "\":null}")),
+                    action.getKey() + "." + action.getValue());
+        }
+        verifyNoInteractions(service);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SubmitBody<ActorActRequest> readActionHttp(String action, String parameters) throws Exception {
+        String json = "{\"requestId\":\"http-action\",\"data\":{\"session_id\":\"session-id\",\"expected_generation\":7,"
+                + "\"action\":\"" + action + "\",\"parameters\":" + parameters + ",\"expected_context\":{"
+                + "\"scene_ref\":\"scene-id\",\"runtime_generation\":\"runtime-id\"}}}";
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpInputMessage input = new HttpInputMessage() {
+            @Override public InputStream getBody() { return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)); }
+            @Override public HttpHeaders getHeaders() { return headers; }
+        };
+        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        return (SubmitBody<ActorActRequest>) new MappingJackson2HttpMessageConverter(mapper).read(
+                new TypeReference<SubmitBody<ActorActRequest>>() { }.getType(), null, input);
     }
 
     private static String nativeScriptJson() {

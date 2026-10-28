@@ -57,10 +57,10 @@ public final class CharacterRuntime {
     private CharacterCommandLane.Snapshot closedLane;
 
     public record Options(int commandCapacity, int cleanupReserve, ExecutionScope.Limits rootLimits,
-                          int eventCapacity, int maxModules) {
+                          int maxModules) {
         public Options {
             if (commandCapacity < 2 || cleanupReserve < 1 || cleanupReserve >= commandCapacity
-                    || eventCapacity < 1 || maxModules < 1 || rootLimits == null || rootLimits.maxResources() < 1) {
+                    || maxModules < 1 || rootLimits == null || rootLimits.maxResources() < 1) {
                 throw new IllegalArgumentException("invalid_runtime_options");
             }
         }
@@ -87,8 +87,8 @@ public final class CharacterRuntime {
         this.epoch = Objects.requireNonNull(epoch);
         this.options = Objects.requireNonNull(options);
         ownedExecutor = Objects.requireNonNull(executor);
-        rootScope = new ExecutionScope(epoch, new ExecutionScope.OwnerStamp(generation, new Object()), options.rootLimits());
-        events = new RuntimeEvents(id, options.eventCapacity());
+        rootScope = new ExecutionScope(epoch, options.rootLimits());
+        events = new RuntimeEvents(id);
         try {
             lane = new CharacterCommandLane(options.commandCapacity(), options.cleanupReserve(), executor);
             admission = lane.admissionPermit(rootScope);
@@ -103,7 +103,7 @@ public final class CharacterRuntime {
     public String id() { return id; }
     public WorldEpoch.Token acceptedEpoch() { return epoch; }
     public ExecutionScope lifecycleScope() { return rootScope; }
-    public RuntimeEvents.Window events(long since, int limit) { return events.read(since, limit); }
+    public RuntimeEvents.Window events() { return events.snapshot(); }
 
     /** Closing barrier for asynchronous module resources; completion never grants root cleanup authority. */
     public CompletionStage<Void> whenModulesDrained() {
@@ -250,7 +250,7 @@ public final class CharacterRuntime {
             if (entry.context != null) throw new Invalid("module_scope_not_drained");
             entry.ref = new ModuleRef(entry.spec.instanceId(), ++nextModuleGeneration);
             ExecutionScope scope = new ExecutionScope(epoch,
-                    new ExecutionScope.OwnerStamp(generation, new Object()), entry.spec.limits());
+                    entry.spec.limits());
             CharacterCommandLane.Grant grant = requireLane().declareGrant(scope);
             context = new ModuleContext(entry.ref, scope, grant);
             entry.context = context;
@@ -393,9 +393,11 @@ public final class CharacterRuntime {
             requireOwn(work); Objects.requireNonNull(result);
             require(characterId != null && result.senderCharacterId() == characterId
                     && epoch.value().equals(result.epoch()), "foreign_action_result");
+            String reason = result.fixedReason();
+            require(reason == null || reason.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}"), "invalid_action_fact_reason");
             // This records an observed native fact; it does not revive the old module or apply its state.
             events.append(RuntimeEvents.Kind.ACTION_RESULT, ref.instanceId, ref.moduleGeneration,
-                    work.snapshot().id(), result.fixedReason(), result.outcome().name());
+                    work.snapshot().id(), reason, result.outcome().name());
         }
         public CharacterCommandLane.Submission submitCleanup(ScopeResources.CleanupAttempt cleanup,
                                                               Runnable body, Runnable settled) {

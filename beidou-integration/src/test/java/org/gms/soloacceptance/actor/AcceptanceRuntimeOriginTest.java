@@ -58,7 +58,7 @@ class AcceptanceRuntimeOriginTest {
         handle = nativeHandle(world, channel);
         executor = new ManualExecutor();
         runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 1, 16, 1), 32, 4), executor);
+                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 1, 16, 1), 4), executor);
         verifiedNativeClose();
     }
 
@@ -78,7 +78,7 @@ class AcceptanceRuntimeOriginTest {
                 assertEquals(ExecutionScope.DrainResult.DRAINED, runtime.awaitClosed(Duration.ZERO));
             }
         } finally {
-            assertAll("fixture cleanup", executor::shutdown, WorldEpoch::onWorldStopping);
+            assertAll("fixture cleanup", executor::shutdown, ExecutionScope::tryBeginWorldStop);
         }
     }
 
@@ -240,7 +240,7 @@ class AcceptanceRuntimeOriginTest {
             origin.bindOrigin(world, channel);
             assertEquals(1, runtime.lifecycleScope().resources().snapshot().pending());
 
-            ExecutionScope.WorldStopTicket stop = ExecutionScope.beginWorldStop();
+            ExecutionScope.WorldStopTicket stop = ExecutionScope.tryBeginWorldStop().orElseThrow();
             runtime.beginClose(Optional.of(stop));
             assertSame(accepted, stop.sourceEpoch());
             assertEquals(ExecutionScope.BodyState.RUNNING, opening.snapshot().bodyState());

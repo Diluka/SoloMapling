@@ -63,7 +63,7 @@ class CharacterRuntimeTest {
                 fixture.executor.shutdown();
             }
         }
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
     }
 
     @Test
@@ -91,7 +91,7 @@ class CharacterRuntimeTest {
         assertEquals(101, fixture.runtime.snapshot().characterId());
         assertEquals(Map.of("character_id", 101, "online", true), fixture.runtime.observeOrigin());
         assertEquals(List.of(RuntimeEvents.Kind.CREATED, RuntimeEvents.Kind.BOUND),
-                fixture.runtime.events(0, 100).events().stream().map(RuntimeEvents.Event::kind).toList());
+                fixture.runtime.events().events().stream().map(RuntimeEvents.Event::kind).toList());
         assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::acceptOpeningWork);
     }
 
@@ -112,7 +112,7 @@ class CharacterRuntimeTest {
     void stopBetweenOpeningAdmissionAndSubmissionStillSettlesTheExactWorkWithoutEnteringItsBody() {
         Fixture fixture = manual();
         var work = fixture.runtime.acceptOpeningWork();
-        fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+        fixture.runtime.beginClose(Optional.of(ExecutionScope.tryBeginWorldStop().orElseThrow()));
         AtomicInteger bodies = new AtomicInteger(), settlements = new AtomicInteger();
         assertEquals(CharacterRuntime.State.CLOSING, fixture.runtime.snapshot().state());
         assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::acceptOpeningWork);
@@ -388,10 +388,10 @@ class CharacterRuntimeTest {
     void matchingWorldStopTicketAllowsOnlyOwnedCleanupAndNoFurtherModuleCommands() {
         Fixture fixture = opened();
         var context = fixture.runtime.context(fixture.mount("mcp", Set.of("chat")));
-        var ticket = ExecutionScope.beginWorldStop();
+        var ticket = ExecutionScope.tryBeginWorldStop().orElseThrow();
         fixture.runtime.beginClose(Optional.of(ticket));
         assertThrows(CharacterRuntime.Invalid.class, context::acceptWork);
-        assertSame(ticket, ExecutionScope.beginWorldStop());
+        assertSame(ticket, ExecutionScope.tryBeginWorldStop().orElseThrow());
         fixture.cleanupOrigin();
         fixture.runQueued();
         assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
@@ -406,7 +406,7 @@ class CharacterRuntimeTest {
         AtomicReference<TestRole> late = new AtomicReference<>();
         fixture.runtime.submitOpening(work, () -> {
             var origin = fixture.runtime.reserveOrigin(work);
-            var stop = ExecutionScope.beginWorldStop();
+            var stop = ExecutionScope.tryBeginWorldStop().orElseThrow();
             fixture.runtime.beginClose(Optional.of(stop));
             TestRole result = new TestRole(WorldEpoch.snapshot().token());
             late.set(result);
@@ -443,7 +443,7 @@ class CharacterRuntimeTest {
         AtomicReference<TestRole> late = new AtomicReference<>();
         fixture.runtime.submitOpening(work, () -> {
             var origin = fixture.runtime.reserveOrigin(work);
-            fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+            fixture.runtime.beginClose(Optional.of(ExecutionScope.tryBeginWorldStop().orElseThrow()));
             WorldEpoch.onWorldStarted();
             TestRole result = new TestRole(WorldEpoch.snapshot().token());
             late.set(result);
@@ -470,7 +470,7 @@ class CharacterRuntimeTest {
     void aNewWorldCannotRenewAnOldOriginCleanupWindowOrAnOldModuleContext() {
         Fixture fixture = opened();
         var context = fixture.runtime.context(fixture.mount("mcp", Set.of("chat")));
-        fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+        fixture.runtime.beginClose(Optional.of(ExecutionScope.tryBeginWorldStop().orElseThrow()));
         WorldEpoch.onWorldStarted();
         assertThrows(CharacterRuntime.Invalid.class, context::acceptWork);
         assertThrows(RuntimeException.class, fixture.runtime::acquireOriginCleanup);
@@ -581,7 +581,7 @@ class CharacterRuntimeTest {
     void aForeignCleanupPermitForTheSameIdentityCannotInvokeTheOriginReleaseAdapter() {
         Fixture fixture = opened();
         ExecutionScope foreign = new ExecutionScope(fixture.runtime.acceptedEpoch(),
-                new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(4, 1, 4, 1));
+                new ExecutionScope.Limits(4, 1, 4, 1));
         var registration = foreign.resources().beginRegistration("foreign_native_role");
         registration.attach(fixture.role.identity(), () -> {});
         var cleanup = registration.acquireCleanup();
@@ -708,12 +708,18 @@ class CharacterRuntimeTest {
         assertThrows(CharacterRuntime.Invalid.class, () -> context.recordResult(work,
                 actionFact(102, fixture.runtime.acceptedEpoch().value())));
         assertThrows(CharacterRuntime.Invalid.class, () -> context.recordResult(work, actionFact(101, "other_world")));
+        assertThrows(CharacterRuntime.Invalid.class, () -> context.recordResult(work, new NativeActionFact() {
+            public int senderCharacterId() { return 101; }
+            public String epoch() { return fixture.runtime.acceptedEpoch().value(); }
+            public NativeActionResult.Outcome outcome() { return NativeActionResult.Outcome.FAILED; }
+            public String fixedReason() { return "private\nexception body"; }
+        }));
         context.reject(work);
         fixture.runtime.stop(context.reference(), CharacterRuntime.StopMode.PAUSE);
         // A late native fact is observable, but grants no authority to the stopped module.
         context.recordResult(work, fact);
         assertThrows(CharacterRuntime.Invalid.class, context::acceptWork);
-        var events = fixture.runtime.events(0, 128).events().stream()
+        var events = fixture.runtime.events().events().stream()
                 .filter(event -> event.kind() == RuntimeEvents.Kind.ACTION_RESULT).toList();
         assertEquals(1, events.size());
         assertEquals("inventory", events.getFirst().moduleId());
@@ -762,7 +768,7 @@ class CharacterRuntimeTest {
             this.executor = executor;
             manual = executor instanceof ManualExecutor value ? value : null;
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                    new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 128, 8), executor);
+                    new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
             role = new TestRole(runtime.acceptedEpoch());
         }
         void open() {

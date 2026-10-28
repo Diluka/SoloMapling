@@ -1,11 +1,14 @@
 package org.gms.soloacceptance.actor;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.client.Job;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
 import org.gms.client.inventory.Item;
+import org.gms.client.inventory.Equip;
 import org.gms.constants.id.MapId;
 import org.gms.dao.entity.AccountsDO;
 import org.gms.dao.entity.CharactersDO;
@@ -23,6 +26,9 @@ import org.gms.scripting.event.EventInstanceManager;
 import org.gms.scripting.quest.QuestActionManager;
 import org.gms.server.CashShop;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.MapItem;
+import org.gms.server.maps.MapObject;
+import org.gms.server.life.Monster;
 import org.gms.service.AccountService;
 import org.gms.service.CharacterService;
 import org.gms.service.NoteService;
@@ -40,12 +46,14 @@ import java.awt.Point;
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -134,7 +142,7 @@ class NativeActorBackendTest {
 
     @AfterEach
     void closeStaticOwnershipMock() {
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         ownership.close();
     }
 
@@ -163,7 +171,7 @@ class NativeActorBackendTest {
         NativeActorExecutionFixture attempt = new NativeActorExecutionFixture();
         try (MockedConstruction<AcceptanceClient> clients = mockConstruction(AcceptanceClient.class,
                 (nativeClient, context) -> when(nativeClient.login(anyString(), anyString(), any())).thenAnswer(invocation -> {
-                    WorldEpoch.onWorldStopping();
+                    ExecutionScope.tryBeginWorldStop();
                     return 7;
                 }))) {
             ObservationException failure = assertThrows(ObservationException.class,
@@ -398,7 +406,7 @@ class NativeActorBackendTest {
     void aHandleCannotRecaptureTheNewWorldEpochEvenWhenAllNativeObjectsAreReused() {
         var captured = handle.characterRef();
         assertTrue(backend.isCurrent(handle));
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         WorldEpoch.onWorldStarted();
         assertSame(captured, handle.characterRef());
         assertNotSame(captured.epoch(), WorldEpoch.snapshot().token());
@@ -579,6 +587,159 @@ class NativeActorBackendTest {
         assertFalse(snapshot.toString().contains("test-private-password"));
         assertFalse(snapshot.containsKey("packet_payload"));
         verifyNoInteractions(accounts);
+    }
+
+    @Test
+    void actorSnapshotReadsCurrentStatsEquipmentAndSceneWithoutRetainingNativeValues() {
+        prepareObservedInventories();
+        when(character.getTotalStr()).thenReturn(12);
+        when(character.getTotalDex()).thenReturn(13);
+        when(character.getTotalInt()).thenReturn(14);
+        when(character.getTotalLuk()).thenReturn(15);
+        when(character.getTotalWatk()).thenReturn(17);
+        when(character.getTotalMagic()).thenReturn(18);
+        when(character.getCurrentMaxHp()).thenReturn(60);
+        when(character.getCurrentMaxMp()).thenReturn(40);
+
+        Inventory equipped = character.getInventory(InventoryType.EQUIPPED);
+        AtomicBoolean inventoryLocked = new AtomicBoolean();
+        doAnswer(call -> { inventoryLocked.set(true); return null; }).when(equipped).lockInventory();
+        doAnswer(call -> { inventoryLocked.set(false); return null; }).when(equipped).unlockInventory();
+        Equip sword = observedEquip(-11, 1302000), cash = observedEquip(-111, 1702000);
+        AtomicInteger strength = new AtomicInteger(3);
+        when(sword.getStr()).thenAnswer(call -> { assertTrue(inventoryLocked.get()); return (short) strength.get(); });
+        when(sword.getFlag()).thenReturn((short) 8);
+        when(equipped.list()).thenReturn(List.of(sword, cash));
+
+        MapItem drop = mock(MapItem.class), coins = mock(MapItem.class);
+        Item item = mock(Item.class);
+        Monster monster = mock(Monster.class);
+        AtomicBoolean dropLocked = new AtomicBoolean();
+        doAnswer(call -> { dropLocked.set(true); return null; }).when(drop).lockItem();
+        doAnswer(call -> { dropLocked.set(false); return null; }).when(drop).unlockItem();
+        when(drop.getObjectId()).thenReturn(30);
+        Point dropPosition = new Point(1, 2);
+        when(drop.getPosition()).thenReturn(dropPosition);
+        when(drop.getItem()).thenAnswer(call -> { assertTrue(dropLocked.get()); return item; });
+        when(item.getItemId()).thenReturn(2000000);
+        when(item.getQuantity()).thenAnswer(call -> { assertTrue(dropLocked.get()); return (short) 4; });
+        when(coins.getObjectId()).thenReturn(20);
+        when(coins.getPosition()).thenReturn(new Point(3, 4));
+        when(coins.getMeso()).thenReturn(12);
+        when(monster.getObjectId()).thenReturn(10);
+        when(monster.getId()).thenReturn(100100);
+        when(monster.getPosition()).thenReturn(new Point(5, 6));
+        when(monster.getHp()).thenAnswer(call -> { assertFalse(dropLocked.get()); return 8; });
+        when(monster.getMaxHp()).thenReturn(10);
+        when(map.getMapObjects()).thenReturn(List.of(drop, monster, coins));
+
+        Map<String, Object> before = backend.snapshot(handle);
+        assertEquals(Map.of("str", 12, "dex", 13, "int", 14, "luk", 15, "watk", 17, "magic", 18,
+                "max_hp", 60, "max_mp", 40, "hp", 50, "mp", 5), before.get("stats"));
+        Map<String, Object> equippedFacts = observedPage(before, "equipped");
+        assertEquals(true, equippedFacts.get("complete"));
+        assertEquals(2, equippedFacts.get("count"));
+        assertEquals(-111, observedRows(equippedFacts).getFirst().get("slot"));
+        Map<String, Object> swordFact = observedRows(equippedFacts).get(1);
+        assertEquals(8, swordFact.get("flags"));
+        assertEquals(3, observedPage(swordFact, "attributes").get("str"));
+        Map<String, Object> scene = observedPage(before, "scene_objects");
+        assertEquals("best_effort", scene.get("snapshot_consistency"));
+        List<Map<String, Object>> drops = observedRows(observedPage(scene, "items"));
+        assertEquals(20, drops.getFirst().get("object_id"));
+        assertEquals(12, drops.getFirst().get("meso"));
+        assertNull(drops.getFirst().get("item_id"));
+        assertEquals(2000000, drops.get(1).get("item_id"));
+        assertEquals(4, drops.get(1).get("quantity"));
+        assertEquals(8, observedRows(observedPage(scene, "monsters")).getFirst().get("hp"));
+        assertFalse(inventoryLocked.get());
+        assertFalse(dropLocked.get());
+
+        strength.set(7);
+        dropPosition.translate(100, 100);
+        when(character.getHp()).thenReturn(45);
+        when(monster.getHp()).thenReturn(3);
+        Map<String, Object> after = backend.snapshot(handle);
+        assertEquals(50, observedPage(before, "stats").get("hp"));
+        assertEquals(45, observedPage(after, "stats").get("hp"));
+        assertEquals(3, observedPage(swordFact, "attributes").get("str"));
+        assertEquals(7, observedPage(observedRows(observedPage(after, "equipped")).get(1), "attributes").get("str"));
+        assertEquals(Map.of("x", 1, "y", 2), drops.get(1).get("position"));
+        assertEquals(8, observedRows(observedPage(scene, "monsters")).getFirst().get("hp"));
+    }
+
+    @Test
+    void actorSnapshotBoundsSceneCategoriesWithoutClaimingAnEmptyOrCompleteResult() {
+        prepareObservedInventories();
+        List<MapObject> objects = new ArrayList<>();
+        for (int id = 1; id <= 101; id++) {
+            MapItem drop = mock(MapItem.class);
+            when(drop.getObjectId()).thenReturn(id);
+            when(drop.getPosition()).thenReturn(new Point(id, 0));
+            objects.add(drop);
+            Monster monster = mock(Monster.class);
+            when(monster.getObjectId()).thenReturn(1000 + id);
+            when(monster.getPosition()).thenReturn(new Point(id, 0));
+            objects.add(monster);
+        }
+        when(map.getMapObjects()).thenReturn(objects);
+        Map<String, Object> scene = observedPage(backend.snapshot(handle), "scene_objects");
+        for (String kind : List.of("items", "monsters")) {
+            Map<String, Object> page = observedPage(scene, kind);
+            assertEquals(100, observedRows(page).size());
+            assertEquals(101, page.get("total_count"));
+            assertEquals(true, page.get("truncated"));
+            assertEquals(false, page.get("complete"));
+        }
+    }
+
+    @Test
+    void actorSnapshotNativeReadFailuresReleaseResourcesAndDoNotReturnPartialSuccess() {
+        prepareObservedInventories();
+        Inventory equipped = character.getInventory(InventoryType.EQUIPPED);
+        AtomicBoolean locked = new AtomicBoolean();
+        doAnswer(call -> { locked.set(true); return null; }).when(equipped).lockInventory();
+        doAnswer(call -> { locked.set(false); return null; }).when(equipped).unlockInventory();
+        when(equipped.list()).thenThrow(new IllegalStateException("equipment unavailable"));
+        assertThrows(RuntimeException.class, () -> backend.snapshot(handle));
+        assertFalse(locked.get());
+
+        doReturn(List.of()).when(equipped).list();
+        MapItem broken = mock(MapItem.class);
+        when(broken.getItem()).thenThrow(new IllegalStateException("drop unavailable"));
+        when(map.getMapObjects()).thenReturn(List.of(broken));
+        assertThrows(RuntimeException.class, () -> backend.snapshot(handle));
+        verify(broken).unlockItem();
+        when(map.getMapObjects()).thenThrow(new IllegalStateException("map unavailable"));
+        assertThrows(RuntimeException.class, () -> backend.snapshot(handle));
+    }
+
+    private void prepareObservedInventories() {
+        when(characters.findById(41)).thenReturn(stored());
+        for (InventoryType type : List.of(InventoryType.EQUIPPED, InventoryType.EQUIP, InventoryType.USE,
+                InventoryType.SETUP, InventoryType.ETC, InventoryType.CASH)) {
+            Inventory inventory = mock(Inventory.class);
+            when(inventory.list()).thenReturn(List.of());
+            when(character.getInventory(type)).thenReturn(inventory);
+        }
+    }
+
+    private static Equip observedEquip(int slot, int itemId) {
+        Equip equip = mock(Equip.class);
+        when(equip.getPosition()).thenReturn((short) slot);
+        when(equip.getItemId()).thenReturn(itemId);
+        when(equip.getQuantity()).thenReturn((short) 1);
+        return equip;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> observedPage(Map<String, Object> facts, String key) {
+        return (Map<String, Object>) facts.get(key);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> observedRows(Map<String, Object> page) {
+        return (List<Map<String, Object>>) page.get("items");
     }
 
     @Test

@@ -35,7 +35,8 @@ final class NativeDialogueTracker {
                 && (Integer.valueOf(4).equals(type) || Integer.valueOf(12).equals(type))
                 && Integer.valueOf(4).equals(event.get("speaker_type"))
                 && Integer.valueOf(0).equals(event.get("speaker"));
-        Offers offers = candidate ? Offers.parse(event) : Offers.incomplete();
+        Offers offers = candidate ? Offers.parse((String) event.get("text"),
+                (Boolean) event.get("text_truncated"), type) : Offers.incomplete();
         current = new State(sequence, npc, type, "unsupported", null, offers, false);
         DispatchScope scope = dispatch;
         if (scope != null) scope.closedPacketSequence = null;
@@ -151,6 +152,8 @@ final class NativeDialogueTracker {
             this.offers = offers; this.consumed = consumed;
         }
         boolean supported() { return !"unsupported".equals(path); }
+        boolean offersComplete() { return offers.complete; }
+        boolean offersSelection(int selection) { return offers.ids.contains(selection); }
         static State empty() { return new State(null, null, null, "unsupported", null, Offers.incomplete(), false); }
         static State unsupported(long sequence) {
             return new State(sequence, null, null, "unsupported", null, Offers.incomplete(), false);
@@ -184,12 +187,11 @@ final class NativeDialogueTracker {
         }
     }
 
-    record Offers(List<Integer> ids, boolean complete) {
+    private record Offers(List<Integer> ids, boolean complete) {
         static Offers incomplete() { return new Offers(List.of(), false); }
-        static Offers parse(Map<String, Object> event) {
-            if (!Boolean.FALSE.equals(event.get("text_truncated"))) return incomplete();
-            if (Integer.valueOf(12).equals(event.get("message_type"))) return new Offers(List.of(), true);
-            if (!(event.get("text") instanceof String text)) return incomplete();
+        private static Offers parse(String text, boolean truncated, int type) {
+            if (truncated) return incomplete();
+            if (type == 12) return new Offers(List.of(), true);
             List<Integer> ids = new ArrayList<>();
             int position = 0;
             while (position < text.length()) {

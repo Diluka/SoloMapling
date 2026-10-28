@@ -150,8 +150,8 @@ public final class AcceptanceClient extends Client {
         int action;
         if ("select".equals(kind)) {
             if (state.type != 4) throw conflict("npc_reply_path_not_supported");
-            if (!state.offers.complete()) throw conflict("npc_menu_incomplete");
-            if (!state.offers.ids().contains(selection)) throw conflict("npc_selection_not_offered");
+            if (!state.offersComplete()) throw conflict("npc_menu_incomplete");
+            if (!state.offersSelection(selection)) throw conflict("npc_selection_not_offered");
             expected = "center".equals(state.path) && selection == 0 ? "welfare"
                     : "center".equals(state.path) && selection == 71 ? "transport_category"
                     : "transport_category".equals(state.path) && selection == 2 ? "transport_town" : null;

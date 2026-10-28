@@ -53,7 +53,7 @@ class McpControlModuleTest {
             if (executor != null) assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
         } finally {
             if (executor != null) executor.shutdown();
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
         }
     }
 
@@ -167,7 +167,7 @@ class McpControlModuleTest {
 
         module.recordResult(work, fact);
 
-        RuntimeEvents.Event recorded = runtime.events(0, 100).events().stream()
+        RuntimeEvents.Event recorded = runtime.events().events().stream()
                 .filter(event -> event.kind() == RuntimeEvents.Kind.ACTION_RESULT).findFirst().orElseThrow();
         assertEquals("primary", recorded.moduleId());
         assertEquals(reference.generation(), recorded.moduleGeneration());
@@ -199,7 +199,7 @@ class McpControlModuleTest {
         executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
                 Thread.ofVirtual().factory());
         runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(
-                8, 1, new ExecutionScope.Limits(16, 1, 16, 1), 128, 4), executor);
+                8, 1, new ExecutionScope.Limits(16, 1, 16, 1), 4), executor);
         role = new TestRole(runtime.acceptedEpoch());
         var open = runtime.acceptOpeningWork();
         runtime.submitOpening(open, () -> {

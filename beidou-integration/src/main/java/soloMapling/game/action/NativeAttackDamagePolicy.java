@@ -64,17 +64,9 @@ final class NativeAttackDamagePolicy {
                 target.getStats().getLevel(), Math.max(0, target.getStats().eva), Math.max(0, target.getStats().PDDamage));
     }
 
-    static Roll roll(Attributes attributes) {
-        return roll(attributes, ThreadLocalRandom.current().nextDouble(), ThreadLocalRandom.current().nextDouble());
-    }
-
-    /** Package test seam for two independent server rolls; external callers cannot choose a damage number. */
-    static Roll roll(Attributes a, double hitRoll, double damageRoll) {
-        if (a.maximumDamage() < 1 || !Double.isFinite(a.accuracy()) || a.accuracy() < 0
-                || !Double.isFinite(hitRoll) || !Double.isFinite(damageRoll)
-                || hitRoll < 0 || hitRoll >= 1 || damageRoll < 0 || damageRoll >= 1) {
-            throw new NativeActionService.Invalid("attack_attributes_unavailable");
-        }
+    static Roll roll(Attributes a) {
+        double hitRoll = ThreadLocalRandom.current().nextDouble();
+        double damageRoll = ThreadLocalRandom.current().nextDouble();
         int levelDifference = Math.max(0, a.targetLevel() - a.actorLevel());
         // Explicit physical policy: the level-gap factor raises required accuracy, and evade=0 always hits.
         double chance = a.targetAvoid() == 0 ? 1 : Math.clamp(

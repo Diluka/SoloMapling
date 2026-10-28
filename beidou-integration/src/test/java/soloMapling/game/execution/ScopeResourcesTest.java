@@ -21,7 +21,7 @@ class ScopeResourcesTest {
     void startWorld() { WorldEpoch.onWorldStarted(); }
 
     @AfterEach
-    void stopWorld() { WorldEpoch.onWorldStopping(); }
+    void stopWorld() { ExecutionScope.tryBeginWorldStop(); }
 
     @Test
     void unknownCreationAndUnfinishedHandshakesKeepTheirCapacityUntilAbsenceIsConfirmed() {
@@ -335,7 +335,7 @@ class ScopeResourcesTest {
         registration.attach(identity, () -> { });
         var cleanup = registration.acquireCleanup();
         scope.beginDrain();
-        var stop = ExecutionScope.beginWorldStop();
+        var stop = ExecutionScope.tryBeginWorldStop().orElseThrow();
         scope.joinWorldStop(stop);
         assertTrue(cleanup.permit().isValidFor(identity));
         WorldEpoch.onWorldStarted();
@@ -373,7 +373,7 @@ class ScopeResourcesTest {
         ScopeResources.Registration newRegistration;
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            oldScope.joinWorldStop(ExecutionScope.beginWorldStop());
+            oldScope.joinWorldStop(ExecutionScope.tryBeginWorldStop().orElseThrow());
             WorldEpoch.onWorldStarted();
             newScope = scope(1);
             newRegistration = newScope.resources().beginRegistration("native_actor");
@@ -482,7 +482,7 @@ class ScopeResourcesTest {
     @Test
     void aFullNormalBudgetCannotPreventTheOwnedCleanupWhichItsBodyNeedsToExit() throws Exception {
         ExecutionScope scope = new ExecutionScope(WorldEpoch.snapshot().token(),
-                new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(1, 1, 4, 1));
+                new ExecutionScope.Limits(1, 1, 4, 1));
         Object resource = new Object();
         var registration = scope.resources().beginRegistration("blocking_resource");
         AtomicInteger cancelRequests = new AtomicInteger();
@@ -526,7 +526,7 @@ class ScopeResourcesTest {
     @Test
     void cleanupBudgetIsBoundedAndRejectionKeepsTheOtherResourceOwnedUntilCapacityReturns() {
         ExecutionScope scope = new ExecutionScope(WorldEpoch.snapshot().token(),
-                new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(1, 2, 4, 1));
+                new ExecutionScope.Limits(1, 2, 4, 1));
         Object firstResource = new Object();
         Object secondResource = new Object();
         var first = scope.resources().beginRegistration("first_resource");
@@ -552,8 +552,7 @@ class ScopeResourcesTest {
     }
 
     private static ExecutionScope scope(int maxResources) {
-        return new ExecutionScope(WorldEpoch.snapshot().token(), new ExecutionScope.OwnerStamp(new Object(), new Object()),
-                new ExecutionScope.Limits(32, maxResources, 16, maxResources));
+        return new ExecutionScope(WorldEpoch.snapshot().token(), new ExecutionScope.Limits(32, maxResources, 16, maxResources));
     }
 
     private static void assertFailure(String message, Runnable action) {

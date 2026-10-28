@@ -20,6 +20,7 @@ import soloMapling.itemPool.DesirableEquipList;
 import soloMapling.itemPool.EquipMetadataCache;
 import soloMapling.server.BotTickService;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.execution.ExecutionScope;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -130,11 +131,17 @@ class BeiDouRuntimeLifecycleTest {
             clients.verify(BotClientHandler::initHeadlessBotClient, times(2));
             messages.verify(MessageQueue::start, times(1));
             BeiDouRuntime.onServerStopping();
-            assertFalse(WorldEpoch.snapshot().active());
-            assertNotSame(commonWorld.token(), WorldEpoch.snapshot().token());
+            WorldEpoch.State stoppedWorld = WorldEpoch.snapshot();
+            assertFalse(stoppedWorld.active());
+            assertNotSame(commonWorld.token(), stoppedWorld.token());
+            var stopTicket = ExecutionScope.tryBeginWorldStop().orElseThrow();
+            assertSame(commonWorld.token(), stopTicket.sourceEpoch());
+            assertSame(stoppedWorld.token(), stopTicket.stoppedEpoch());
             llm.verify(SocialLlmService::shutdown, times(2));
             environmentTasks.verify(EnvironmentManager::stop, times(2));
             BeiDouRuntime.onServerStopping();
+            assertSame(stoppedWorld, WorldEpoch.snapshot());
+            assertSame(stopTicket, ExecutionScope.tryBeginWorldStop().orElseThrow());
             llm.verify(SocialLlmService::shutdown, times(2));
         } finally {
             BotRegistry.unregister(partial);

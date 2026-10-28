@@ -344,7 +344,7 @@ public class ConversationManager {
     }
 
     private ConversationScript pickScript(int maxParticipants) {
-        if (allScripts == null || !SoloMaplingLanguageConfig.languageTag().equals(scriptsLanguage)) {
+        if (!SoloMaplingLanguageConfig.languageTag().equals(scriptsLanguage)) {
             loadScripts();
         }
         List<ConversationScript> eligible = new ArrayList<>();

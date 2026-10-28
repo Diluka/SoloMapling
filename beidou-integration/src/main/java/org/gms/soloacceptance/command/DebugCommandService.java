@@ -30,18 +30,9 @@ public final class DebugCommandService {
     private static final Outcome UNKNOWN = new Outcome(
             "UNKNOWN", null, null, "UNREPORTED", "command_execution_unknown", null, null);
     private final ActorProfiles profiles;
-    private final Backend backend;
-    private final String generation;
-    private final int historyLimit;
+    private final NativeDebugCommandBackend backend;
+    private final String generation = "command-generation-" + UUID.randomUUID();
     private final Map<Key, Entry> history = new LinkedHashMap<>();
-
-    @FunctionalInterface
-    public interface Backend {
-        Outcome execute(ActorProfiles.Resolved profile, String command);
-        default Map<String, Object> describeCommands(String name) {
-            return NativeCommandExecutor.describeCommands(name);
-        }
-    }
 
     /** The receipt describes the handler call, never a command-specific gameplay outcome. */
     public record Outcome(String status, Boolean nativeHandlerInvoked, Boolean nativeHandlerReturned,
@@ -64,15 +55,8 @@ public final class DebugCommandService {
 
     @Autowired
     public DebugCommandService(ActorProfiles profiles, NativeDebugCommandBackend backend) {
-        this(profiles, backend, "command-generation-" + UUID.randomUUID(), HISTORY_LIMIT);
-    }
-
-    DebugCommandService(ActorProfiles profiles, Backend backend, String generation, int historyLimit) {
         this.profiles = Objects.requireNonNull(profiles);
         this.backend = Objects.requireNonNull(backend);
-        this.generation = Objects.requireNonNull(generation);
-        if (historyLimit < 1) throw new IllegalArgumentException("history limit must be positive");
-        this.historyLimit = historyLimit;
     }
 
     public Map<String, Object> publicCapabilities() {
@@ -86,7 +70,7 @@ public final class DebugCommandService {
         result.put("administrator_required", true);
         result.put("runtime_required", false);
         result.put("target", "configured_online_ordinary_profile");
-        result.put("history_limit", historyLimit);
+        result.put("history_limit", HISTORY_LIMIT);
         result.put("request_history", "owner_scoped_process_lifetime_no_eviction");
         result.put("recovery", "repeat_same_request_id_and_arguments_with_original_command_generation");
         result.put("cancellation_supported", false);
@@ -100,7 +84,7 @@ public final class DebugCommandService {
     public Map<String, Object> help(String command) {
         Map<String, Object> result = new LinkedHashMap<>(publicCapabilities());
         try {
-            result.putAll(backend.describeCommands(command));
+            result.putAll(NativeCommandExecutor.describeCommands(command));
         } catch (IllegalArgumentException unknown) {
             throw invalid("native_command_not_registered");
         } catch (RuntimeException unavailable) {
@@ -130,15 +114,14 @@ public final class DebugCommandService {
         synchronized (history) {
             Entry previous = history.get(key);
             if (previous != null) return restore(previous, signature);
-            if (history.size() >= historyLimit) {
+            if (history.size() >= HISTORY_LIMIT) {
                 throw new ObservationException(HttpStatus.TOO_MANY_REQUESTS, "command_history_full");
             }
             entry = new Entry(requestId, signature);
             history.put(key, entry);
         }
         try {
-            Outcome outcome = backend.execute(profile, request.command());
-            entry.outcome = validOutcome(outcome) ? outcome : unknown();
+            entry.outcome = backend.execute(profile, request.command());
         } catch (RuntimeException ignored) {
             // Finalization below consumes unknown effects without retaining exception contents.
         } catch (Error failed) {
@@ -156,10 +139,6 @@ public final class DebugCommandService {
             throw new ObservationException(HttpStatus.CONFLICT, "request_id_conflict");
         }
         return snapshot(previous);
-    }
-
-    private static boolean validOutcome(Outcome outcome) {
-        return outcome != null && List.of("RETURNED", "FAILED", "UNKNOWN").contains(outcome.status());
     }
 
     private static Outcome unknown() {

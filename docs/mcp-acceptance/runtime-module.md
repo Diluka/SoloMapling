@@ -68,9 +68,9 @@ actor 观察结果的 `actor.runtime` 和操作响应的 `session.runtime` 投�
 | `id/epoch/state/origin_kind/character_id` | 宿主实例、捕获世界来源、生命周期及根角色来源身份 |
 | `module.type_id/instance_id/generation/state` | MCP 模块类型、实例与执行代次/状态 |
 | `lane.pending/ordinary/cleanup/closed` | 同一宿主 lane 的当前账本投影，不是第二队列 |
-| `events` | 有界安全事实片段，`cursor_scope=runtime_event_sequence`；包含对应 runtime/module/work 关联与固定结果摘要 |
+| `events` | 最近64条安全事实快照，`cursor_scope=runtime_event_sequence`；包含对应 runtime/module/work 关联与固定结果摘要 |
 
-这些字段只读，不接受凭宿主 ID、模块 ID 或 CID 发任意控制请求。`events.next_cursor` 与原生包 since_cursor、operation seq 分开；当前投影不新增独立 runtime 事件分页/订阅工具，也不表示完整 #120 已交付。诊断可能在读取期间变化，不能据单次计数推导动作已成功、资源已释放或所有执行体已退出。
+这些字段只读，不接受凭宿主 ID、模块 ID 或 CID 发任意控制请求。`events.next_cursor` 与原生包 since_cursor、operation seq 分开；当前投影不接收宿主事件游标或页大小，不提供独立 runtime 事件分页/订阅工具，也不表示完整 #120 已交付。诊断可能在读取期间变化，不能据单次计数推导动作已成功、资源已释放或所有执行体已退出。
 
 ## 模块停止与 NPC 对话
 

@@ -110,7 +110,7 @@ class NativeAttackActionsTest {
         when(worldPlayers.getCharacterById(41)).thenReturn(actor); when(channelPlayers.getCharacterById(41)).thenReturn(actor);
         var ref = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), actor, client, world, channel);
         scene = new GameContext.SceneRef(ref, map, null, null);
-        scope = new ExecutionScope(ref.epoch(), new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(16, 1, 8, 1));
+        scope = new ExecutionScope(ref.epoch(), new ExecutionScope.Limits(16, 1, 8, 1));
         executor = new ManualExecutor(); lane = new CharacterCommandLane(8, 1, executor);
         permit = lane.bindGrantedPermit(scope, ref, lane.declareGrant(scope), () -> NativeContextChecks.requireCharacterCurrent(server, ref));
     }
@@ -119,7 +119,7 @@ class NativeAttackActionsTest {
         if (lane != null) lane.close(); if (executor != null) executor.shutdown();
         ThreadLocalUtil.removeCurrentClient();
         if (metadata != null) metadata.close(); if (servers != null) servers.close(); if (skills != null) skills.close();
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
     }
 
     @Test void realNativeHitHasExactWovenDamageEvidenceAndUsesOneCarrier() {
@@ -143,6 +143,32 @@ class NativeAttackActionsTest {
         assertEquals(SUCCEEDED, result.outcome()); assertEquals(false, result.facts().get("hit"));
         assertEquals(0L, result.facts().get("damage_applied")); assertEquals(1000, target.getHp());
         verify(map).damageMonster(actor, target, 0);
+    }
+
+    @Test void nativeDamageNeverExceedsTheRolesBaseBoundAndPhysicalDefenseKeepsAMinimumHit() {
+        NativeBasicResult ordinary = run();
+        int applied = ((Number)ordinary.facts().get("damage_applied")).intValue();
+        assertEquals(SUCCEEDED,ordinary.outcome()); assertTrue(applied >= 5 && applied <= 50);
+        assertEquals(1000 - target.getHp(),applied);
+        target.getStats().PDDamage = 1000;
+        NativeBasicResult defended = run();
+        assertEquals(SUCCEEDED,defended.outcome()); assertEquals(1L,defended.facts().get("damage_applied"));
+        assertEquals(999 - applied,target.getHp());
+    }
+
+    @Test void targetLevelAffectsNativeHitChanceAndDamageWithoutChoosingRandomRolls() {
+        target.getStats().eva = 3; target.getStats().level = 10;
+        NativeBasicResult ordinary = run();
+        assertEquals(SUCCEEDED,ordinary.outcome()); assertEquals(1.0,ordinary.facts().get("hit_chance"));
+        int hp = target.getHp();
+        target.getStats().level = 110;
+        NativeBasicResult missed = run();
+        assertEquals(SUCCEEDED,missed.outcome()); assertEquals(0.0,missed.facts().get("hit_chance"));
+        assertEquals(0L,missed.facts().get("damage_applied")); assertEquals(hp,target.getHp());
+        target.getStats().eva = 0;
+        NativeBasicResult levelPenalty = run();
+        assertEquals(SUCCEEDED,levelPenalty.outcome()); assertEquals(1L,levelPenalty.facts().get("damage_applied"));
+        assertEquals(hp - 1,target.getHp());
     }
 
     @Test void anotherThreadAndAnotherActorCannotSupplyThisAttacksDamage() throws Exception {
@@ -182,7 +208,7 @@ class NativeAttackActionsTest {
 
     @Test void aWorldStopAfterRealNativeDamagePreservesTheOldEpochFact() {
         when(map.damageMonster(eq(actor), eq(target), anyInt())).thenAnswer(call -> {
-            target.damage(actor, call.getArgument(2), false); WorldEpoch.onWorldStopping(); return true;
+            target.damage(actor, call.getArgument(2), false); ExecutionScope.tryBeginWorldStop(); return true;
         });
         NativeBasicResult result = run();
         assertEquals(SUCCEEDED, result.outcome()); assertEquals(scene.actor().epoch().value(), result.epoch());

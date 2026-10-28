@@ -1,6 +1,5 @@
 package org.gms.soloscripting;
 
-import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.gms.client.Client;
 import org.gms.scripting.portal.PortalPlayerInteraction;
 import org.gms.server.maps.Portal;
@@ -12,17 +11,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
 
 /** A role-owned original portal engine bound to an exact portal from the role's actual map. */
 public final class NativePortalScripts implements NativeScriptAdapter {
     private final Client client;
-    private final Function<String, GraalJSScriptEngine> loader;
 
-    public NativePortalScripts(Client client) { this(client, NativeScriptLoader::load); }
-    NativePortalScripts(Client client, Function<String, GraalJSScriptEngine> loader) {
+    public NativePortalScripts(Client client) {
         this.client = Objects.requireNonNull(client);
-        this.loader = Objects.requireNonNull(loader);
     }
 
     @Override public AutoCloseable enter(NativeScriptSession session) {
@@ -42,7 +37,7 @@ public final class NativePortalScripts implements NativeScriptAdapter {
         String name = NativeWorldScriptSupport.scriptName(portal.getScriptName());
         Bound bound = new Bound(role, portal, "portal/" + name + ".js", new PortalPlayerInteraction(client, portal));
         session.attachment(bound);
-        NativeWorldScriptSupport.load(session, loader, bound.path());
+        NativeWorldScriptSupport.load(session, bound.path());
         session.engine().put("pi", bound.interaction());
         return invoke(session, request);
     }

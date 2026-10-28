@@ -32,26 +32,7 @@ public record ActorActRequest(
                              @JsonProperty("target_oid") Integer targetOid,
                              @JsonProperty("object_id") Integer objectId,
                              Integer quantity) {
-        public Parameters(String text, Long dialogueVersion, String kind, Integer selection,
-                          String inventoryType, Integer sourceSlot, Integer targetSlot) {
-            this(text, dialogueVersion, kind, selection, inventoryType, sourceSlot, targetSlot,
-                    null, null, null, null, null);
-        }
 
-        public Parameters(String text, Long dialogueVersion, String kind, Integer selection) {
-            this(text, dialogueVersion, kind, selection, null, null, null);
-        }
-
-        public Parameters(String inventoryType, int sourceSlot, int targetSlot) {
-            this(null, null, null, null, inventoryType, sourceSlot, targetSlot);
-        }
-        public Parameters(String text) {
-            this(text, null, null, null);
-        }
-
-        public Parameters(String text, Long dialogueVersion) {
-            this(text, dialogueVersion, null, null);
-        }
     }
 
     public record ExpectedContext(@JsonProperty("scene_ref") String sceneRef,

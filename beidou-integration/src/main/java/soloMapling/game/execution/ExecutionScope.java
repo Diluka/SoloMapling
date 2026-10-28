@@ -22,7 +22,6 @@ public final class ExecutionScope {
     private static final ThreadLocal<ArrayDeque<Frame>> BODIES = ThreadLocal.withInitial(ArrayDeque::new);
     final Object monitor = new Object();
     private final WorldEpoch.Token acceptedEpoch;
-    private final OwnerStamp ownerStamp;
     private final Limits limits;
     private final ScopeResources resources;
     private final Map<Long, WorkHandle> work = new LinkedHashMap<>();
@@ -32,9 +31,8 @@ public final class ExecutionScope {
     private int pendingCallbacks;
     private WorldStopTicket joinedStop;
 
-    public ExecutionScope(WorldEpoch.Token acceptedEpoch, OwnerStamp ownerStamp, Limits limits) {
+    public ExecutionScope(WorldEpoch.Token acceptedEpoch, Limits limits) {
         this.acceptedEpoch = Objects.requireNonNull(acceptedEpoch);
-        this.ownerStamp = Objects.requireNonNull(ownerStamp);
         this.limits = Objects.requireNonNull(limits);
         resources = new ScopeResources(this);
     }
@@ -43,19 +41,6 @@ public final class ExecutionScope {
     public enum BodyState { NOT_STARTED, RUNNING, EXITED }
     public enum WorkKind { NORMAL, CLEANUP }
     public enum DrainResult { DRAINED, TIMED_OUT, SELF_WAIT, INTERRUPTED, UNVERIFIED }
-    public record OwnerStamp(Object runtimeGeneration, Object moduleGeneration) {
-        public OwnerStamp {
-            Objects.requireNonNull(runtimeGeneration);
-            Objects.requireNonNull(moduleGeneration);
-        }
-        @Override public boolean equals(Object other) {
-            return other instanceof OwnerStamp stamp && runtimeGeneration == stamp.runtimeGeneration
-                    && moduleGeneration == stamp.moduleGeneration;
-        }
-        @Override public int hashCode() {
-            return 31 * System.identityHashCode(runtimeGeneration) + System.identityHashCode(moduleGeneration);
-        }
-    }
     /** maxWork bounds NORMAL handles; maxCleanupWork is a separate, reserved cleanup budget. */
     public record Limits(int maxWork, int maxResources, int maxDiagnostics, int maxCleanupWork) {
         public Limits {
@@ -96,10 +81,6 @@ public final class ExecutionScope {
         }
     }
 
-    public static WorldStopTicket beginWorldStop() {
-        return tryBeginWorldStop().orElseThrow(() -> new Invalid("unknown_world_stop"));
-    }
-
     public static final class WorldStopTicket {
         private final WorldEpoch.Token sourceEpoch;
         private final WorldEpoch.Token stoppedEpoch;
@@ -112,7 +93,6 @@ public final class ExecutionScope {
     }
 
     public WorldEpoch.Token acceptedEpoch() { return acceptedEpoch; }
-    public OwnerStamp ownerStamp() { return ownerStamp; }
     public Limits limits() { return limits; }
     public ScopeResources resources() { return resources; }
 

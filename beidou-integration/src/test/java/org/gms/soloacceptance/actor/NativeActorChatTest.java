@@ -122,7 +122,7 @@ class NativeActorChatTest {
         ownership.when(() -> ActorAccountOwnership.owns(handle.ownership(), client)).thenReturn(true);
         ownership.when(() -> ActorAccountOwnership.currentOnlineClient(17)).thenReturn(client);
         scope = new ExecutionScope(WorldEpoch.snapshot().token(),
-                new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(16, 0, 16, 0));
+                new ExecutionScope.Limits(16, 0, 16, 0));
         executor = new ManualExecutor();
         lane = new CharacterCommandLane(8, 1, executor);
         permit = lane.bindGrantedPermit(scope, handle.characterRef(), lane.declareGrant(scope), () -> { });
@@ -138,7 +138,7 @@ class NativeActorChatTest {
             assertAll("release native chat fixtures",
                     () -> { if (lane != null) lane.close(); },
                     () -> { if (executor != null) executor.shutdown(); },
-                    () -> { WorldEpoch.onWorldStopping(); ThreadLocalUtil.removeCurrentClient(); },
+                    () -> { ExecutionScope.tryBeginWorldStop(); ThreadLocalUtil.removeCurrentClient(); },
                     () -> { if (ownership != null) ownership.close(); },
                     () -> { if (chatLogger != null) chatLogger.close(); },
                     () -> { if (serverSingleton != null) serverSingleton.close(); });
@@ -434,7 +434,7 @@ class NativeActorChatTest {
         String text = "停服前已广播的事实";
         String acceptedEpoch = handle.characterRef().epoch().value();
         chatLogger.when(() -> ChatLogger.log(client, "General", text)).thenAnswer(call -> {
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
             return null;
         });
 

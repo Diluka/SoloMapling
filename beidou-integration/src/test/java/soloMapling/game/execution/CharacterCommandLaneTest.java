@@ -34,7 +34,7 @@ class CharacterCommandLaneTest {
     private final List<CharacterCommandLane> lanes = new ArrayList<>();
 
     @BeforeEach void startWorld() { CharacterTestContext.install(); WorldEpoch.onWorldStarted(); }
-    @AfterEach void stopOnlyOwnedLanes() { lanes.forEach(CharacterCommandLane::close); WorldEpoch.onWorldStopping(); }
+    @AfterEach void stopOnlyOwnedLanes() { lanes.forEach(CharacterCommandLane::close); ExecutionScope.tryBeginWorldStop(); }
 
     @Test
     void cancelledQueuedEntriesKeepAllSevenOrdinarySlotsAndCleanupStillHasItsReserve() throws Exception {
@@ -230,7 +230,7 @@ class CharacterCommandLaneTest {
         ManualExecutor executor=new ManualExecutor(3);Fixture fixture=manual(3,1,executor);
         Object resource=new Object();ScopeResources.Registration reg=fixture.scope.resources().beginRegistration("native_character");reg.attach(resource,() -> {});
         ExecutionScope.WorkHandle oldAction=fixture.scope.acceptWork();
-        var ticket=ExecutionScope.beginWorldStop();fixture.scope.joinWorldStop(ticket);
+        var ticket=ExecutionScope.tryBeginWorldStop().orElseThrow();fixture.scope.joinWorldStop(ticket);
         ScopeResources.CleanupAttempt cleanup=reg.acquireCleanup();AtomicInteger calls=new AtomicInteger();
         fixture.lane.submit(oldAction,fixture.permit,() -> fail("old ordinary epoch"),() -> {});
         fixture.lane.submitOwnedCleanup(cleanup,() -> {calls.incrementAndGet();reg.confirmReleased(cleanup.permit(),resource);},() -> {});
@@ -244,7 +244,7 @@ class CharacterCommandLaneTest {
     void aNewWorldBeforeCleanupStartsKeepsTheResourcePendingAndSkipsNativeBody() {
         ManualExecutor executor=new ManualExecutor(3);Fixture fixture=manual(3,1,executor);
         Object resource=new Object();ScopeResources.Registration reg=fixture.scope.resources().beginRegistration("resource");reg.attach(resource,() -> {});
-        var ticket=ExecutionScope.beginWorldStop();fixture.scope.joinWorldStop(ticket);var attempt=reg.acquireCleanup();
+        var ticket=ExecutionScope.tryBeginWorldStop().orElseThrow();fixture.scope.joinWorldStop(ticket);var attempt=reg.acquireCleanup();
         fixture.lane.submitOwnedCleanup(attempt,() -> fail("new world must not be cleaned"),() -> {});
         WorldEpoch.onWorldStarted();executor.runNext();
         assertTrue(attempt.work().snapshot().skipped());assertEquals(1,fixture.scope.snapshot().outstandingResources());
@@ -401,7 +401,7 @@ class CharacterCommandLaneTest {
     private CharacterCommandLane lane(int capacity,int reserve,ExecutorService executor) {var lane=new CharacterCommandLane(capacity,reserve,executor);lanes.add(lane);return lane;}
     private CharacterCommandLane realLane(int capacity,int reserve) {var lane=new CharacterCommandLane(capacity,reserve,Thread.ofPlatform().daemon(true).factory());lanes.add(lane);return lane;}
     private static ThreadPoolExecutor pool(int capacity) {return new ThreadPoolExecutor(1,1,1,TimeUnit.SECONDS,new ArrayBlockingQueue<>(capacity));}
-    private static ExecutionScope scope() {return new ExecutionScope(WorldEpoch.snapshot().token(),new ExecutionScope.OwnerStamp(new Object(),new Object()),new ExecutionScope.Limits(128,16,16,16));}
+    private static ExecutionScope scope() {return new ExecutionScope(WorldEpoch.snapshot().token(),new ExecutionScope.Limits(128,16,16,16));}
     private static GameContext.CharacterRef ref(ExecutionScope scope) {return new GameContext.CharacterRef(scope.acceptedEpoch(),mock(Character.class),mock(Client.class),mock(World.class),mock(Channel.class));}
     private record Fixture(ExecutionScope scope,CharacterCommandLane lane,CharacterCommandLane.Grant grant,CharacterCommandLane.ControlPermit permit) {}
     private static void await(CountDownLatch latch) {try{assertTrue(latch.await(5,TimeUnit.SECONDS),"lane_latch_timeout");}catch(InterruptedException failure){Thread.currentThread().interrupt();throw new AssertionError(failure);}}

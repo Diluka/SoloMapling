@@ -87,8 +87,7 @@ class NativeActionServiceTest {
         when(map.getCharacterById(41)).thenReturn(character);
         actor = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), character, client, world, channel);
         scene = new GameContext.SceneRef(actor, map, null, null);
-        scope = new ExecutionScope(actor.epoch(), new ExecutionScope.OwnerStamp(new Object(), new Object()),
-                new ExecutionScope.Limits(16, 1, 8, 1));
+        scope = new ExecutionScope(actor.epoch(), new ExecutionScope.Limits(16, 1, 8, 1));
         executor = new ManualExecutor();
         lane = new CharacterCommandLane(8, 1, executor);
         permit = lane.bindGrantedPermit(scope, actor, lane.declareGrant(scope),
@@ -98,7 +97,7 @@ class NativeActionServiceTest {
     @AfterEach void cleanup() {
         lane.close(); executor.shutdown();
         ThreadLocalUtil.removeCurrentClient();
-        logs.close(); serverStatic.close(); WorldEpoch.onWorldStopping();
+        logs.close(); serverStatic.close(); ExecutionScope.tryBeginWorldStop();
     }
 
     @Test void acceptanceNativeEntryAndOutcomeAreThreeDifferentFacts() {

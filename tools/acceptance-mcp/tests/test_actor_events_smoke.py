@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from urllib.parse import urlsplit
 
-from solo_acceptance_mcp.actor_events_smoke import require_packet_capability, run_actor_events_smoke
+from solo_acceptance_mcp.actor_events_smoke import run_actor_events_smoke
 from solo_acceptance_mcp.actor_smoke import ActorSmokeFailure
 from solo_acceptance_mcp.bridge import BridgeError, MAX_LONG
 from solo_acceptance_mcp.smoke import ACTOR_IMPLEMENTED_TOOLS
@@ -27,42 +27,6 @@ PACKET_CAPABILITIES = {
         {"event_type": "server_message", "opcode": 68, "message_types": list(range(8))},
     ],
 }
-
-
-class PacketCapabilityTests(unittest.TestCase):
-    @staticmethod
-    def capabilities(extra):
-        packet = deepcopy(PACKET_CAPABILITIES)
-        packet["decoded_packets"].extend(extra)
-        return {"scopes": ["world", "scene", "actor"],
-                "actor_control": {"packet_observation": packet}}
-
-    def test_base_npc_and_yellow_tip_capabilities_are_independently_optional(self):
-        yellow = {"event_type": "yellow_tip", "opcode": 77}
-        npc = {"event_type": "npc_dialogue", "opcode": 304, "message_types": [4]}
-        npc_reply = {**npc, "message_types": [4, 12]}
-        for extra in [[], [npc], [npc_reply], [yellow], [npc, yellow], [yellow, npc_reply]]:
-            with self.subTest(extra=extra):
-                caps = self.capabilities(extra)
-                self.assertEqual(caps["actor_control"]["packet_observation"], require_packet_capability(caps))
-                caps["actor_control"]["packet_observation"]["decoded_packets"].reverse()
-                self.assertEqual(caps["actor_control"]["packet_observation"], require_packet_capability(caps))
-
-    def test_duplicate_unknown_and_invalid_optional_decoders_are_rejected(self):
-        yellow = {"event_type": "yellow_tip", "opcode": 77}
-        invalid = [
-            [yellow, yellow],
-            [{"event_type": "unknown", "opcode": 77}],
-            [{"event_type": "yellow_tip", "opcode": True}],
-            [{"event_type": "yellow_tip", "opcode": 78}],
-            [{"event_type": "yellow_tip", "opcode": "77"}],
-            [{"event_type": [], "opcode": 77}],
-            [{"event_type": "npc_dialogue", "opcode": 304, "message_types": [True]}],
-            [{"event_type": "npc_dialogue", "opcode": 304, "message_types": [4, 4]}],
-        ]
-        for extra in invalid:
-            with self.subTest(extra=extra), self.assertRaises(ActorSmokeFailure):
-                require_packet_capability(self.capabilities(extra))
 
 
 class ActorEventsStub(ActorSmokeStub):

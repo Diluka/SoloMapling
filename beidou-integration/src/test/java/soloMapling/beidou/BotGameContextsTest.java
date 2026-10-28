@@ -1,5 +1,7 @@
 package soloMapling.beidou;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.client.Client;
@@ -92,7 +94,7 @@ class BotGameContextsTest {
     @AfterEach
     void releaseOnlyThisTestObjects() {
         fixtures.forEach(BotRegistry::unregister);
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         if (database != null) {
             database.verifyNoInteractions();
             database.close();
@@ -267,7 +269,7 @@ class BotGameContextsTest {
     void oldBindingNeverAcquiresANewEpochEvenWhenNativeObjectsAreReused() {
         BotGameContexts.Binding old = bind();
         WorldEpoch.Token token = old.characterRef().epoch();
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         invalid(GameContext.Failure.WORLD_OFFLINE, () -> BotGameContexts.requireCurrent(server, old));
         WorldEpoch.onWorldStarted();
         invalid(GameContext.Failure.WORLD_CHANGED, () -> BotGameContexts.requireCurrent(server, old));
