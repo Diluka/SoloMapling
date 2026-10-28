@@ -110,7 +110,9 @@ public final class CharacterRuntime {
     public CharacterCommandLane.Submission submitOpening(ExecutionScope.WorkHandle work, Runnable body, Runnable settled) {
         CharacterCommandLane current;
         synchronized (monitor) {
-            require(state == State.OPENING && work == openingWork, "invalid_runtime_open_work");
+            // A stop can race the gap between accepting OPEN and attaching its carrier. The
+            // already-owned work must still reach the original lane and settle as skipped.
+            require((state == State.OPENING || state == State.CLOSING) && work == openingWork, "invalid_runtime_open_work");
             current = requireLane();
         }
         return current.submitInitialization(work, admission, body, settled);

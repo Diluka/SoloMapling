@@ -107,6 +107,35 @@ class CharacterRuntimeTest {
     }
 
     @Test
+    void stopBetweenOpeningAdmissionAndSubmissionStillSettlesTheExactWorkWithoutEnteringItsBody() {
+        Fixture fixture = manual();
+        var work = fixture.runtime.acceptOpeningWork();
+        fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+        AtomicInteger bodies = new AtomicInteger(), settlements = new AtomicInteger();
+        assertEquals(CharacterRuntime.State.CLOSING, fixture.runtime.snapshot().state());
+        assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::acceptOpeningWork);
+        assertThrows(CharacterRuntime.Invalid.class, () -> fixture.runtime.submitOpening(
+                mock(ExecutionScope.WorkHandle.class), bodies::incrementAndGet, settlements::incrementAndGet));
+
+        var submission = assertDoesNotThrow(() -> fixture.runtime.submitOpening(
+                work, bodies::incrementAndGet, settlements::incrementAndGet));
+        assertEquals(CharacterCommandLane.Status.ENQUEUED, submission.status());
+        assertFalse(work.isSettled());
+        assertEquals(1, fixture.runtime.snapshot().lane().pending());
+        fixture.runQueued();
+
+        assertTrue(work.isSettled());
+        assertTrue(work.snapshot().skipped());
+        assertEquals(0, bodies.get());
+        assertEquals(1, settlements.get());
+        assertEquals(0, fixture.role.releases.get());
+        assertEquals(0, fixture.runtime.lifecycleScope().resources().snapshot().registeredTotal());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
+        assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+        assertTrue(fixture.executor.isShutdown());
+    }
+
+    @Test
     void independentModulesShareOneLaneAndAConflictingControlWaitsForItsActualOwnerToLeave() {
         Fixture fixture = opened();
         var movement = fixture.mount("movement", Set.of("movement"));
