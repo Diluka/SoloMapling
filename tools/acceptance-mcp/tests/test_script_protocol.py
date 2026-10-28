@@ -141,12 +141,29 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(response.structured_content["error"]["outcome_unknown"])
                     self.assertFalse(response.structured_content["error"]["retryable"])
                     self.assertNotIn(private, response.model_dump_json())
+            for invalid_field in ("type", "channel"):
+                association = {"request_id": SCRIPT_ARGS["request_id"], "operation_id": "operation-script-fixture"}
+                event = {"type": "output", **association, "seq": 1, "channel": "stdout",
+                         "text": private, "output_truncated": False}
+                event[invalid_field] = []
+
+                def stream(request):
+                    yield {"type": "started", **association}
+                    yield event
+
+                self.stub.stream_responder = stream
+                response = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS))
+                self.assertTrue(response.is_error)
+                self.assertEqual("INVALID_RESPONSE", response.structured_content["error"]["code"])
+                self.assertEqual(SCRIPT_ARGS["request_id"], response.structured_content["request_id"])
+                self.assertTrue(response.structured_content["error"]["outcome_unknown"])
+                self.assertNotIn(private, response.model_dump_json())
             help_result = await client.call_tool("script_help", {"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7})
             self.assertFalse(help_result.is_error)
         runs = [request for request in self.stub.requests if request["path"] == RUN_PATH]
         cancels = [request for request in self.stub.requests if request["path"] == CANCEL_PATH]
-        self.assertEqual(len(malformed), len(runs))
-        self.assertEqual(len(malformed), len(cancels))
+        self.assertEqual(len(malformed) + 2, len(runs))
+        self.assertEqual(len(malformed) + 2, len(cancels))
         self.assertTrue(all(request["body"]["data"]["target_request_id"] == SCRIPT_ARGS["request_id"] for request in cancels))
 
     async def test_pure_calls_old_environment_and_invalid_raw_native_arguments_fail_before_auth(self) -> None:

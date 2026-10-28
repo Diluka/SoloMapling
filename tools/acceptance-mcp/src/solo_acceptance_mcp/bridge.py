@@ -573,13 +573,13 @@ class BridgeClient:
                                         or operation.get("request_id", request_id) != request_id):
                                     raise BridgeError("INVALID_RESPONSE", "脚本输出流最终结果关联无效。")
                                 return {**operation, "request_id": request_id}
-                            elif kind in {"output", "gap"} and operation_id is not None:
+                            elif kind in ("output", "gap") and operation_id is not None:
                                 if event.get("request_id") != request_id or event.get("operation_id") != operation_id:
                                     raise BridgeError("INVALID_RESPONSE", "脚本输出流关联标识不一致。")
                                 if kind == "output":
                                     sequence = event.get("seq")
                                     if (type(sequence) is not int or not cursor < sequence <= MAX_LONG
-                                            or event.get("channel") not in {"stdout", "stderr"}
+                                            or event.get("channel") not in ("stdout", "stderr")
                                             or not isinstance(event.get("text"), str)
                                             or type(event.get("output_truncated")) is not bool):
                                         raise BridgeError("INVALID_RESPONSE", "脚本输出片段格式或顺序无效。")
