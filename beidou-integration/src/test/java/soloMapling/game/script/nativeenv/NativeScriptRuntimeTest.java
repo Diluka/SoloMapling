@@ -101,6 +101,9 @@ class NativeScriptRuntimeTest {
             assertTrue(result.engineExited());
             assertTrue(result.invocationSettled());
             assertNotNull(result.error());
+            if (source.contains("expected_failure")) {
+                assertTrue(result.error().message().contains("expected_failure"), "retain_original_guest_failure");
+            }
             assertNotNull(result.toMap());
             if (!"CLOSED".equals(result.contextState())) fixture.closeContext(result.contextId());
             fixture.assertDrained();

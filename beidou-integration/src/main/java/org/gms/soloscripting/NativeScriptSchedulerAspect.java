@@ -25,7 +25,9 @@ public final class NativeScriptSchedulerAspect {
         NativeScriptSession session = NativeScriptSession.forScheduler(scheduler);
         if (session == null) return point.proceed();
         Runnable tracked = session.schedulerTask(scheduler, task, dispose);
-        try { return point.proceed(new Object[]{tracked}); }
+        // With AspectJ weaving, proceed arguments include the bound call-site `this` before
+        // the intercepted method's arguments. Supplying only tracked replaces the scheduler.
+        try { return point.proceed(new Object[]{scheduler, tracked}); }
         catch (Throwable rejected) {
             session.rejectSchedulerTask(tracked);
             throw rejected;
@@ -47,5 +49,12 @@ public final class NativeScriptSchedulerAspect {
         if (NativeScriptSession.forEventManager(manager) != null) {
             throw new UnsupportedOperationException("native_event_instances_not_supported");
         }
+    }
+    @Before("(execution(* org.gms.scripting.event.EventManager.newInstance(..)) || execution(* org.gms.scripting.event.EventManager.newMarriage(..)) || execution(* org.gms.scripting.event.EventManager.startInstance(..))) && this(manager)")
+    public void rejectInstanceEntryBeforeNativePrefill(Object manager) {
+        // newInstance first asks getReadyInstance(), which submits a native EventManagerTask.
+        // Reject the unsupported owned entry before that side effect; the constructor guard
+        // remains a last defence for other paths. Channel-owned managers proceed unchanged.
+        rejectUnmanagedInstance(manager);
     }
 }

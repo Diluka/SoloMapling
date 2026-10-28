@@ -91,7 +91,7 @@ public final class NativeScriptExecution {
             closeNeeded |= stopping.get() != null || status != ScriptResult.Status.SUCCEEDED || session.nativeDisposed();
             if (closeNeeded && !session.closeAndAwait(5_000)) {
                 status = ScriptResult.Status.CLEANUP_ERROR;
-                error = new ScriptResult.ScriptError("native_script_cleanup_unverified", null, null);
+                if (error == null) error = new ScriptResult.ScriptError("native_script_cleanup_unverified", null, null);
             }
         } catch (Throwable failed) {
             if (guest == null) { work.reject(); guestExited = true; }
