@@ -3,10 +3,12 @@ package soloMapling.game.script.nativeenv;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.config.GameConfig;
+import org.gms.manager.ServerManager;
 import org.gms.net.packet.Packet;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
+import org.gms.property.ServiceProperty;
 import org.gms.provider.Data;
 import org.gms.provider.DataProvider;
 import org.gms.provider.DataProviderFactory;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.springframework.context.ApplicationContext;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
@@ -43,6 +46,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,15 +62,18 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.Mockito.*;
 
 /** Real runtime script entry, native file loader and managers; only game-world/storage/clock boundaries are substitutes. */
 class NativeScriptWorldExecutionTest {
-    private final List<Path> stagedScripts = new ArrayList<>();
+    private Path scriptDirectory;
     private final List<Fixture> fixtures = new ArrayList<>();
 
-    @BeforeEach void startWorld() {
+    @BeforeEach void startWorld() throws Exception {
         CharacterTestContext.install();
+        // 通过原生语言目录选择隔离本轮资料，不覆盖完整 checkout 中已有的 scripts 文件。
+        scriptDirectory = Files.createTempDirectory(Path.of("."), "scripts-__solo_240_");
         WorldEpoch.onWorldStarted();
     }
 
@@ -75,7 +82,11 @@ class NativeScriptWorldExecutionTest {
             for (Fixture fixture : fixtures) fixture.close();
         } finally {
             ExecutionScope.tryBeginWorldStop();
-            for (Path script : stagedScripts) Files.deleteIfExists(script);
+            if (scriptDirectory != null) {
+                try (var paths = Files.walk(scriptDirectory)) {
+                    for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+                }
+            }
         }
     }
 
@@ -264,24 +275,22 @@ class NativeScriptWorldExecutionTest {
     }
 
     private String temporaryNpc(String source) throws Exception {
-        Path directory = Path.of("scripts/npc");
+        Path directory = scriptDirectory.resolve("npc");
         Files.createDirectories(directory);
         Path script = Files.createTempFile(directory, "__solo_240_", ".js");
         Files.writeString(script, source);
-        stagedScripts.add(script);
         String name = script.getFileName().toString();
         return name.substring(0, name.length() - 3);
     }
 
     private void stage(String relative) throws Exception {
-        Path target = Path.of("scripts", relative);
+        Path target = scriptDirectory.resolve(relative);
         Files.createDirectories(target.getParent());
         Files.copy(Path.of("upstream/BeiDou-Server/gms-server/scripts-zh-CN", relative), target);
-        stagedScripts.add(target);
     }
 
     private Fixture fixture(String kind) throws Exception {
-        Fixture fixture = new Fixture(kind);
+        Fixture fixture = new Fixture(kind, scriptDirectory.getFileName().toString().substring("scripts-".length()));
         fixtures.add(fixture);
         fixture.open();
         return fixture;
@@ -316,6 +325,7 @@ class NativeScriptWorldExecutionTest {
         final Map<String, ScriptEngine> engines = new HashMap<>();
         final List<Packet> output = new ArrayList<>();
         final Quest quest;
+        final ApplicationContext nativeApplication;
         final ExecutorService executor = new ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
         final CharacterRuntime runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
                 new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
@@ -324,8 +334,12 @@ class NativeScriptWorldExecutionTest {
         CharacterRuntime.ModuleContext context;
         volatile boolean online = true;
 
-        Fixture(String kind) {
+        Fixture(String kind, String scriptLanguage) {
             this.kind = kind;
+            ServiceProperty service = new ServiceProperty();
+            service.setLanguage(scriptLanguage);
+            nativeApplication = mock(ApplicationContext.class, delegatesTo(ServerManager.getApplicationContext()));
+            when(nativeApplication.getBean(ServiceProperty.class)).thenReturn(service);
             when(client.getPlayer()).thenReturn(player);
             when(client.getChannelServer()).thenReturn(channel);
             when(client.getLanguage()).thenReturn(3);
@@ -387,6 +401,8 @@ class NativeScriptWorldExecutionTest {
         }
 
         AutoCloseable nativeBoundary() {
+            MockedStatic<ServerManager> application = mockStatic(ServerManager.class);
+            application.when(ServerManager::getApplicationContext).thenReturn(nativeApplication);
             MockedStatic<Server> servers = mockStatic(Server.class);
             MockedStatic<ThreadManager> threads = mockStatic(ThreadManager.class);
             MockedStatic<TimerManager> clock = mockStatic(TimerManager.class);
@@ -398,7 +414,7 @@ class NativeScriptWorldExecutionTest {
             config.when(() -> GameConfig.getServerLong("mob_status_monitor_proc")).thenReturn(10L);
             config.when(() -> GameConfig.getServerInt("mob_status_monitor_idle")).thenReturn(10);
             quests.when(() -> Quest.getInstance(20600)).thenReturn(quest);
-            return () -> { quests.close(); config.close(); clock.close(); threads.close(); servers.close(); };
+            return () -> { quests.close(); config.close(); clock.close(); threads.close(); servers.close(); application.close(); };
         }
 
         void open() throws Exception {
