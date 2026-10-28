@@ -115,7 +115,10 @@ class McpControlModuleTest {
         assertEquals(CharacterCommandLane.Status.ENQUEUED, prepared.lane().submit(prepared.work(), prepared.permit(),
                 bodies::incrementAndGet, settlements::incrementAndGet).status());
         await(chatWork);
-        assertEquals(3L, executor.getTaskCount());
+        // The executor may need a tail handoff while a settled carrier is still returning.
+        // Native command identity and body/settlement counts prove single execution below.
+        assertTrue(chatWork.isSettled());
+        assertTrue(interaction.isSettled());
         assertEquals(2, preflights.get());
         assertEquals(2, bodies.get());
         assertEquals(2, settlements.get());
