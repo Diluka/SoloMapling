@@ -14,7 +14,6 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.IntPredicate;
 
 /** Object identity, rather than a character-id range, determines bot ownership. */
 public final class BotRegistry {
@@ -24,17 +23,13 @@ public final class BotRegistry {
     private BotRegistry() { }
 
     public static int allocateId() {
-        return allocateId(id -> BOTS.containsKey(id) || isOnline(id) || isPersisted(id));
-    }
-
-    static int allocateId(IntPredicate occupied) {
         int candidate;
         do {
             candidate = NEXT_ID.getAndDecrement();
             if (candidate <= 0) {
                 throw new IllegalStateException("SoloMapling character id space exhausted");
             }
-        } while (occupied.test(candidate));
+        } while (BOTS.containsKey(candidate) || isOnline(candidate) || isPersisted(candidate));
         return candidate;
     }
 

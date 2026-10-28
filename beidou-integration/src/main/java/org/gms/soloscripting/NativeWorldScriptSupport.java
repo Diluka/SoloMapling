@@ -11,7 +11,6 @@ import soloMapling.game.script.nativeenv.NativeScriptSession;
 
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
 
 /** Source checks shared only by the three native world-script adapters. */
 final class NativeWorldScriptSupport {
@@ -56,9 +55,8 @@ final class NativeWorldScriptSupport {
         if (!request.args().isEmpty()) throw invalid("invalid_native_script_arguments");
     }
 
-    static void load(NativeScriptSession session, Function<String, GraalJSScriptEngine> loader, String path) {
-        GraalJSScriptEngine engine = loader.apply(path);
-        if (engine == null) throw invalid("native_script_not_found");
+    static void load(NativeScriptSession session, String path) {
+        GraalJSScriptEngine engine = NativeScriptLoader.load(path);
         // The loader's Solo capture hook registers the real engine before its first eval.
         if (session.engine() != engine) throw invalid("native_script_engine_not_captured");
     }

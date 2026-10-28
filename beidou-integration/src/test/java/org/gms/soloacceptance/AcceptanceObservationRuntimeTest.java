@@ -1,5 +1,7 @@
 package org.gms.soloacceptance;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.game.context.WorldEpoch;
@@ -8,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AcceptanceObservationRuntimeTest {
     @AfterEach
-    void stopWorld() { WorldEpoch.onWorldStopping(); }
+    void stopWorld() { ExecutionScope.tryBeginWorldStop(); }
 
     @Test
     void legacyFacadeAndSharedConsumersObserveOneWorldEpoch() {

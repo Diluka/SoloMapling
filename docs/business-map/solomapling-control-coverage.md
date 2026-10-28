@@ -24,7 +24,7 @@
 | 取消、body 退出、carrier 结算、发布及资源释放分别计账 | `solo.runtime.work`、`resources`、`true-settlement` | `ExecutionScope.beginDrain`、`awaitDrained`、`publishOnce`；`ScopeResources`；`CharacterCommandLane` |
 | 原世界停止票据、旧引用拒绝和迟到资源债务 | `solo.runtime.world-stop`、`epoch`、`current-context`、`exact-release` | `ExecutionScope.tryBeginWorldStop`、`joinWorldStop`；`NativeContextChecks.requireSceneCurrent`；`CharacterRuntime.OriginResource.adopt` |
 | 根关闭等待模块/钩子、来源释放、真正 CLOSED | `solo.runtime.close-role.flow`、`release-origin` | `CharacterRuntime.beginClose`、`releaseOrigin`、`tryFinalizeClose`；`RoleBinding` |
-| 从同一来源读取角色和安全事件 | `solo.runtime.observe-role`、`events` | `CharacterRuntime.observeOrigin`；`RuntimeEvents.read` |
+| 从同一来源读取角色和安全事件 | `solo.runtime.observe-role`、`events` | `CharacterRuntime.observeOrigin`；`CharacterRuntime.events` |
 | 七工具通过正常管理端和管理员权限访问 | `solo.acceptance.protocol`、`admin` | `tools/acceptance-mcp/src/solo_acceptance_mcp/server.py:build_server`；`AcceptanceAccess.requireAdmin`；`ActorControlController` |
 | 仅读已加载场景，旧场景/世界代次拒绝 | `solo.acceptance.discover`、`context` | `AcceptanceObservationService.observe`、`discover`、`registerActorScene` |
 | 专用 profile、账号租约、普通权限和原生创建/登录 | `solo.acceptance.native-source`、`profiles`、`open.flow` | `ActorProfiles.resolve`；`NativeActorBackend.openOwned`；`ActorAccountOwnership`；`AcceptanceRoleBinding` |

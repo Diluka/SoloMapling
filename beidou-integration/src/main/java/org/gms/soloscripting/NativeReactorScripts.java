@@ -1,6 +1,5 @@
 package org.gms.soloscripting;
 
-import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.gms.client.Client;
 import org.gms.scripting.reactor.ReactorActionManager;
 import org.gms.server.maps.Reactor;
@@ -12,18 +11,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
 
 /** Original reactor API and entries with a real reactor from the role's captured map. */
 public final class NativeReactorScripts implements NativeScriptAdapter {
     private static final List<String> ENTRIES = List.of("hit", "act", "touch", "untouch");
     private final Client client;
-    private final Function<String, GraalJSScriptEngine> loader;
 
-    public NativeReactorScripts(Client client) { this(client, NativeScriptLoader::load); }
-    NativeReactorScripts(Client client, Function<String, GraalJSScriptEngine> loader) {
+    public NativeReactorScripts(Client client) {
         this.client = Objects.requireNonNull(client);
-        this.loader = Objects.requireNonNull(loader);
     }
 
     @Override public AutoCloseable enter(NativeScriptSession session) {
@@ -43,7 +38,7 @@ public final class NativeReactorScripts implements NativeScriptAdapter {
         }
         String path = "reactor/" + reactor.getId() + ".js";
         session.attachment(new Bound(role, reactor, path));
-        NativeWorldScriptSupport.load(session, loader, path);
+        NativeWorldScriptSupport.load(session, path);
         session.engine().put("rm", new ReactorActionManager(client, reactor, session.invocable()));
         return invoke(session, request);
     }

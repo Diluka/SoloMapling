@@ -3,6 +3,7 @@ package soloMapling.game.action;
 import org.gms.client.BuffStat;
 import org.gms.client.Character;
 import org.gms.client.Client;
+import org.gms.client.Disease;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -88,7 +89,7 @@ class NativeMovementActionsTest {
         doAnswer(call -> { stance.set(((Number) call.getArgument(0)).intValue()); return null; }).when(character).setStance(anyInt());
         lane = new ManualExecutor(); clock = new ManualClock(); service = new NativeMovementActions(clock, clock.now::get);
         runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8,1,
-                new ExecutionScope.Limits(16,2,16,2),128,2),lane);
+                new ExecutionScope.Limits(16,2,16,2),2),lane);
         GameContext.CharacterRef actor = new GameContext.CharacterRef(runtime.acceptedEpoch(), character,client,world,channel);
         RoleBinding binding = new RoleBinding() {
             public String kind() { return "movement-test"; }
@@ -114,11 +115,14 @@ class NativeMovementActionsTest {
                 runtime.submitOriginCleanup(cleanup, () -> runtime.releaseOrigin(cleanup), () -> {}); lane.all();
             }
         }
-        ThreadLocalUtil.removeCurrentClient(); WorldEpoch.onWorldStopping();
+        ThreadLocalUtil.removeCurrentClient(); ExecutionScope.tryBeginWorldStop();
         if (lane != null) lane.shutdown();
     }
     private NativeMovementActions.MoveHandle move(int ms) {
-        var work = context.acceptWork(); var handle = service.prepareMove(server,context,work,scene,new NativeMovementAction("RIGHT",ms),() -> {});
+        return move("RIGHT", ms);
+    }
+    private NativeMovementActions.MoveHandle move(String direction, int ms) {
+        var work = context.acceptWork(); var handle = service.prepareMove(server,context,work,scene,new NativeMovementAction(direction,ms),() -> {});
         service.submitMove(handle); return handle;
     }
     private ExecutionScope.WorkHandle work(NativeMovementActions.MoveHandle handle) {
@@ -182,7 +186,7 @@ class NativeMovementActionsTest {
     }
     @Test void queuedNativeTickCannotRunAfterTheOriginalWorldStops() {
         var moving = move(1000); var parent = work(moving); clock.next();
-        runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+        runtime.beginClose(Optional.of(ExecutionScope.tryBeginWorldStop().orElseThrow()));
         lane.all(); clock.all(); lane.all();
         assertTrue(parent.isSettled()); assertFalse(moving.dispatchStarted()); assertEquals(0,position.get().x);
         verify(map,never()).movePlayer(any(),any());
@@ -227,6 +231,68 @@ class NativeMovementActionsTest {
         assertEquals(1,result(handle).facts().get("movement_steps")); assertTrue(parent.isSettled());
     }
 
+    @Test void walkingUsesNativeSpeedSlopeAndTheRemainingShortFrameInBothDirections() {
+        FootholdTree slope = new FootholdTree(new Point(-500,-500),new Point(500,500));
+        slope.insert(new Foothold(new Point(-100,-20),new Point(100,20),42));
+        when(map.getFootholds()).thenReturn(slope);
+        when(character.getTotalMoveSpeedStat()).thenReturn(140);
+        var right = move(150); clock.next(); lane.all(); clock.next(); lane.all();
+        assertEquals(SUCCEEDED,result(right).outcome()); assertEquals(new Point(25,5),position.get());
+        assertEquals(2,result(right).facts().get("movement_steps"));
+        var left = move("LEFT",100); clock.next(); lane.all();
+        assertEquals(SUCCEEDED,result(left).outcome()); assertEquals(new Point(8,2),position.get());
+    }
+
+    @Test void eitherWallOrientationRejectsWalkingBeforeAnyNativeDisplacement() {
+        FootholdTree tree = map.getFootholds();
+        tree.insert(new Foothold(new Point(8,-50),new Point(8,50),43));
+        tree.insert(new Foothold(new Point(-8,50),new Point(-8,-50),44));
+        assertMoveRejected("RIGHT","movement_wall_blocked");
+        assertMoveRejected("LEFT","movement_wall_blocked");
+        assertEquals(new Point(0,0),position.get()); verify(map,never()).movePlayer(any(),any());
+    }
+
+    @Test void walkingCannotLeaveItsFootholdMapOrNativePacketCoordinateRange() {
+        position.set(new Point(395,0)); assertMoveRejected("RIGHT","movement_foothold_edge");
+        position.set(new Point(0,0)); when(map.getMapArea()).thenReturn(new Rectangle(-10,-10,20,20));
+        assertMoveRejected("RIGHT","movement_map_boundary");
+        position.set(new Point(40000,0)); assertMoveRejected("RIGHT","movement_position_out_of_range");
+        verify(map,never()).movePlayer(any(),any());
+    }
+
+    @Test void unsupportedTerrainAndNativeRoleStatesCannotStartWalkingOrSpawnSettlement() {
+        FootholdTree steep = new FootholdTree(new Point(-500,-500),new Point(500,500));
+        steep.insert(new Foothold(new Point(-100,-100),new Point(100,100),42));
+        FootholdTree ordinary = map.getFootholds(); when(map.getFootholds()).thenReturn(steep);
+        assertMoveRejected("RIGHT","movement_slope_unsupported");
+        when(map.getFootholds()).thenReturn(ordinary); position.set(new Point(0,-25));
+        assertMoveRejected("RIGHT","movement_spawn_settle_unsupported");
+        position.set(new Point(0,-19)); when(character.hasDisease(Disease.SLOW)).thenReturn(true);
+        assertMoveRejected("RIGHT","movement_slow_unsupported");
+        when(character.hasDisease(Disease.SLOW)).thenReturn(false); when(character.hasDisease(Disease.STUN)).thenReturn(true);
+        assertMoveRejected("RIGHT","movement_actor_immobilized");
+        when(character.hasDisease(Disease.STUN)).thenReturn(false); when(map.isSwim()).thenReturn(true);
+        assertMoveRejected("RIGHT","movement_mode_unsupported");
+        when(map.isSwim()).thenReturn(false); when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(1);
+        assertMoveRejected("RIGHT","movement_mode_unsupported");
+        when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(null); stance.set(14);
+        assertMoveRejected("RIGHT","movement_mode_unsupported");
+        stance.set(4); when(map.getFootholdSpeed()).thenReturn(0.5f);
+        assertMoveRejected("RIGHT","movement_surface_unsupported");
+        when(map.getFootholdSpeed()).thenReturn(1.0f); when(character.getHp()).thenReturn(0);
+        assertMoveRejected("RIGHT","movement_actor_dead");
+        verify(map,never()).movePlayer(any(),any());
+    }
+
+    private void assertMoveRejected(String direction, String reason) {
+        var parent = context.acceptWork();
+        var handle = service.prepareMove(server,context,parent,scene,new NativeMovementAction(direction,100),() -> {});
+        service.submitMove(handle); clock.all(); lane.all();
+        assertEquals(FAILED,result(handle).outcome()); assertEquals(reason,result(handle).fixedReason());
+        assertFalse(handle.dispatchStarted()); assertTrue(parent.isSettled());
+        assertEquals(0,context.scope().resources().snapshot().outstanding());
+    }
+
     @Test void aLaterStopGetsItsOwnRealIdleDispatchInsteadOfBorrowingAnOlderStopCheckpoint() {
         var moving = move(1000); clock.next(); lane.all();
         var firstWork = context.acceptWork(); var first = service.prepareStop(server,context,firstWork,scene,() -> {});
@@ -239,23 +305,12 @@ class NativeMovementActionsTest {
     }
     @Test void aRegisteredWorldStopTicketAllowsExactLocalClockCleanupBeforeTheScopeExplicitlyJoins() {
         var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
-        var stop = ExecutionScope.beginWorldStop();
+        var stop = ExecutionScope.tryBeginWorldStop().orElseThrow();
         clock.next(); lane.all();
         assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
         runtime.beginClose(Optional.of(stop)); assertTrue(runtime.snapshot().modules().isEmpty());
         verify(map,times(1)).movePlayer(eq(character),any());
     }
-    @Test void anUnknownInactiveWorldRetainsTheExactCleanupDebtRatherThanLosingTheOnlyRetryOwner() {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
-        WorldEpoch.onWorldStopping(); clock.next(); lane.all();
-        assertFalse(parent.isSettled()); assertFalse(moving.result().toCompletableFuture().isDone());
-        assertEquals(1,context.scope().resources().snapshot().outstanding()); assertEquals(0,clock.size());
-        runtime.beginClose(Optional.empty());
-        assertEquals(INDETERMINATE,result(moving).outcome()); assertFalse(parent.isSettled());
-        assertEquals(1,context.scope().resources().snapshot().outstanding());
-        assertFalse(runtime.snapshot().modules().isEmpty()); verify(map,times(1)).movePlayer(eq(character),any());
-    }
-
     @Test void aTemporarilyUnavailableCleanupHandshakeCanBeRetriedByTheActualModuleStopSignal() throws Exception {
         var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
         Field active = NativeMovementActions.class.getDeclaredField("active"); active.setAccessible(true);

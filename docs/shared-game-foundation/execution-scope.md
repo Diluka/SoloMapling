@@ -8,14 +8,14 @@
 
 | 类型 | 提供的机制 | 消费方仍负责 |
 |---|---|---|
-| `ExecutionScope` | 固定世界 token、调用方 runtime/module 身份、工作句柄、取消、结果发布和排空账本 | 模块业务、权限来源、原生动作资格及结果含义 |
+| `ExecutionScope` | 固定世界 token、精确工作和资源归属、工作句柄、取消、结果发布和排空账本 | 模块业务、权限来源、原生动作资格及结果含义 |
 | `ScopeResources` | 资源登记握手、精确对象归属、取消信号和专用清理许可 | 实际创建、退订、取消、关闭及释放事实核验 |
 | `CharacterCommandLane` | 一个实际角色绑定的有界串行命令入口与清理预留 | 选择已获授权的模块、冲突资源仲裁和优先级 |
 | `AcceptanceActorExecution` | MCP 的 scope/lane/原生角色资源薄适配 | JWT/admin、owner/profile/session、外部 request_id、历史及原生账号存档 |
 
 `Limits(maxWork, maxResources, maxDiagnostics, maxCleanupWork)` 显式配置容量，调用方必须传入四项，不提供三参隐式默认：`maxWork` 限普通活跃工作，`maxCleanupWork` 是独立的有界清理额度，总工作上限为两者之和。`maxWork >= 1`，其余参数非负；`maxResources > 0` 时 `maxCleanupWork >= 1`，避免普通任务填满账本后无法收尾。没有资源预算时可保留闲置清理额度，但不会因此取得资源权；角色 lane 另有独立的物理清理槽预留。`ScopeSnapshot.acceptedWork` 仍是普通与清理活跃句柄总数，可高于 `maxWork`，诊断记录的 `kind` 区分两类。
 
-`OwnerStamp` 的两项对象身份由调用方提供，分别表达自身 runtime 和 module 代次；不与世界 token、MCP session、operation ID 或包序号混用。构造 scope 或声明 Grant 不会产生角色业务权限。公共层不依赖验收开关、全世界目录或 MCP 操作历史；V2/PQ 通过内部 Java 适配接入。
+工作和资源归属使用精确 scope 对象；运行体与模块代次由宿主的 `ModuleRef`、`ModuleContext` 和 Grant 验证，不在 scope 中另存一套身份标签。构造 scope 或声明 Grant 不会产生角色业务权限。公共层不依赖验收开关、全世界目录或 MCP 操作历史；V2/PQ 通过内部 Java 适配接入。
 
 ## 工作的受理、执行与结束
 
@@ -63,7 +63,7 @@ lane 的容量和清理预留由构造方明确提供。借用执行器必须满
 
 ## 世界停止的专用窗口
 
-共同 stopping 入口调用 `ExecutionScope.tryBeginWorldStop()`，经 `WorldEpoch.stopTransition()` 原子地把实际 active 来源变为 stopped，并生成构造不公开的 `WorldStopTicket`。同一次停止复用同一 ticket；来源不明的 inactive 世界返回空，不更换 token，也不制造清理权限。需要严格结果的内部入口可用 `beginWorldStop()`，未知停止会抛固定 `unknown_world_stop`。
+共同 stopping 入口调用 `ExecutionScope.tryBeginWorldStop()`，经 `WorldEpoch.stopTransition()` 原子地把实际 active 来源变为 stopped，并生成构造不公开的 `WorldStopTicket`。同一次停止复用同一 ticket；来源不明的 inactive 世界返回空，不更换 token，也不制造清理权限。
 
 scope 只有在 `acceptedEpoch == ticket.sourceEpoch()` 且当前仍为该 `stoppedEpoch()` 时才能 `joinWorldStop(ticket)`。窗口允许收尾原来拥有的精确资源，同时拒绝普通动作。下一次世界启动后，旧 ticket 和旧清理入口失效；旧 quarantine 不能借新世界的停止 ticket 续权。公共 API 没有 `ignoreEpoch` 参数。
 
@@ -77,6 +77,6 @@ MCP 停服先关闭受理并处理所有 session，再使用同一停止票据�
 
 根角色关闭以对应登记的 `DrainPermit` 调用原生后端；原生注销、对话清理和存档回读均核实后才确认资源释放。相同未结束 cleanup work 继续复用，结算后才允许有限重验，不能因回调先清标记而把重复提交悬挂在 `QUEUED`。
 
-测试入口见[执行测试目录](../../beidou-integration/src/test/java/soloMapling/game/execution/)、[MCP 薄适配测试](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/AcceptanceActorExecutionTest.java)和[服务回归](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/ActorControlServiceTest.java)。其中 Bot、EventBus 和定时器合同使用真实原生资源及受控宿主路由替身；它们与实际普通角色的游戏后端证据分开记录，不代表完整 V2/PQ 已运行。
+测试入口见[执行测试目录](../../beidou-integration/src/test/java/soloMapling/game/execution/)、[MCP 薄适配测试](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/AcceptanceActorExecutionTest.java)和[服务回归](../../beidou-integration/src/test/java/org/gms/soloacceptance/actor/ActorControlServiceTest.java)。保留的公共约束覆盖精确工作、Grant 和资源归属；MCP 动作、持续移动及原生脚本调度从各自实际入口验证取消、排空与释放。没有生产订阅者或 Bot 模块消费的永久实验夹具不作为业务覆盖。
 
 关闭 #118 需要完整构建、CI、隔离普通角色/同 JVM 世界停启及实际部署证据，结果在对应 Issue 留存。[#119 普通聊天原生动作与证据](native-actions.md)、[#120](https://github.com/Diluka/SoloMapling/issues/120) 按需事实/事件、[#121](https://github.com/Diluka/SoloMapling/issues/121) NPC 会话和 #122～#129 各动作仍分别实现、验收；公共作用域加入不扩大当前 MCP 工具能力。

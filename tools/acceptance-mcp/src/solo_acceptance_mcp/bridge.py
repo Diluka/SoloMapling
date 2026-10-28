@@ -395,7 +395,6 @@ class BridgeClient:
         return await self._authorized_request("GET", "/solo/acceptance/v1/capabilities")
 
     async def command_help(self, command: str | None = None) -> dict[str, Any]:
-        validate_command_help(command)
         path = "/solo/acceptance/v1/command/help"
         if command is not None:
             path += "?command=" + quote(command, safe="")
@@ -405,7 +404,6 @@ class BridgeClient:
         self, profile_id: str, *, request_id: str, command: str,
         expected_command_generation: str,
     ) -> dict[str, Any]:
-        validate_command_request(profile_id, request_id, command, expected_command_generation)
         try:
             return await self._mutation("/solo/acceptance/v1/command/execute", {
                 "profile_id": profile_id, "command": command,
@@ -484,7 +482,6 @@ class BridgeClient:
         self, session_id: str, expected_generation: int, *, request_id: str,
         action: str, parameters: dict[str, Any], expected_context: dict[str, Any],
     ) -> dict[str, Any]:
-        validate_action_request(session_id, expected_generation, request_id, action, parameters, expected_context)
         return await self._mutation("/solo/acceptance/v1/actor/act", {
             "session_id": session_id, "expected_generation": expected_generation, "action": action,
             "parameters": dict(parameters), "expected_context": dict(expected_context),
@@ -492,14 +489,10 @@ class BridgeClient:
 
     async def script_run(
         self, session_id: str, expected_generation: int, *, request_id: str, kind: str, operation: str,
-        source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
-        context_id: str | None = None, options: dict[str, Any] | None = None,
-        entry: str | None = None, args: list[Any] | None = None,
+        options: dict[str, Any], args: list[Any], source: str = "",
+        parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+        context_id: str | None = None, entry: str | None = None,
     ) -> dict[str, Any]:
-        options = {} if options is None else options
-        args = [] if args is None else args
-        validate_script_run(session_id, expected_generation, request_id, kind, operation, source,
-                            parameters, timeout_ms, context_id, options, entry, args)
         # Freeze the complete validated native invocation before run and cancel
         # cross independent HTTP connections. Defaults are explicit in both.
         data = json.loads(json.dumps({
@@ -564,7 +557,6 @@ class BridgeClient:
                 pass
 
     async def script_help(self, session_id: str, expected_generation: int) -> dict[str, Any]:
-        validate_script_help(session_id, expected_generation)
         return await self._authorized_request(
             "POST", "/solo/acceptance/v1/script/help", {"requestId": str(uuid4()), "data": {
                 "session_id": session_id, "expected_generation": expected_generation,

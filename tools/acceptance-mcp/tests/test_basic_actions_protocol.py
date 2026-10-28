@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 import time
 import unittest
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
-from tests.test_chat_protocol import ACT_PATH, TOOLS, ChatProtocolStub, capabilities
+from tests.test_chat_protocol import ACT_PATH, ChatProtocolStub
 from tests.test_inventory_move_protocol import inventory_capabilities
-from tests.test_npc_protocol import npc_capabilities
-from tests.test_npc_reply_protocol import reply_capabilities
 
 
 BASE_ACTIONS = ["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"]
@@ -293,21 +290,6 @@ class BasicActionsProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(set(PARAMETERS) <= set(tools["game_act"].input_schema["properties"]["action"]["enum"]))
         self.assertEqual(BASE_ACTIONS, caps.structured_content["actions"])
         self.assertFalse(set(PARAMETERS) & set(caps.structured_content["actions"]))
-
-    def test_capability_consumer_preserves_old_sets_and_accepts_only_known_basic_extensions(self) -> None:
-        accepted = [capabilities(TOOLS), npc_capabilities(), reply_capabilities(), inventory_capabilities(), basic_capabilities()]
-        accepted.extend(basic_capabilities(BASE_ACTIONS + [action]) for action in PARAMETERS)
-        for caps in accepted:
-            with self.subTest(actions=caps["actions"]):
-                self.assertEqual(sorted(TOOLS), require_capabilities(caps, sorted(REGISTERED_TOOLS), actors=True))
-        invalid = [basic_capabilities(ACTIONS + ["skill"]), basic_capabilities(ACTIONS + ["move"]),
-                   basic_capabilities(["chat", "move"])]
-        mismatched = deepcopy(basic_capabilities())
-        mismatched["actor_control"]["actions"] = BASE_ACTIONS[:]
-        invalid.append(mismatched)
-        for caps in invalid:
-            with self.subTest(actions=caps["actions"]), self.assertRaises(RuntimeError):
-                require_capabilities(caps, sorted(REGISTERED_TOOLS), actors=True)
 
     async def test_same_id_parameter_conflict_is_left_to_backend_and_is_not_retried(self) -> None:
         seen = {}

@@ -26,7 +26,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 
 /*
  * Portals-only world connectivity graph for GCTravel: which map walkably connects to
@@ -48,17 +47,13 @@ final class GCWorldGraph {
     private static volatile Map<Integer, int[]> edges;
 
     static Map<Integer, int[]> get() {
-        return get(GCWorldGraph::build);
-    }
-
-    static Map<Integer, int[]> get(Supplier<Map<Integer, int[]>> builder) {
         Map<Integer, int[]> cached = edges;
         if (cached != null) {
             return cached;
         }
         synchronized (GCWorldGraph.class) {
             if (edges == null) {
-                edges = builder.get();
+                edges = build();
             }
             return edges;
         }
@@ -179,14 +174,13 @@ final class GCWorldGraph {
                 // can't list an area dir — skip it
             }
         }
-        return finishBuild(out, pool, 10, TimeUnit.MINUTES);
+        return finishBuild(out, pool);
     }
 
-    static Map<Integer, int[]> finishBuild(Map<Integer, int[]> out, ExecutorService pool,
-                                           long timeout, TimeUnit unit) {
+    private static Map<Integer, int[]> finishBuild(Map<Integer, int[]> out, ExecutorService pool) {
         pool.shutdown();
         try {
-            if (!pool.awaitTermination(timeout, unit)) {
+            if (!pool.awaitTermination(10, TimeUnit.MINUTES)) {
                 pool.shutdownNow();
                 throw new CancellationException("GC world graph scan timed out");
             }

@@ -2,10 +2,14 @@ package soloMapling.ArtificialPlayer;
 
 import org.gms.client.BotClient;
 import org.gms.client.Character;
+import org.gms.client.Client;
+import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.HiredMerchant;
+import org.gms.util.DatabaseConnection;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +18,11 @@ import soloMapling.beidou.BotRegistry;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.server.SoloMaplingUtilities;
 import soloMapling.ArtificialPlayer.BotCommandsPack.WarpCommands;
+import soloMapling.FreeMarket.ArtificialFreeMarket;
+import soloMapling.FreeMarket.ArtificialShopGenerator;
+import soloMapling.FreeMarket.FMEconomyManager;
+import soloMapling.FreeMarket.FMShopTypeManager;
+import soloMapling.FreeMarket.HiredMerchantArtificial;
 
 import java.awt.Point;
 import java.util.Collections;
@@ -22,6 +31,10 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,6 +51,52 @@ class BotGenerationLifecycleTest {
     @AfterEach
     void unregisterFixtures() {
         registeredBots.forEach(BotRegistry::unregister);
+    }
+
+    @Test
+    void consoleCreationSkipsRegisteredOnlineAndPersistedCharactersBeforePublishing() throws Exception {
+        try (CreationWorld world = new CreationWorld()) {
+            Character console = BotGeneration.getConsoleBot();
+            world.assertUnoccupiedIdentity(console);
+            assertSame(console, world.channelPlayers.getCharacterById(console.getId()));
+            assertSame(console, world.worldPlayers.getCharacterById(console.getId()));
+            assertSame(console, BotGeneration.getConsoleBot());
+        }
+    }
+
+    @Test
+    void merchantCreationUsesTheSameCollisionRulesAndPublishesItsOwnOwner() throws Exception {
+        try (CreationWorld world = new CreationWorld();
+             MockedStatic<ArtificialShopGenerator> stock = mockStatic(ArtificialShopGenerator.class);
+             MockedStatic<FMEconomyManager> economy = mockStatic(FMEconomyManager.class);
+             MockedStatic<FMShopTypeManager> shopTypes = mockStatic(FMShopTypeManager.class)) {
+            int mapId = world.map.getId();
+            economy.when(() -> FMEconomyManager.getTierForRoom(mapId)).thenReturn("B");
+            shopTypes.when(FMShopTypeManager::selectShopTypeWeightedProbability)
+                    .thenReturn(HiredMerchantArtificial.shopTypes.Common);
+            shopTypes.when(FMShopTypeManager::getSecondaryShopItemTypes)
+                    .thenReturn(List.of(HiredMerchantArtificial.shopTypes.Potion));
+            Client requester = mock(Client.class);
+            Character player = mock(Character.class);
+            when(requester.getPlayer()).thenReturn(player);
+            when(player.getMapId()).thenReturn(mapId);
+            when(player.getPosition()).thenReturn(new Point(40, 20));
+
+            ArtificialFreeMarket.populateFreeMarketSpot(requester);
+
+            assertEquals(1, world.created.size());
+            Character owner = world.created.getFirst();
+            world.assertUnoccupiedIdentity(owner);
+            var published = org.mockito.ArgumentCaptor.forClass(HiredMerchant.class);
+            verify(world.map).addMapObject(published.capture());
+            HiredMerchant merchant = published.getValue();
+            assertEquals(owner.getId(), merchant.getOwnerId());
+            assertSame(world.map, merchant.getMap());
+            assertTrue(merchant.isOpen());
+            assertSame(world.map, owner.getMap());
+            verify(world.world).registerHiredMerchant(merchant);
+            verify(world.channel).addHiredMerchant(owner.getId(), merchant);
+        }
     }
 
     @Test
@@ -282,5 +341,128 @@ class BotGenerationLifecycleTest {
         when(bot.getId()).thenReturn(id);
         when(bot.getClient()).thenReturn(mock(BotClient.class));
         return bot;
+    }
+
+    /** Native world/storage and character-loading boundary; allocation and both consumers are real. */
+    private static final class CreationWorld implements AutoCloseable {
+        final Server server = mock(Server.class);
+        final World world = mock(World.class);
+        final Channel channel = mock(Channel.class, RETURNS_DEEP_STUBS);
+        final PlayerStorage worldPlayers = spy(new PlayerStorage());
+        final PlayerStorage channelPlayers = new PlayerStorage();
+        final MapleMap map = mock(MapleMap.class);
+        final List<Character> created = new ArrayList<>();
+        final List<Character> registered = new ArrayList<>();
+        final List<Integer> collisions = new ArrayList<>();
+        final MockedStatic<Server> singleton;
+        final MockedStatic<DatabaseConnection> database;
+        final MockedStatic<Character> characters;
+        Character onlinePlayer;
+
+        CreationWorld() throws Exception {
+            when(server.getWorlds()).thenReturn(List.of(world));
+            when(server.getWorld(0)).thenReturn(world);
+            when(server.getChannel(0, 1)).thenReturn(channel);
+            when(world.getPlayerStorage()).thenReturn(worldPlayers);
+            when(world.getChannel(1)).thenReturn(channel);
+            when(channel.getPlayerStorage()).thenReturn(channelPlayers);
+            when(map.getId()).thenReturn(100_000_013);
+            when(channel.getMapFactory().getMap(map.getId())).thenReturn(map);
+            doAnswer(call -> {
+                channelPlayers.addPlayer(call.getArgument(0));
+                return null;
+            }).when(channel).addPlayer(any(Character.class));
+            doAnswer(call -> {
+                int candidate = call.getArgument(0);
+                if (collisions.isEmpty()) {
+                    onlinePlayer = nativeCharacter(mock(Client.class), candidate, "ExistingPlayer");
+                    worldPlayers.addPlayer(onlinePlayer);
+                    Character existingBot = nativeCharacter(new BotClient(0, 1), candidate - 1, "ExistingBot");
+                    BotRegistry.register(existingBot);
+                    registered.add(existingBot);
+                    collisions.add(candidate);
+                    collisions.add(candidate - 1);
+                    collisions.add(candidate - 2);
+                }
+                return call.callRealMethod();
+            }).when(worldPlayers).getCharacterById(anyInt());
+            Connection connection = mock(Connection.class);
+            PreparedStatement template = mock(PreparedStatement.class);
+            PreparedStatement occupied = mock(PreparedStatement.class);
+            ResultSet templateRows = mock(ResultSet.class);
+            ResultSet occupiedRows = mock(ResultSet.class);
+            when(connection.prepareStatement("SELECT id FROM characters WHERE name = ? AND world = ?"))
+                    .thenReturn(template);
+            when(template.executeQuery()).thenReturn(templateRows);
+            when(templateRows.next()).thenReturn(true, false);
+            when(templateRows.getInt("id")).thenReturn(12345);
+            when(connection.prepareStatement("SELECT 1 FROM characters WHERE id = ?")).thenReturn(occupied);
+            when(occupied.executeQuery()).thenReturn(occupiedRows);
+            AtomicInteger checked = new AtomicInteger();
+            doAnswer(call -> {
+                checked.set(call.getArgument(1));
+                return null;
+            }).when(occupied).setInt(eq(1), anyInt());
+            when(occupiedRows.next()).thenAnswer(call -> checked.get() == collisions.get(2));
+            singleton = mockStatic(Server.class);
+            singleton.when(Server::getInstance).thenReturn(server);
+            database = mockStatic(DatabaseConnection.class);
+            database.when(DatabaseConnection::getConnection).thenReturn(connection);
+            characters = mockStatic(Character.class);
+            characters.when(() -> Character.loadCharFromDB(anyInt(), any(Client.class), eq(false)))
+                    .thenAnswer(call -> freshCharacter(call.getArgument(1)));
+            characters.when(() -> Character.getDefault(any(Client.class)))
+                    .thenAnswer(call -> freshCharacter(call.getArgument(0)));
+        }
+
+        Character freshCharacter(Client client) {
+            Character character = nativeCharacter(client, 12345, "Template");
+            created.add(character);
+            return character;
+        }
+
+        Character nativeCharacter(Client client, int initialId, String initialName) {
+            Character character = mock(Character.class);
+            AtomicInteger id = new AtomicInteger(initialId);
+            AtomicReference<String> name = new AtomicReference<>(initialName);
+            AtomicReference<MapleMap> currentMap = new AtomicReference<>(map);
+            AtomicReference<HiredMerchant> merchant = new AtomicReference<>();
+            AtomicReference<Point> position = new AtomicReference<>(new Point());
+            when(character.getClient()).thenReturn(client);
+            when(character.getId()).thenAnswer(call -> id.get());
+            doAnswer(call -> { id.set(call.getArgument(0)); return null; }).when(character).setId(anyInt());
+            when(character.getName()).thenAnswer(call -> name.get());
+            doAnswer(call -> { name.set(call.getArgument(0)); return null; }).when(character).setName(anyString());
+            when(character.getWorldServer()).thenReturn(world);
+            when(character.getMap()).thenAnswer(call -> currentMap.get());
+            doAnswer(call -> { currentMap.set(call.getArgument(0)); return null; })
+                    .when(character).setMap(any(MapleMap.class));
+            when(character.getPosition()).thenAnswer(call -> position.get());
+            doAnswer(call -> { position.set(call.getArgument(0)); return null; })
+                    .when(character).setPosition(any(Point.class));
+            when(character.getHiredMerchant()).thenAnswer(call -> merchant.get());
+            doAnswer(call -> { merchant.set(call.getArgument(0)); return null; })
+                    .when(character).setHiredMerchant(any());
+            return character;
+        }
+
+        void assertUnoccupiedIdentity(Character character) {
+            assertEquals(3, collisions.size());
+            assertFalse(collisions.contains(character.getId()));
+            assertTrue(character.getId() > 0);
+            assertTrue(BotRegistry.isRegistered(character));
+            assertSame(onlinePlayer, worldPlayers.getCharacterById(collisions.get(0)));
+            assertFalse(BotRegistry.isBot(onlinePlayer));
+            assertTrue(BotRegistry.isRegistered(registered.getFirst()));
+        }
+
+        @Override
+        public void close() {
+            created.forEach(BotGeneration::removeBotFromServer);
+            registered.forEach(BotRegistry::unregister);
+            characters.close();
+            database.close();
+            singleton.close();
+        }
     }
 }

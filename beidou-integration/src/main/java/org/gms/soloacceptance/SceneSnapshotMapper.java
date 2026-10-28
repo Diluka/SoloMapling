@@ -26,9 +26,6 @@ final class SceneSnapshotMapper {
     private SceneSnapshotMapper() { }
 
     static Map<String, Object> snapshot(MapleMap map, int limit) {
-        if (limit < 1 || limit > 500) {
-            throw new IllegalArgumentException("limit must be between 1 and 500");
-        }
         Map<String, List<Map<String, Object>>> projected = new LinkedHashMap<>();
         Map<String, Integer> totals = new LinkedHashMap<>();
         for (String category : CATEGORIES) {

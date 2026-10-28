@@ -318,3 +318,5 @@ command是完整原文，旧parameters结构不兼容；脚本与MCP共用Native
 不逐命令适配或限定give。MCP只读game_command_help按需读取原生目录和等级。
 RETURNED仅表示原生void处理器返回，实际效果沿原生反馈和状态核验；GM权限保持原生。
 详细说明见[通用命令执行](../../docs/mcp-acceptance/commands.md)。
+
+动作、管理指令及脚本的纯参数校验由 MCP 原始输入入口统一执行；内部 HTTP 客户端转发已验证参数，不提供独立的动作、指令或脚本输入兼容层。鉴权刷新、响应检查、原请求 ID 和未知写结果的清理仍在 HTTP 边界处理。

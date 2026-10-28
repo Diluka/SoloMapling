@@ -8,14 +8,13 @@ import unittest
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from solo_acceptance_mcp.actor_events_smoke import require_packet_capability
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests import test_chat_protocol as chat_protocol
 from tests.test_actor_events_smoke import PACKET_CAPABILITIES
 from tests.test_chat_protocol import (
     REGISTERED_ACTIONS,
-    ACTOR_TOOLS, ACT_PATH, MAX_LONG, OBSERVATION_TOOLS, TOOLS,
+    ACT_PATH, MAX_LONG, TOOLS,
     ChatProtocolStub, capabilities,
 )
 
@@ -328,35 +327,13 @@ class NpcProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(response.structured_content["error"]["retryable"])
             self.assertEqual(1, len(self.action_requests()))
 
-    def test_npc_capability_consumer_accepts_old_backends_and_new_three_action_backend(self) -> None:
-        values = [capabilities(OBSERVATION_TOOLS), capabilities(OBSERVATION_TOOLS | ACTOR_TOOLS),
-                  npc_capabilities(actions=["chat"], npc_decoder=False), npc_capabilities()]
-        for value in values:
-            with self.subTest(actions=value["actions"]):
-                self.assertEqual(sorted(value["enabled_tools"]), require_capabilities(value, sorted(REGISTERED_TOOLS)))
-                if "game_act" in value["enabled_tools"]:
-                    self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(REGISTERED_TOOLS), actors=True, chat=True))
-        for invalid_actions in [["chat", "npc_center_open", "npc_cancel", "npc_select"], ["chat", "chat"]]:
-            with self.subTest(actions=invalid_actions), self.assertRaises(RuntimeError):
-                require_capabilities(npc_capabilities(actions=invalid_actions), sorted(REGISTERED_TOOLS))
-        mismatched = npc_capabilities()
-        mismatched["actor_control"]["actions"] = ["chat"]
-        with self.assertRaises(RuntimeError):
-            require_capabilities(mismatched, sorted(REGISTERED_TOOLS))
 
     async def test_npc_capabilities_add_only_type_four_decoder_and_preserve_original_packet_types(self) -> None:
         async with self.stdio_client() as client:
             response = await client.call_tool("game_capabilities", {})
         self.assertFalse(response.is_error)
         self.assertEqual(npc_capabilities(), response.structured_content)
-        actual = require_packet_capability(response.structured_content)
+        actual = response.structured_content["actor_control"]["packet_observation"]
         self.assertEqual(PACKET_CAPABILITIES["decoded_packets"], actual["decoded_packets"][:3])
         self.assertEqual(NPC_DECODER, actual["decoded_packets"][3])
         self.assertFalse(response.structured_content["event_stream"])
-        self.assertEqual(PACKET_CAPABILITIES,
-                         require_packet_capability(npc_capabilities(actions=["chat"], npc_decoder=False)))
-        for types in [[True], [4.0], ["4"], [], [0], [4, 5]]:
-            invalid = npc_capabilities()
-            invalid["actor_control"]["packet_observation"]["decoded_packets"][-1]["message_types"] = types
-            with self.subTest(types=types), self.assertRaises(RuntimeError):
-                require_packet_capability(invalid)

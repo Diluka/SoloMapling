@@ -23,13 +23,10 @@ final class NativeMovementGeometry {
     }
 
     /** A bounded vertical step; the caller owns the at-most-two-tick settlement phase. */
-    static Settlement settle(Character character, MapleMap map, int elapsedMs, int previousVerticalVelocity) {
-        require(elapsedMs >= 1 && elapsedMs <= 100, "invalid_movement_interval");
-        require(previousVerticalVelocity >= 0 && previousVerticalVelocity <= 200,
-                "invalid_movement_settle_velocity");
+    static Settlement settle(Character character, MapleMap map, int previousVerticalVelocity) {
         SpawnGround ground = spawnGround(character, map, false);
-        int velocity = previousVerticalVelocity + 2 * elapsedMs; // g=2000px/s^2.
-        int distance = (int) (((long) previousVerticalVelocity + velocity) * elapsedMs / 2000L);
+        int velocity = previousVerticalVelocity + 200; // g=2000px/s^2 over the fixed 100ms spawn frame.
+        int distance = (previousVerticalVelocity + velocity) / 20;
         int y = ground.y() + Math.min(ground.gap(), distance);
         boolean landed = y == ground.groundY();
         return new Settlement(ground.x(), y, ground.footholdId(), landed ? 0 : velocity, landed);
@@ -37,8 +34,6 @@ final class NativeMovementGeometry {
 
     static Step step(Character character, MapleMap map, String direction, int elapsedMs) {
         require(character != null && map != null, "movement_geometry_unavailable");
-        require("LEFT".equals(direction) || "RIGHT".equals(direction), "invalid_movement_direction");
-        require(elapsedMs >= 1 && elapsedMs <= 100, "invalid_movement_interval");
         requireOrdinaryGroundMode(character, map);
         Point position = character.getPosition();
         require(position != null, "movement_position_unavailable");
@@ -53,7 +48,6 @@ final class NativeMovementGeometry {
         int groundY = height(ground, beforeX);
         require(Math.abs((long) beforeY - groundY) <= 5, "movement_not_grounded");
         int speed = character.getTotalMoveSpeedStat();
-        require(speed >= 1, "movement_speed_unavailable");
         int velocity = (int) Math.floor(125.0 * Math.min(speed, 200) / 100.0);
         int distance = (int) Math.floor(velocity * (double) elapsedMs / 1000.0);
         int x = beforeX + ("LEFT".equals(direction) ? -distance : distance);

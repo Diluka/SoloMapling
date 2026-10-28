@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from mcp import Client, StdioServerParameters
 
-from solo_acceptance_mcp.smoke import COMMAND_TOOLS, require_capabilities
+from solo_acceptance_mcp.smoke import COMMAND_TOOLS
 from tests.helpers import BridgeStub, CAPABILITIES, PASSWORD, TOKEN, envelope
 
 
@@ -160,7 +160,6 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(REGISTERED_ACTIONS, action_schema["enum"])
         self.assertFalse(caps.is_error)
         self.assertEqual(capabilities(TOOLS), caps.structured_content)
-        self.assertEqual(sorted(TOOLS), require_capabilities(caps.structured_content, sorted(tools), actors=True))
 
     async def test_stdio_chat_preserves_normal_jwt_envelope_context_and_untrimmed_text(self) -> None:
         args = {**self.args, "parameters": {"text": "  原样保留 中文 nonce  "}}
@@ -298,6 +297,25 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.structured_content["session"]["actor_current"])
         self.assertFalse(any(request["path"].endswith("/actor/close") for request in self.stub.requests))
 
+    async def test_stdio_mismatched_backend_request_id_stays_unknown_without_replaying_the_action(self) -> None:
+        def respond(request: dict) -> tuple[int, object]:
+            status, payload = self.stub.default_response(request)
+            if request["path"] == ACT_PATH:
+                payload["data"]["request_id"] = "backend-private-id"
+            return status, payload
+
+        self.stub.responder = respond
+        async with self.stdio_client() as client:
+            response = await client.call_tool("game_act", self.args)
+        self.assertTrue(response.is_error)
+        self.assertEqual(self.args["request_id"], response.structured_content["request_id"])
+        error = response.structured_content["error"]
+        self.assertEqual("INVALID_RESPONSE", error["code"])
+        self.assertTrue(error["outcome_unknown"])
+        self.assertFalse(error["retryable"])
+        self.assertEqual(1, len(self.action_requests()))
+        self.assertNotIn("backend-private-id", response.model_dump_json())
+
     async def test_stdio_http_errors_preserve_request_id_status_and_safe_known_or_unknown_outcome(self) -> None:
         status = 400
         secret = self.args["parameters"]["text"] + PASSWORD + TOKEN + "private-native-exception"
@@ -398,25 +416,6 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.action_requests()))
         self.assertEqual(1, self.stub.login_count)
 
-    def test_capability_helper_accepts_only_complete_supported_backend_tool_subsets(self) -> None:
-        for enabled in [OBSERVATION_TOOLS, OBSERVATION_TOOLS | ACTOR_TOOLS, TOOLS]:
-            with self.subTest(enabled=enabled):
-                self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS)))
-                if "game_act" in enabled:
-                    self.assertEqual(sorted(enabled), require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS), chat=True))
-                else:
-                    with self.assertRaises(RuntimeError):
-                        require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS), chat=True)
-        for enabled in [OBSERVATION_TOOLS | {"game_act"}, OBSERVATION_TOOLS | {"actor_open"},
-                        TOOLS - {"actor_close"}, TOOLS | {"unknown_tool"}]:
-            with self.subTest(enabled=enabled), self.assertRaises(RuntimeError):
-                require_capabilities(capabilities(enabled), sorted(REGISTERED_TOOLS))
-        for field in ["actions", "actor_control"]:
-            for value in [None, [], {}, ["npc"]]:
-                invalid = capabilities(TOOLS)
-                invalid[field] = value
-                with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
-                    require_capabilities(invalid, sorted(REGISTERED_TOOLS))
 
     async def test_stdio_backend_with_chat_disabled_is_not_promoted_by_the_registered_game_act_tool(self) -> None:
         old_capabilities = capabilities(OBSERVATION_TOOLS | ACTOR_TOOLS)
@@ -429,6 +428,6 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
             response = await client.call_tool("game_capabilities", {})
         self.assertEqual(REGISTERED_TOOLS, set(names))
         self.assertEqual(old_capabilities, response.structured_content)
-        self.assertNotIn("game_act", require_capabilities(response.structured_content, names, actors=True))
+        self.assertNotIn("game_act", response.structured_content["enabled_tools"])
         self.assertEqual([], response.structured_content["actions"])
         self.assertEqual([], self.action_requests())

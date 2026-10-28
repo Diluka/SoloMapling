@@ -1,5 +1,7 @@
 package soloMapling.game.script.nativeenv;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
@@ -30,6 +32,7 @@ import java.util.function.Supplier;
 
 /** Exact module-owned engine and native binding. The scope remains the only work/resource ledger. */
 public final class NativeScriptSession {
+    private static final ObjectMapper JSON = new ObjectMapper();
     private static final ThreadLocal<NativeScriptSession> CURRENT = new ThreadLocal<>();
     private static final Map<Object, NativeScriptSession> ENGINES = Collections.synchronizedMap(new IdentityHashMap<>());
     private static final Map<Object, NativeScriptSession> SCHEDULERS = Collections.synchronizedMap(new IdentityHashMap<>());
@@ -146,10 +149,14 @@ public final class NativeScriptSession {
 
     void bindParameters(Map<String, Object> parameters) {
         try {
-            // JSR-223 imports its bindings into a script-engine global scope. Put an actual language
-            // global through that same engine; Context.getBindings().putMember alone is insufficient.
-            engine().eval("globalThis.parameters = JSON.parse(" + ScriptValues.json(ScriptValues.json(parameters)) + ")");
-        } catch (ScriptException failure) { recordFailure(failure); throw new IllegalStateException("native_script_parameters_failed"); }
+            // Only the parameter JSON counts toward the input budget. Quoting that JSON as
+            // source is an internal encoding step, not a second business input.
+            engine().eval("globalThis.parameters = JSON.parse("
+                    + JSON.writeValueAsString(ScriptValues.json(parameters)) + ")");
+        } catch (JsonProcessingException | ScriptException failure) {
+            recordFailure(failure);
+            throw new IllegalStateException("native_script_parameters_failed");
+        }
     }
 
     /** Preserve a failure before an original manager catches and logs it. No Throwable is retained. */

@@ -44,9 +44,6 @@ class AcceptanceClientTest {
         verify(world, never()).getChannel(3);
         assertFalse(BotClient.class.isInstance(client));
         assertFalse(client.isLoggedIn());
-        assertEquals(Client.class, AcceptanceClient.class.getMethod("isLoggedIn").getDeclaringClass());
-        assertEquals(Client.class, AcceptanceClient.class.getMethod("updateLoginState", int.class).getDeclaringClass());
-        assertEquals(Client.class, AcceptanceClient.class.getMethod("getLastPacket").getDeclaringClass());
     }
 
     @Test

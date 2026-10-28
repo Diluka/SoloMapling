@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 import time
 import unittest
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
-from tests.test_chat_protocol import ACT_PATH, TOOLS, REGISTERED_ACTIONS, ChatProtocolStub, capabilities
-from tests.test_npc_protocol import npc_capabilities
+from tests.test_chat_protocol import ACT_PATH, REGISTERED_ACTIONS, ChatProtocolStub
 from tests.test_npc_reply_protocol import reply_capabilities
 
 
@@ -181,16 +179,3 @@ class InventoryMoveProtocolTests(unittest.IsolatedAsyncioTestCase):
             response = await client.call_tool("game_capabilities", {})
         self.assertIn("inventory_move", tools["game_act"].input_schema["properties"]["action"]["enum"])
         self.assertNotIn("inventory_move", response.structured_content["actions"])
-
-    def test_capability_consumer_accepts_new_inventory_and_preserves_historical_action_sets(self) -> None:
-        for value in [capabilities(TOOLS), npc_capabilities(), reply_capabilities(), inventory_capabilities()]:
-            with self.subTest(actions=value["actions"]):
-                self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(REGISTERED_TOOLS), actors=True))
-        invalid = inventory_capabilities()
-        invalid["actions"].append("inventory_move")
-        with self.assertRaises(RuntimeError):
-            require_capabilities(invalid, sorted(REGISTERED_TOOLS))
-        mismatched = deepcopy(inventory_capabilities())
-        mismatched["actor_control"]["actions"] = ACTIONS[:-1]
-        with self.assertRaises(RuntimeError):
-            require_capabilities(mismatched, sorted(REGISTERED_TOOLS))

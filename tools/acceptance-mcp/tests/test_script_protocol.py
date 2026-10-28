@@ -6,9 +6,13 @@ import json
 from threading import Event
 import unittest
 
+from mcp import Client
+
+from solo_acceptance_mcp.server import build_server
+
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
-from tests.test_script_bridge import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_ARGS, SCRIPT_HELP, ScriptStub, script_operation
+from tests.script_fixture import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_ARGS, SCRIPT_HELP, ScriptStub, script_operation
 
 
 class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -243,3 +247,56 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                 cleanup_complete.set()
             response = await client.call_tool("script_help", {"session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7})
             self.assertFalse(response.is_error)
+
+    async def test_lost_run_and_cleanup_responses_keep_original_request_unknown_without_replay(self) -> None:
+        self.stub.disconnect_requests = True
+        async with Client(build_server(self.stub.config())) as client:
+            response = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS))
+            help_response = await client.call_tool("script_help", {
+                "session_id": SCRIPT_ARGS["session_id"], "expected_generation": 7,
+            })
+        self.assertTrue(response.is_error)
+        data = response.structured_content
+        self.assertEqual("HTTP_UNAVAILABLE", data["error"]["code"])
+        self.assertEqual(SCRIPT_ARGS["request_id"], data["request_id"])
+        self.assertTrue(data["error"]["outcome_unknown"])
+        self.assertFalse(data["error"]["retryable"])
+        self.assertNotIn(PASSWORD, response.model_dump_json())
+        self.assertNotIn(TOKEN, response.model_dump_json())
+        self.assertFalse(help_response.is_error)
+        runs = [request for request in self.stub.requests if request["path"] == RUN_PATH]
+        cancels = [request for request in self.stub.requests if request["path"] == CANCEL_PATH]
+        self.assertEqual(1, len(runs))
+        self.assertEqual(1, len(cancels))
+        self.assertEqual({**runs[0]["body"]["data"], "target_request_id": SCRIPT_ARGS["request_id"]},
+                         cancels[0]["body"]["data"])
+        self.assertNotEqual(SCRIPT_ARGS["request_id"], cancels[0]["body"]["requestId"])
+
+    async def test_unknown_script_call_waits_for_http_cleanup_before_returning(self) -> None:
+        cancel_started, cleanup_complete = Event(), Event()
+
+        def respond(request):
+            if request["path"] == RUN_PATH:
+                return 200, b"invalid script response"
+            if request["path"] == CANCEL_PATH:
+                cancel_started.set()
+                cleanup_complete.wait(3)
+            return self.stub.default_response(request)
+
+        self.stub.responder = respond
+        async with Client(build_server(self.stub.config())) as client:
+            task = asyncio.create_task(client.call_tool("script_run", deepcopy(SCRIPT_ARGS)))
+            try:
+                self.assertTrue(await asyncio.to_thread(cancel_started.wait, 2))
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(task), 0.05)
+                self.assertFalse(task.done(), "清理响应未到时，原工具调用不能结束。")
+            finally:
+                cleanup_complete.set()
+            response = await asyncio.wait_for(task, 3)
+        self.assertTrue(response.is_error)
+        self.assertEqual("INVALID_RESPONSE", response.structured_content["error"]["code"])
+        self.assertTrue(response.structured_content["error"]["outcome_unknown"])
+        self.assertEqual(SCRIPT_ARGS["request_id"], response.structured_content["request_id"])
+        self.assertEqual(1, sum(request["path"] == RUN_PATH for request in self.stub.requests))
+        self.assertEqual(1, sum(request["path"] == CANCEL_PATH for request in self.stub.requests))

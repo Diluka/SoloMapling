@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 import json
 import time
 import unittest
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from solo_acceptance_mcp.actor_events_smoke import require_packet_capability
-from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS, require_capabilities
+from solo_acceptance_mcp.smoke import IMPLEMENTED_TOOLS as REGISTERED_TOOLS
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN, envelope
 from tests.test_actor_events_smoke import PACKET_CAPABILITIES
-from tests.test_chat_protocol import REGISTERED_ACTIONS, ACTOR_TOOLS, ACT_PATH, MAX_LONG, OBSERVATION_TOOLS, TOOLS, capabilities
+from tests.test_chat_protocol import REGISTERED_ACTIONS, ACT_PATH, MAX_LONG
 from tests.test_npc_protocol import ACTIONS as CENTER_ACTIONS, NpcProtocolStub, npc_capabilities
 
 
@@ -278,20 +276,6 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(response.structured_content["error"]["retryable"])
             self.assertEqual(1, len(self.action_requests()))
 
-    def test_reply_capability_helper_accepts_each_old_tool_subset_and_new_four_action_backend(self) -> None:
-        values = [capabilities(OBSERVATION_TOOLS), capabilities(OBSERVATION_TOOLS | ACTOR_TOOLS),
-                  npc_capabilities(actions=["chat"], npc_decoder=False), npc_capabilities(), reply_capabilities()]
-        for value in values:
-            with self.subTest(actions=value["actions"]):
-                self.assertEqual(sorted(value["enabled_tools"]), require_capabilities(value, sorted(REGISTERED_TOOLS)))
-                if "game_act" in value["enabled_tools"]:
-                    self.assertEqual(sorted(TOOLS), require_capabilities(value, sorted(REGISTERED_TOOLS), actors=True, chat=True))
-        for actions in [ACTIONS + ["npc_accept"], ACTIONS + ["npc_reply"], ["chat", "npc_reply"]]:
-            invalid = reply_capabilities()
-            invalid["actions"] = actions
-            invalid["actor_control"]["actions"] = actions[:]
-            with self.subTest(actions=actions), self.assertRaises(RuntimeError):
-                require_capabilities(invalid, sorted(REGISTERED_TOOLS))
 
     async def test_reply_capabilities_preserve_type_four_and_twelve_and_only_select_decline_kinds(self) -> None:
         async with self.stdio_client() as client:
@@ -299,15 +283,9 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.is_error)
         self.assertEqual(reply_capabilities(), response.structured_content)
         self.assertEqual(["select", "decline"], response.structured_content["actor_control"]["npc_dialogue"]["reply_kinds"])
-        packet = require_packet_capability(response.structured_content)
+        packet = response.structured_content["actor_control"]["packet_observation"]
         self.assertEqual(PACKET_CAPABILITIES["decoded_packets"], packet["decoded_packets"][:3])
         self.assertEqual({"event_type": "npc_dialogue", "opcode": 304, "message_types": [4, 12]}, packet["decoded_packets"][3])
-        self.assertEqual([4], require_packet_capability(npc_capabilities())["decoded_packets"][-1]["message_types"])
-        for types in [[4, True], [4, 12.0], [4, "12"], [12], [4, 4], [4, 12, 0], []]:
-            invalid = reply_capabilities()
-            invalid["actor_control"]["packet_observation"]["decoded_packets"][-1]["message_types"] = types
-            with self.subTest(types=types), self.assertRaises(RuntimeError):
-                require_packet_capability(invalid)
 
     async def test_reply_schema_does_not_invent_reply_capabilities_on_the_old_center_backend(self) -> None:
         old = npc_capabilities()

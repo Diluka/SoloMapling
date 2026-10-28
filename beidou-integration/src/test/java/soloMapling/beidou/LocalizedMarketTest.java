@@ -6,7 +6,12 @@ import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.ArtificialPlayer.BotTypes.BuyingMerchantBot;
 import soloMapling.ArtificialPlayer.BotTypes.SellingMerchantBot;
 import soloMapling.Environment.SoloMaplingLanguageConfig;
-import soloMapling.FreeMarket.FMShopDescGen;
+import soloMapling.FreeMarket.FMShopDescriptionManager;
+import soloMapling.FreeMarket.HiredMerchantArtificial;
+import org.gms.client.BotClient;
+import org.gms.client.Character;
+import org.gms.client.inventory.Item;
+import org.gms.server.maps.PlayerShopItem;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -14,9 +19,9 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.*;
 
-/** Exercises the real resource-to-shop-text paths without creating game characters or shops. */
+/** Exercises shop descriptions and merchant dialogue through their production consumers. */
 class LocalizedMarketTest {
     @AfterEach
     void resetLanguage() {
@@ -24,80 +29,27 @@ class LocalizedMarketTest {
     }
 
     @Test
-    void chineseShopWordsLoadFromTheLocalizedPack() {
-        SoloMaplingLanguageConfig.setLanguageTag("zh-CN");
+    void newlyCreatedShopDescriptionsUseTheStartupLanguageOrEnglishFallback() {
+        CharacterTestContext.install();
+        for (String language : List.of("en-US", "zh-CN", "fr-FR")) {
+            org.springframework.core.env.Environment environment = mock(org.springframework.core.env.Environment.class);
+            when(environment.getProperty(SoloMaplingLanguageConfig.KEY, "")).thenReturn(language);
+            SoloMaplingLanguageConfig.configure(environment);
+            Character owner = mock(Character.class);
+            when(owner.getClient()).thenReturn(new BotClient(0, 1));
+            when(owner.getPosition()).thenReturn(new java.awt.Point(0, 0));
+            when(owner.getName()).thenReturn("ProbeOwner");
+            HiredMerchantArtificial merchant = new HiredMerchantArtificial(owner, "", 5030000, 1700020010, "ProbeOwner");
+            merchant.setTier("B");
+            merchant.setMapId(910000022);
+            merchant.setPrimary(HiredMerchantArtificial.shopTypes.Common);
+            merchant.addItem(new PlayerShopItem(new Item(2000000, (short) 1, (short) 1), (short) 1, 50));
 
-        assertTrue(ShopText.path("thief").contains("FMNameDesc-zh-CN/"));
-        List<String> descriptions = ShopText.words("thief");
-        assertFalse(descriptions.isEmpty());
-        assertTrue(descriptions.stream().anyMatch(LocalizedMarketTest::hasChinese));
-        assertTrue(hasChinese(ShopText.description("thief")));
-    }
+            new FMShopDescriptionManager().generateDescription(merchant);
 
-    @Test
-    void untranslatedNamesAndFacesKeepTheEnglishLists() {
-        SoloMaplingLanguageConfig.setLanguageTag("en-US");
-        List<String> englishNames = ShopText.words("ign");
-        List<String> englishFaces = ShopText.words("emojis");
-        assertFalse(englishNames.isEmpty());
-        assertFalse(englishFaces.isEmpty());
-
-        SoloMaplingLanguageConfig.setLanguageTag("zh-CN");
-
-        assertEquals("FreeMarket/FMNameDesc/randomRealMaplestoryIGNs.txt", ShopText.path("ign"));
-        assertEquals("FreeMarket/FMNameDesc/emojiFaces.txt", ShopText.path("emojis"));
-        assertEquals(englishNames, ShopText.words("ign"));
-        assertEquals(englishFaces, ShopText.words("emojis"));
-    }
-
-    @Test
-    void missingLanguagePackFallsBackToEnglishShopWords() {
-        SoloMaplingLanguageConfig.setLanguageTag("en-US");
-        List<String> englishDescriptions = ShopText.words("thief");
-        String englishWelcome = ShopText.welcome("ProbeOwner");
-
-        SoloMaplingLanguageConfig.setLanguageTag("fr-FR");
-
-        assertEquals("FreeMarket/FMNameDesc/thiefDesc.txt", ShopText.path("thief"));
-        assertEquals(englishDescriptions, ShopText.words("thief"));
-        assertEquals(englishWelcome, ShopText.welcome("ProbeOwner"));
-        assertEquals("Welcome to ProbeOwner's Shop!", englishWelcome);
-    }
-
-    @Test
-    void chineseGreetingOfferAndCurrencyTextReachTheShopGenerators() {
-        SoloMaplingLanguageConfig.setLanguageTag("zh-CN");
-
-        String greeting = ShopText.welcome("ProbeOwner");
-        assertTrue(greeting.contains("ProbeOwner"));
-        assertTrue(hasChinese(greeting));
-        assertFalse(greeting.contains("%OWNER%"));
-        assertTrue(hasChinese(ShopText.offerable()));
-        String currencies = ShopText.currencies();
-        assertNotNull(currencies);
-        assertTrue(hasChinese(currencies));
-        assertTrue(currencies.startsWith("|") && currencies.endsWith("|"));
-    }
-
-    @Test
-    void chineseShopBordersRespectRenderedWidth() {
-        assertEquals(7, ShopText.width("商铺ABC"));
-        String bordered = ShopText.border("金币商行", 19);
-        assertTrue(bordered.contains("金币商行"));
-        assertTrue(ShopText.width(bordered) <= 19);
-        assertThrows(IllegalArgumentException.class, () -> ShopText.border("中文店铺名称太长了", 19));
-    }
-
-    @Test
-    void cachedClanNamesFollowLanguageChangesWithinTheSameProcess() {
-        for (String language : List.of("zh-CN", "en-US", "zh-CN")) {
-            SoloMaplingLanguageConfig.setLanguageTag(language);
-            List<String> available = ShopText.words("fmclan");
-            assertFalse(available.isEmpty());
-
-            String clan = ShopText.clan();
-            assertTrue(available.contains(clan), language + " reused a clan from the previous language: " + clan);
-            assertEquals("zh-CN".equals(language), hasChinese(clan));
+            assertFalse(merchant.getDescription().isBlank());
+            assertFalse(merchant.getDescription().contains("%OWNER%"));
+            assertEquals("zh-CN".equals(language), hasChinese(merchant.getDescription()));
         }
     }
 
@@ -140,15 +92,4 @@ class LocalizedMarketTest {
         return text.codePoints().anyMatch(codePoint -> codePoint >= 0x4e00 && codePoint <= 0x9fff);
     }
 
-    private static final class ShopText extends FMShopDescGen {
-        private static String path(String type) { return resolveFilePath(type); }
-        private static List<String> words(String type) { return getStoreDescriptionLines(type); }
-        private static String description(String type) { return getRandomStoreDescription(type); }
-        private static String welcome(String owner) { return getWelcomeDescription(owner); }
-        private static String offerable() { return getOfferableDescription(); }
-        private static String currencies() { return advertiseRWTCurrencies(); }
-        private static String clan() { return getRandomTopFMClan(); }
-        private static int width(String text) { return displayWidth(text); }
-        private static String border(String text, int maximum) { return asciiBorderString(text, maximum); }
-    }
 }

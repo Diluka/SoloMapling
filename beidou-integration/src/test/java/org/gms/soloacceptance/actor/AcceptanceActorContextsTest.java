@@ -1,5 +1,7 @@
 package org.gms.soloacceptance.actor;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.client.Client;
@@ -95,7 +97,7 @@ class AcceptanceActorContextsTest {
         } finally {
             ownership.close();
             client.closeSession();
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
         }
     }
 
@@ -127,7 +129,7 @@ class AcceptanceActorContextsTest {
     @Test
     void stopStartWithTheSameNativeObjectsCannotRenewTheCapturedHandleEpoch() {
         WorldEpoch.Token epoch = handle.characterRef().epoch();
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         assertEquals("actor_world_offline", assertThrows(ObservationException.class,
                 () -> AcceptanceActorContexts.requireCharacter(server, handle)).reason());
         WorldEpoch.onWorldStarted();
@@ -226,7 +228,7 @@ class AcceptanceActorContextsTest {
     @Test
     void epochChangeDuringNativeReadHasAnExplicitRuntimeChangedBoundary() {
         doAnswer(invocation -> {
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
             return map;
         }).when(character).getMap();
         ObservationException changed = assertThrows(ObservationException.class,
@@ -264,12 +266,6 @@ class AcceptanceActorContextsTest {
         });
         assertEquals("actor_close_cleanup_unverified_scope", assertThrows(ObservationException.class,
                 () -> AcceptanceActorContexts.requireCloseCharacter(server, handle, retained.get())).reason());
-    }
-
-    @Test
-    void anUncontrolledInactiveEpochDoesNotGrantOwnedCleanup() {
-        WorldEpoch.onWorldStopping();
-        assertThrows(RuntimeException.class, this::requireClose);
     }
 
     @Test

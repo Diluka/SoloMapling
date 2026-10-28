@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from mcp import Client, StdioServerParameters
 
@@ -107,8 +107,10 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_and_cancel_requested_results_are_not_promoted_to_completion(self) -> None:
         async with Client(build_server(self.stub.config())) as client:
-            opened = await client.call_tool("actor_open", {"profile_id": "primary", "request_id": "open-1"})
-            current = await client.call_tool("operation_get", {"operation_id": OPEN_ID, "since_cursor": 0, "limit": 10})
+            opened = await client.call_tool("actor_open", {
+                "profile_id": "primary", "request_id": "open-1", "world": 0, "channel": 1,
+            })
+            current = await client.call_tool("operation_get", {"operation_id": OPEN_ID, "since_cursor": 4, "limit": 7})
             cancelled = await client.call_tool("operation_cancel", {"operation_id": OPEN_ID, "request_id": "cancel-1"})
             closing = await client.call_tool("actor_close", {
                 "session_id": SESSION_ID, "expected_generation": 1, "request_id": "close-1",
@@ -124,6 +126,19 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.structured_content["cancel_requested"])
         self.assertEqual("QUEUED", closing.structured_content["status"])
         self.assertEqual({}, closing.structured_content["result"])
+        requests = [row for row in self.stub.requests if row["path"] != "/auth/v1/login"]
+        self.assertEqual({"requestId": "open-1", "data": {
+            "profile_id": "primary", "world": 0, "channel": 1,
+        }}, requests[0]["body"])
+        self.assertEqual("GET", requests[1]["method"])
+        self.assertEqual({"since_cursor": ["4"], "limit": ["7"]}, parse_qs(urlsplit(requests[1]["path"]).query))
+        self.assertIsNone(requests[1]["body"])
+        self.assertEqual({"requestId": "cancel-1", "data": {}}, requests[2]["body"])
+        self.assertEqual({"requestId": "close-1", "data": {
+            "session_id": SESSION_ID, "expected_generation": 1,
+        }}, requests[3]["body"])
+        self.assertTrue(all(row["headers"]["authorization"] == "Bearer " + TOKEN + "-1" for row in requests))
+        self.assertEqual(1, self.stub.login_count)
 
     async def test_invalid_actor_arguments_do_not_reach_auth_or_game_http(self) -> None:
         cases = [

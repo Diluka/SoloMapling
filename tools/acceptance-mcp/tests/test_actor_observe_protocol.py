@@ -400,13 +400,11 @@ class ActorObserveProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("packet_observation", response.structured_content["actor_control"])
         self.assertEqual(1, self.stub.resource_count)
 
-    async def test_bridge_keeps_original_positional_arguments_and_actor_arguments_keyword_only(self) -> None:
+    async def test_bridge_keeps_the_documented_observation_positional_arguments(self) -> None:
         # SDK schemas do not prove the direct client's positional compatibility.
         async with BridgeClient(self.stub.config()) as bridge:
             self.assertEqual(WORLD, await bridge.observe("world", None, 13))
             self.assertEqual(SCENE, await bridge.observe("scene", SCENE_CONTEXT["scene_ref"], 23))
-            with self.assertRaises(TypeError):
-                await bridge.observe("actor", None, 100, self.session_id, self.generation, 0)
         self.assertEqual(2, self.stub.resource_count)
         self.assertEqual({"scope": "world", "limit": 13}, self.stub.requests[1]["body"]["data"])
         self.assertEqual({"scope": "scene", "scene_ref": SCENE_CONTEXT["scene_ref"], "limit": 23},

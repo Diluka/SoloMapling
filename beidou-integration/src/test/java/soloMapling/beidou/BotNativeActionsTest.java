@@ -136,7 +136,7 @@ class BotNativeActionsTest {
                 if (executor != null) executor.shutdown();
             } finally {
                 BotRegistry.unregister(bot);
-                WorldEpoch.onWorldStopping();
+                ExecutionScope.tryBeginWorldStop();
                 ThreadLocalUtil.removeCurrentClient();
                 try {
                     if (database != null) database.verifyNoInteractions();
@@ -284,7 +284,7 @@ class BotNativeActionsTest {
     void queuedActionDoesNotReviveAfterWorldEpochChanges() throws Exception {
         NativeActionService.ActionHandle handle = prepare(scope(), "旧世界不能复活动作", observerEvidence(null));
         actions.submitChat(handle);
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         WorldEpoch.onWorldStarted();
 
         executor.runAll();
@@ -372,7 +372,7 @@ class BotNativeActionsTest {
 
     private ExecutionScope scope() {
         ExecutionScope scope = new ExecutionScope(WorldEpoch.snapshot().token(),
-                new ExecutionScope.OwnerStamp(new Object(), new Object()), new ExecutionScope.Limits(8, 0, 8, 0));
+                new ExecutionScope.Limits(8, 0, 8, 0));
         scopes.add(scope);
         return scope;
     }

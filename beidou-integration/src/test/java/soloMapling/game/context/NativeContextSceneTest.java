@@ -1,5 +1,7 @@
 package soloMapling.game.context;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.BotClient;
 import org.gms.client.Character;
 import org.gms.net.server.PlayerStorage;
@@ -99,7 +101,7 @@ class NativeContextSceneTest {
             }
             singleton.verify(Server::getInstance, never());
         } finally {
-            WorldEpoch.onWorldStopping();
+            ExecutionScope.tryBeginWorldStop();
             singleton.close();
         }
     }

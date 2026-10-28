@@ -662,6 +662,17 @@ public final class ActorControlService {
                 || request.operation() == null || !List.of("start", "invoke", "close").contains(request.operation())) {
             throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_request");
         }
+        if (request.contextId() != null && !request.contextId().matches("[A-Za-z0-9_.-]{1,128}")) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_context");
+        }
+        if (("start".equals(request.operation()) && request.contextId() != null)
+                || (!"start".equals(request.operation()) && request.contextId() == null)
+                || (request.entry() != null && !request.entry().matches("[A-Za-z_$][A-Za-z0-9_$]{0,127}"))
+                || ("invoke".equals(request.operation()) && !source.isBlank() && request.entry() != null)
+                || ("close".equals(request.operation()) && (!source.isBlank() || request.entry() != null
+                        || !request.args().isEmpty() || !request.options().isEmpty()))) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_request");
+        }
         try {
             String parametersJson = scriptJson(request.parameters());
             String optionsJson = scriptJson(request.options());
@@ -676,9 +687,6 @@ public final class ActorControlService {
             Map<String, Object> detachedOptions = SCRIPT_JSON.readValue(optionsJson, Map.class);
             @SuppressWarnings("unchecked")
             List<Object> detachedArgs = SCRIPT_JSON.readValue(argsJson, List.class);
-            if (request.contextId() != null && !request.contextId().matches("[A-Za-z0-9_.-]{1,128}")) {
-                throw error(HttpStatus.BAD_REQUEST, "invalid_native_script_context");
-            }
             return new NativeScriptRequest(request.kind(), request.operation(), request.contextId(),
                     detachedOptions, request.entry(), detachedArgs, source, detachedParameters, request.timeoutMs());
         } catch (JsonProcessingException | IllegalArgumentException invalid) {
@@ -708,7 +716,7 @@ public final class ActorControlService {
 
     private static String scriptJson(Object value) {
         try {
-            requireScriptJson(value, 0, new java.util.IdentityHashMap<>());
+            requireScriptJson(value, 0);
             String json = SCRIPT_JSON.writeValueAsString(value);
             if (json.getBytes(StandardCharsets.UTF_8).length > 16384) {
                 throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
@@ -719,35 +727,23 @@ public final class ActorControlService {
         }
     }
 
-    /** Match the external JSON contract before allocating operation history or runtime work. */
-    private static void requireScriptJson(Object value, int depth, java.util.IdentityHashMap<Object, Boolean> ancestors) {
+    /** Validate limits on the JSON tree produced by the HTTP parser before accepting work. */
+    private static void requireScriptJson(Object value, int depth) {
         if (depth > 16) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
-        if (value == null || value instanceof Boolean) return;
         if (value instanceof String text) {
             if (!validScriptUnicode(text)) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
-            return;
-        }
-        if (value instanceof Number number) {
-            if (!(number instanceof Byte || number instanceof Short || number instanceof Integer || number instanceof Long
-                    || number instanceof Float || number instanceof Double || number instanceof java.math.BigInteger
-                    || number instanceof java.math.BigDecimal) || !Double.isFinite(number.doubleValue())) {
-                throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
-            }
-            return;
-        }
-        if (ancestors.put(value, Boolean.TRUE) != null) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
-        try {
-            if (value instanceof Map<?, ?> object) {
-                for (var entry : object.entrySet()) {
-                    if (!(entry.getKey() instanceof String text) || !validScriptUnicode(text)) {
-                        throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
-                    }
-                    requireScriptJson(entry.getValue(), depth + 1, ancestors);
+        } else if (value instanceof Number number) {
+            if (!Double.isFinite(number.doubleValue())) throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
+        } else if (value instanceof Map<?, ?> object) {
+            for (var entry : object.entrySet()) {
+                if (!validScriptUnicode((String) entry.getKey())) {
+                    throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
                 }
-            } else if (value instanceof List<?> array) {
-                for (Object item : array) requireScriptJson(item, depth + 1, ancestors);
-            } else throw error(HttpStatus.BAD_REQUEST, "invalid_script_parameters");
-        } finally { ancestors.remove(value); }
+                requireScriptJson(entry.getValue(), depth + 1);
+            }
+        } else if (value instanceof List<?> array) {
+            for (Object item : array) requireScriptJson(item, depth + 1);
+        }
     }
 
     private static boolean validScriptUnicode(String text) {
@@ -1459,43 +1455,22 @@ public final class ActorControlService {
             throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
         }
         if (parameters == null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-        if (parameters.direction() != null || parameters.durationMs() != null || parameters.targetOid() != null
-                || parameters.objectId() != null || parameters.quantity() != null) {
-            throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-        }
         if ("inventory_move".equals(action)) {
-            if (parameters.text() != null || parameters.dialogueVersion() != null
-                    || parameters.kind() != null || parameters.selection() != null) {
-                throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-            }
             inventoryMove(parameters);
             return;
         }
-        if (parameters.inventoryType() != null || parameters.sourceSlot() != null || parameters.targetSlot() != null) {
-            throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-        }
-        if (!"npc_reply".equals(action) && (parameters.kind() != null || parameters.selection() != null)) {
-            throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-        }
-        if ("chat".equals(action)) {
-            if (parameters.dialogueVersion() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-        } else {
-            if (parameters.text() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
-            if ("npc_cancel".equals(action) || "npc_reply".equals(action)) {
-                if (parameters.dialogueVersion() == null || parameters.dialogueVersion() < 1) {
-                    throw error(HttpStatus.BAD_REQUEST, "invalid_dialogue_version");
+        if ("npc_cancel".equals(action) || "npc_reply".equals(action)) {
+            if (parameters.dialogueVersion() == null || parameters.dialogueVersion() < 1) {
+                throw error(HttpStatus.BAD_REQUEST, "invalid_dialogue_version");
+            }
+            if ("npc_reply".equals(action)) {
+                if (parameters.kind() == null || !List.of("select", "decline").contains(parameters.kind())) {
+                    throw error(HttpStatus.BAD_REQUEST, "unsupported_reply_kind");
                 }
-                if ("npc_reply".equals(action)) {
-                    if (parameters.kind() == null || !List.of("select", "decline").contains(parameters.kind())) {
-                        throw error(HttpStatus.BAD_REQUEST, "unsupported_reply_kind");
-                    }
-                    if ("select".equals(parameters.kind())) {
-                        if (parameters.selection() == null || parameters.selection() < 0) {
-                            throw error(HttpStatus.BAD_REQUEST, "invalid_npc_selection");
-                        }
-                    } else if (parameters.selection() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+                if ("select".equals(parameters.kind()) && (parameters.selection() == null || parameters.selection() < 0)) {
+                    throw error(HttpStatus.BAD_REQUEST, "invalid_npc_selection");
                 }
-            } else if (parameters.dialogueVersion() != null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+            }
         }
     }
 

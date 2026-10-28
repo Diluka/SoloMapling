@@ -13,10 +13,6 @@ public final class WorldEpoch {
         CURRENT.set(new State(true, new Token()));
     }
 
-    public static void onWorldStopping() {
-        CURRENT.set(new State(false, new Token()));
-    }
-
     public static State snapshot() {
         return CURRENT.get();
     }

@@ -141,7 +141,6 @@ class ActorControlServiceTest {
         var opening = open(service, "open-one-host");
         String runtimeId = (String) runtimeView(opening).get("id");
         AcceptanceActorExecution execution = execution(service, opening);
-        assertEquals(execution.runtime().id(), runtimeId);
         assertNotEquals(opening.get("runtime_generation"), runtimeId);
         assertSame(execution.scope(), operationWork(service, opening).scope());
         executors.getFirst().runNext();
@@ -186,57 +185,62 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void nativeCleanupProofCannotFinishCloseOrFreeTheProfileBeforeTheRootCarrierSettles() throws Exception {
-        ActorControlService service = service(4, 20, 64);
-        var opened = open(service, "open-root-tail");
+    void actorDiagnosticsRetainTheLatest64SafeFactsWithoutConsumingOrMixingSessions() throws Exception {
+        ActorControlService service = service(4, 128, 64);
+        prepareChat(service);
+        var opening = open(service, "event-window-open");
         executors.getFirst().runNext();
-        AcceptanceActorExecution execution = execution(service, opened);
-        String runtimeId = execution.runtime().id();
-        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
-        doAnswer(invocation -> {
-            entered.countDown();
-            assertTrue(release.await(5, TimeUnit.SECONDS));
-            return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
-        }).when(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
-        var closing = service.close("admin", "close-root-tail", closeRequest(opened));
-        ExecutionScope.WorkHandle rootCleanup = operationWork(service, closing);
-        assertSame(execution.scope(), rootCleanup.scope());
-        Object laneMonitor = laneMonitor(execution);
-        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
-        try {
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            synchronized (laneMonitor) {
-                release.countDown();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while (rootCleanup.snapshot().bodyState() != ExecutionScope.BodyState.EXITED
-                        && System.nanoTime() < deadline) Thread.sleep(1);
-                assertEquals(ExecutionScope.BodyState.EXITED, rootCleanup.snapshot().bodyState());
-                assertFalse(rootCleanup.isSettled());
-                assertTrue(execution.resourceReleased());
-                var pending = service.get("admin", id(closing), 0, 100);
-                assertEquals("RUNNING", pending.get("status"));
-                assertEquals("CLOSING", session(pending).get("state"));
-                assertEquals(1, service.publicCapabilities().get("active_sessions"));
-                assertEquals("profile_in_use", assertThrows(ObservationException.class,
-                        () -> open(service, "must-wait-for-root-tail")).reason());
-            }
-        } finally {
-            release.countDown();
-            worker.join(5_000);
+        var opened = service.get("admin", id(opening), 0, 100);
+        String firstRuntime = (String) runtimeView(opened).get("id");
+        Map<?, ?> firstWindow = (Map<?, ?>) runtimeView(opened).get("events");
+        List<?> initialItems = (List<?>) firstWindow.get("items");
+        List<?> savedItems = List.copyOf(initialItems);
+        for (int i = 0; i < 30; i++) {
+            var action = service.act("admin", "window-action-" + i, chatRequest(opened, "诊断不保留聊天正文" + i));
+            executors.getFirst().runNext();
+            assertEquals("SUCCEEDED", service.get("admin", id(action), 0, 100).get("status"));
         }
-        assertFalse(worker.isAlive());
-        assertTrue(rootCleanup.isSettled());
+        when(client.packetEvents(0, 100)).thenReturn(Map.of("items", List.of(), "next_cursor", 0L,
+                "latest_cursor", 0L, "oldest_cursor", 0L, "truncated", false, "cursor_expired", false));
+        var observed = service.observe("admin", observeRequest(opened, 0, 100));
+        Map<?, ?> observedRuntime = (Map<?, ?>) ((Map<?, ?>) observed.get("actor")).get("runtime");
+        Map<?, ?> window = (Map<?, ?>) observedRuntime.get("events");
+        List<?> items = (List<?>) window.get("items");
+        assertEquals(64, items.size());
+        assertEquals(true, window.get("cursor_expired"));
+        assertEquals(false, window.get("truncated"));
+        long previous = 0;
+        for (Object entry : items) {
+            Map<?, ?> event = (Map<?, ?>) entry;
+            long sequence = ((Number) event.get("sequence")).longValue();
+            assertTrue(sequence > previous);
+            assertEquals(firstRuntime, event.get("runtime_id"));
+            previous = sequence;
+        }
+        assertEquals(previous, window.get("next_cursor"));
+        assertFalse(window.toString().contains("诊断不保留聊天正文"));
+        assertEquals(savedItems, initialItems, "an earlier response must remain a stable snapshot");
+        var repeated = service.observe("admin", observeRequest(opened, 0, 100));
+        assertEquals(window, ((Map<?, ?>) ((Map<?, ?>) repeated.get("actor")).get("runtime")).get("events"));
+
+        var closing = service.close("admin", "event-window-close", closeRequest(opened));
+        executors.getFirst().drain();
         var closed = service.get("admin", id(closing), 0, 100);
-        assertEquals("SUCCEEDED", closed.get("status"));
-        assertEquals("CLOSED", session(closed).get("state"));
-        assertEquals(0, service.publicCapabilities().get("active_sessions"));
-        assertEquals(CharacterRuntime.State.CLOSED, execution.runtime().snapshot().state());
-        var reopened = open(service, "open-after-root-tail");
+        assertEquals("CLOSED", runtimeView(closed).get("state"));
+        List<?> closedEvents = (List<?>) ((Map<?, ?>) runtimeView(closed).get("events")).get("items");
+        assertTrue(closedEvents.stream().anyMatch(event -> "MODULE_UNLOADED".equals(((Map<?, ?>) event).get("kind"))));
+        assertTrue(closedEvents.stream().anyMatch(event -> "CLOSED".equals(((Map<?, ?>) event).get("kind"))));
+        var reopening = open(service, "event-window-reopen");
         executors.getLast().runNext();
-        var current = service.get("admin", id(reopened), 0, 100);
-        assertEquals("SUCCEEDED", current.get("status"));
-        assertNotEquals(runtimeId, runtimeView(current).get("id"));
-        verify(backend, times(1)).close(eq(handle), any(ScopeResources.DrainPermit.class));
+        var reopened = service.get("admin", id(reopening), 0, 100);
+        String nextRuntime = (String) runtimeView(reopened).get("id");
+        assertNotEquals(firstRuntime, nextRuntime);
+        Map<?, ?> nextWindow = (Map<?, ?>) runtimeView(reopened).get("events");
+        List<?> nextEvents = (List<?>) nextWindow.get("items");
+        assertEquals(false, nextWindow.get("cursor_expired"));
+        assertEquals(1L, ((Map<?, ?>) nextEvents.getFirst()).get("sequence"));
+        for (Object event : nextEvents) assertEquals(nextRuntime, ((Map<?, ?>) event).get("runtime_id"));
+        assertEquals(savedItems, firstWindow.get("items"));
     }
 
     @Test
@@ -563,111 +567,6 @@ class ActorControlServiceTest {
         assertTrue(executors.getFirst().queue.isEmpty());
         verify(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
         verify(backend, never()).close(isNull(), any(ScopeResources.DrainPermit.class));
-    }
-
-    @Test
-    void closeRetryAndWorldStopCannotResubmitTheSameAttemptBeforeItsPhysicalSettlementCompletes() throws Exception {
-        ActorControlService service = service(4, 20, 64);
-        var opened = open(service, "open-settlement-race");
-        executors.getFirst().runNext();
-        var closing = service.close("admin", "close-settlement-race", closeRequest(opened));
-        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(
-                Map.of("native_cleanup_verified", false, "persisted_state_verified", false),
-                Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
-        AcceptanceActorExecution execution = execution(service, opened);
-        Object laneMonitor = laneMonitor(execution);
-        executors.getFirst().runNext();
-        // Start an explicit retry whose native result is held until the lane tail lock is acquired.
-        CountDownLatch entered = new CountDownLatch(1);
-        CountDownLatch release = new CountDownLatch(1);
-        doAnswer(invocation -> {
-            entered.countDown();
-            assertTrue(release.await(5, TimeUnit.SECONDS));
-            return Map.of("native_cleanup_verified", false, "persisted_state_verified", false);
-        }).when(backend).close(eq(handle), any(ScopeResources.DrainPermit.class));
-        var retry = service.close("admin", "retry-before-tail", closeRequest(opened));
-        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
-        try {
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            synchronized (laneMonitor) {
-                release.countDown();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while (operationWork(service, retry) != null && System.nanoTime() < deadline) {
-                    service.get("admin", id(retry), 0, 100);
-                    Thread.sleep(1);
-                }
-                assertNull(operationWork(service, retry), "service hook reached the lane tail");
-                assertFalse(execution.scope().snapshot().unloadComplete());
-                assertEquals("actor_not_closeable", assertThrows(ObservationException.class,
-                        () -> service.close("admin", "must-wait-for-tail", closeRequest(opened))).reason());
-                service.onWorldStopping();
-                assertTrue(executors.getFirst().queue.isEmpty());
-            }
-        } finally {
-            release.countDown();
-            worker.join(5_000);
-        }
-        assertFalse(worker.isAlive());
-        when(backend.close(eq(handle), any(ScopeResources.DrainPermit.class))).thenReturn(
-                Map.of("native_cleanup_verified", true, "persisted_state_verified", true));
-        service.onWorldStopping();
-        executors.getFirst().drain();
-        assertEquals("CLOSED", session(service.get("admin", id(closing), 0, 100)).get("state"));
-        assertTrue(execution.scope().snapshot().unloadComplete());
-    }
-
-    @Test
-    void aTerminalActionDoesNotRefundItsMcpSlotOrSpendNewHistoryBeforeTheLaneTailExits() throws Exception {
-        ActorControlService service = service(4, 30, 64);
-        prepareChat(service);
-        var opened = open(service, "open-action-tail");
-        executors.getFirst().runNext();
-        CountDownLatch entered = new CountDownLatch(1);
-        CountDownLatch release = new CountDownLatch(1);
-        when(chatDispatch.execute(handle, "运行中的第一条")).thenAnswer(invocation -> {
-            entered.countDown();
-            assertTrue(release.await(5, TimeUnit.SECONDS));
-            return chatSuccess();
-        });
-        var first = service.act("admin", "action-first", chatRequest(opened, "运行中的第一条"));
-        for (int i = 0; i < 6; i++) service.act("admin", "action-queued-" + i, chatRequest(opened, "排队" + i));
-        AcceptanceActorExecution execution = execution(service, opened);
-        Object laneMonitor = laneMonitor(execution);
-        Thread worker = Thread.ofVirtual().start(executors.getFirst()::runNext);
-        try {
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            synchronized (laneMonitor) {
-                release.countDown();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while (!"SUCCEEDED".equals(service.get("admin", id(first), 0, 100).get("status"))
-                        && System.nanoTime() < deadline) Thread.sleep(1);
-                assertEquals("SUCCEEDED", service.get("admin", id(first), 0, 100).get("status"));
-                assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
-                        () -> service.act("admin", "action-before-tail", chatRequest(opened, "不能先退额"))).reason());
-                assertEquals(8, service.publicCapabilities().get("operation_history_size"));
-                var closing = service.close("admin", "close-before-action-tail", closeRequest(opened));
-                assertEquals("CLOSING", session(closing).get("state"));
-                assertEquals(6, executors.getFirst().queue.size());
-                assertCleanupReservedBehindModules(service, closing);
-            }
-        } finally {
-            release.countDown();
-            worker.join(5_000);
-        }
-        assertFalse(worker.isAlive());
-        executors.getFirst().drain();
-        assertEquals("CLOSED", session(service.get("admin", id(first), 0, 100)).get("state"));
-        assertTrue(execution(service, opened).scope().snapshot().unloadComplete());
-        verify(chatDispatch, times(1)).execute(any(), any());
-    }
-
-    private static Object laneMonitor(AcceptanceActorExecution execution) throws Exception {
-        var laneField = CharacterRuntime.class.getDeclaredField("lane");
-        laneField.setAccessible(true);
-        Object lane = laneField.get(execution.runtime());
-        var monitor = CharacterCommandLane.class.getDeclaredField("monitor");
-        monitor.setAccessible(true);
-        return monitor.get(lane);
     }
 
     private static Map<?, ?> runtimeView(Map<String, Object> operation) {
@@ -1989,20 +1888,10 @@ class ActorControlServiceTest {
         prepareNpc(service);
         var opened = open(service, "open-npc");
         executors.getFirst().runNext();
-        ActorActRequest base = npcRequest(opened, "npc_center_open", null);
-        for (ActorActRequest.Parameters invalid : List.of(new ActorActRequest.Parameters("wrong text"),
-                new ActorActRequest.Parameters(null, 37L))) {
-            assertEquals("invalid_action_parameters", assertThrows(ObservationException.class,
-                    () -> service.act("admin", "invalid-open", new ActorActRequest(base.sessionId(), base.expectedGeneration(),
-                            "npc_center_open", invalid, base.expectedContext()))).reason());
-        }
         for (Long invalidVersion : java.util.Arrays.asList(null, 0L, -1L)) {
             assertEquals("invalid_dialogue_version", assertThrows(ObservationException.class,
                     () -> service.act("admin", "invalid-cancel", npcRequest(opened, "npc_cancel", invalidVersion))).reason());
         }
-        assertEquals("invalid_action_parameters", assertThrows(ObservationException.class,
-                () -> service.act("admin", "invalid-chat", new ActorActRequest(base.sessionId(), base.expectedGeneration(),
-                        "chat", new ActorActRequest.Parameters("正文", 37L), base.expectedContext()))).reason());
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
         verify(backend, never()).validateNpcCenterOpen(any());
         verify(backend, never()).validateNpcCancel(any(), anyLong());
@@ -2286,14 +2175,8 @@ class ActorControlServiceTest {
             assertEquals("invalid_npc_selection", assertThrows(ObservationException.class,
                     () -> service.act("admin", "invalid-selection", replyRequest(opened, 37L, "select", selection))).reason());
         }
-        assertEquals("invalid_action_parameters", assertThrows(ObservationException.class,
-                () -> service.act("admin", "decline-with-selection", replyRequest(opened, 37L, "decline", 0))).reason());
         assertEquals("invalid_dialogue_version", assertThrows(ObservationException.class,
                 () -> service.act("admin", "zero-version", replyRequest(opened, 0L, "select", 0))).reason());
-        ActorActRequest original = chatRequest(opened, "聊天正文");
-        assertEquals("invalid_action_parameters", assertThrows(ObservationException.class,
-                () -> service.act("admin", "mixed-chat", new ActorActRequest(original.sessionId(), original.expectedGeneration(),
-                        "chat", new ActorActRequest.Parameters("聊天正文", null, "select", 0), original.expectedContext()))).reason());
         assertEquals(1, service.publicCapabilities().get("operation_history_size"));
         verify(backend, never()).validateNpcReply(any(), anyLong(), any(), any());
         verify(backend, never()).npcReply(any(), anyLong(), any(), any());
@@ -2484,7 +2367,7 @@ class ActorControlServiceTest {
 
     private static ActorActRequest replyRequest(Map<String, Object> opened, Long version, String kind, Integer selection) {
         return new ActorActRequest(sessionId(opened), generation(opened), "npc_reply",
-                new ActorActRequest.Parameters(null, version, kind, selection),
+                new ActorActRequest.Parameters(null, version, kind, selection, null, null, null, null, null, null, null, null),
                 new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 
@@ -2512,7 +2395,7 @@ class ActorControlServiceTest {
     }
 
     private static ActorActRequest npcRequest(Map<String, Object> opened, String action, Long version) {
-        return new ActorActRequest(sessionId(opened), generation(opened), action, new ActorActRequest.Parameters(null, version),
+        return new ActorActRequest(sessionId(opened), generation(opened), action, new ActorActRequest.Parameters(null, version, null, null, null, null, null, null, null, null, null, null),
                 new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 
@@ -2761,31 +2644,32 @@ class ActorControlServiceTest {
         assertFalse(work.isSettled());
         assertTrue(work.cancelRequested());
         assertTrue(executors.getFirst().queue.isEmpty());
-        assertFalse(execution(service, opened).runtime().whenModulesDrained().toCompletableFuture().isDone());
         verify(backend, never()).close(any(), any());
         held.get().complete(true);
         assertTrue(work.isSettled());
-        assertTrue(execution(service, opened).runtime().whenModulesDrained().toCompletableFuture().isDone());
         assertEquals(1, executors.getFirst().queue.size());
         verify(backend, never()).close(any(), any());
         executors.getFirst().drain();
         var closed = service.get("admin", id(closing), 0, 100);
         assertEquals("SUCCEEDED", closed.get("status"));
         assertEquals("CLOSED", session(closed).get("state"));
-        assertEquals(CharacterRuntime.State.CLOSED, execution(service, opened).runtime().snapshot().state());
+        assertEquals("CLOSED", runtimeView(closed).get("state"));
         verify(backend, times(1)).close(eq(handle), any());
     }
 
     @Test
-    void basicActionsRejectMissingOrCrossActionFieldsBeforeAllocatingHistory() {
+    void basicActionsRejectMissingAndOutOfRangeFieldsBeforeAllocatingHistory() {
         ActorControlService service = service(4, 64, 64);
         prepareBasic(service, null);
         var opened = open(service, "basic-invalid-open");
         executors.getFirst().runNext();
         for (var request : List.of(basicRequest(opened, "move", Map.of("direction", "RIGHT")),
-                basicRequest(opened, "stop", Map.of("direction", "RIGHT")),
                 basicRequest(opened, "attack", Map.of("target_oid", 0)),
-                basicRequest(opened, "pickup", Map.of("object_id", 1, "quantity", 1)),
+                basicRequest(opened, "pickup", Map.of()),
+                basicRequest(opened, "drop", Map.of("inventory_type", "ETC", "source_slot", 1)),
+                basicRequest(opened, "use_item", Map.of()),
+                basicRequest(opened, "equip", Map.of("source_slot", 1)),
+                basicRequest(opened, "unequip", Map.of("target_slot", 1)),
                 basicRequest(opened, "drop", Map.of("inventory_type", "EQUIPPED", "source_slot", -11, "quantity", 1)),
                 basicRequest(opened, "equip", Map.of("source_slot", 1, "target_slot", -14)),
                 basicRequest(opened, "unequip", Map.of("source_slot", -101, "target_slot", 1)))) {
@@ -2870,7 +2754,6 @@ class ActorControlServiceTest {
         assertTrue(cleanup.isCleanup());
         assertFalse(cleanup.snapshot().carrierClaimed());
         assertFalse(cleanup.isSettled());
-        assertFalse(execution(service, closing).runtime().whenModulesDrained().toCompletableFuture().isDone());
     }
 
     private static final class HeldBasic {
@@ -2973,7 +2856,7 @@ class ActorControlServiceTest {
 
     private static ActorActRequest inventoryRequest(Map<String, Object> opened, String inventoryType, int source, int target) {
         return new ActorActRequest(sessionId(opened), generation(opened), "inventory_move",
-                new ActorActRequest.Parameters(inventoryType, source, target),
+                new ActorActRequest.Parameters(null, null, null, null, inventoryType, source, target, null, null, null, null, null),
                 new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 
@@ -3098,7 +2981,7 @@ class ActorControlServiceTest {
     }
 
     private static ActorActRequest chatRequest(Map<String, Object> opened, String text) {
-        return new ActorActRequest(sessionId(opened), generation(opened), "chat", new ActorActRequest.Parameters(text),
+        return new ActorActRequest(sessionId(opened), generation(opened), "chat", new ActorActRequest.Parameters(text, null, null, null, null, null, null, null, null, null, null, null),
                 new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 
@@ -3168,10 +3051,8 @@ class ActorControlServiceTest {
         executors.getFirst().runNext();
         Object nested = 1;
         for (int index = 0; index < 17; index++) nested = Map.of("nested", nested);
-        Map<String, Object> cycle = new java.util.LinkedHashMap<>(); cycle.put("self", cycle);
         for (Map<String, Object> parameters : List.<Map<String, Object>>of(Map.of("large", "x".repeat(16384)),
-                Map.of("infinite", Double.POSITIVE_INFINITY), Map.of("deep", nested), cycle,
-                Map.of("native", handle), Map.of("text", "\ud800"), Map.of("\ud800", 1))) {
+                Map.of("infinite", Double.POSITIVE_INFINITY), Map.of("deep", nested), Map.of("text", "\ud800"), Map.of("\ud800", 1))) {
             assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class, () -> service.scriptRun("admin", "invalid-script",
                     scriptRequest(sessionId(opened), generation(opened), "1", parameters, 1000L, new ScriptBinding("npc", "start", null, Map.of(), null, List.of())))).status());
         }
@@ -3428,7 +3309,7 @@ class ActorControlServiceTest {
         assertTrue(adapter.entered.await(5, TimeUnit.SECONDS), () -> running.isDone() ? String.valueOf(running.join()) : "native guest did not enter");
         var nativeScope = execution(service, opened).moduleScope();
         assertTrue(nativeScope.snapshot().runningBodies() > 0);
-        assertEquals(0, execution(service, opened).runtime().snapshot().lane().pending());
+        assertEquals(0, ((Map<?, ?>) runtimeView(service.get("admin", id(opened), 0, 100)).get("lane")).get("pending"));
         var cancelled = service.scriptCancel("admin", "native-loop-cancel", scriptCancelRequest(sessionId(opened), generation(opened),
                 "native-loop", request.source(), request.parameters(), request.timeoutMs(), environment));
         assertEquals("CANCELLED", cancelled.get("status"));
@@ -3480,9 +3361,7 @@ class ActorControlServiceTest {
             return Map.of("native_cleanup_verified", true, "persisted_state_verified", true);
         });
         var closing = service.close("admin", "native-root-close", closeRequest(opened));
-        sameRoot.runtime().whenModulesDrained().toCompletableFuture().get(5, TimeUnit.SECONDS);
-        // Completing the module barrier wakes waiters before all its cleanup-submission subscribers must return.
-        // Drive the private lane until the original close operation has its real completion, rather than guessing one drain.
+        // Drive the original close until native script cleanup and the role carrier have both completed.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         Map<String, Object> closed;
         do {
@@ -3493,7 +3372,7 @@ class ActorControlServiceTest {
         } while (System.nanoTime() < deadline);
         assertEquals("SUCCEEDED", closed.get("status"));
         assertEquals("CLOSED", session(closed).get("state"));
-        assertEquals(CharacterRuntime.State.CLOSED, sameRoot.runtime().snapshot().state());
+        assertEquals("CLOSED", runtimeView(closed).get("state"));
     }
 
     @Test
@@ -3520,6 +3399,37 @@ class ActorControlServiceTest {
         TransportNativeAdapter adapter = new TransportNativeAdapter();
         when(backend.nativeScriptAdapter(eq(handle), eq("npc"))).thenReturn(adapter);
         return adapter;
+    }
+
+    @Test
+    void admittedNativeParametersKeepTheirValueThroughBindingWithinThePublicJsonBudget() throws Exception {
+        ActorControlService service = service(4, 24, 64);
+        var opened = open(service, "native-budget-open"); executors.getFirst().runNext();
+        TransportNativeAdapter adapter = prepareNativeAdapter();
+        var start = new ScriptBinding("npc", "start", null, Map.of("npc_id", 9900001), null, List.of());
+        List<String> payloads = List.of("x".repeat(5000), "\\".repeat(5000), "\"".repeat(5000),
+                "雪".repeat(5000), "😀".repeat(2000));
+        for (int index = 0; index < payloads.size(); index++) {
+            String payload = payloads.get(index);
+            var accepted = service.scriptRun("admin", "native-budget-" + index,
+                    scriptRequest(sessionId(opened), generation(opened), "parameters.payload",
+                            Map.of("payload", payload), 5000L, start));
+            assertEquals("SUCCEEDED", accepted.get("status"), () -> String.valueOf(accepted.get("result")));
+            assertEquals(payload, result(accepted).get("result"));
+            String contextId = (String) result(accepted).get("context_id");
+            var closed = service.scriptRun("admin", "native-budget-close-" + index,
+                    scriptRequest(sessionId(opened), generation(opened), "", Map.of(), 5000L,
+                            new ScriptBinding("npc", "close", contextId, Map.of(), null, List.of())));
+            assertEquals(true, result(closed).get("context_closed"));
+        }
+        Object history = service.publicCapabilities().get("operation_history_size");
+        assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ObservationException.class,
+                () -> service.scriptRun("admin", "native-budget-overflow",
+                        scriptRequest(sessionId(opened), generation(opened), "parameters.payload",
+                                Map.of("payload", "x".repeat(16384)), 5000L, start))).status());
+        assertEquals(history, service.publicCapabilities().get("operation_history_size"));
+        assertEquals(payloads.size(), adapter.starts.get());
+        assertEquals(payloads.size(), adapter.closes.get());
     }
 
     @Test

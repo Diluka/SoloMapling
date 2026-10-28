@@ -324,7 +324,7 @@ public final class NativeMovementActions {
                 var ground = input.scene.map().getFootholds().findBelow(new Point(x, y - 5));
                 foothold = ground == null ? 0 : ground.getId();
             } else if (settling) {
-                var next = NativeMovementGeometry.settle(input.scene.actor().character(), input.scene.map(), step.elapsedMs, job.verticalVelocity);
+                var next = NativeMovementGeometry.settle(input.scene.actor().character(), input.scene.map(), job.verticalVelocity);
                 if (job.spawnFrames >= 2 || job.spawnFoothold != 0 && job.spawnFoothold != next.footholdId()) {
                     throw new NativeActionService.Invalid("movement_spawn_settlement_rejected");
                 }

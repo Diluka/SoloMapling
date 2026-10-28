@@ -8,9 +8,8 @@ from urllib.parse import quote, urlsplit
 
 from mcp import Client
 
-from solo_acceptance_mcp.bridge import BridgeClient, BridgeError, MAX_COMMAND_CHARACTERS
+from solo_acceptance_mcp.bridge import MAX_COMMAND_CHARACTERS
 from solo_acceptance_mcp.server import build_server
-from solo_acceptance_mcp.smoke import COMMAND_TOOLS, SCRIPT_TOOLS, require_capabilities
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import BridgeStub, PASSWORD, TOKEN, envelope
 
@@ -89,23 +88,6 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RETURNED", command_tool.description)
         self.assertEqual([], self.stub.requests)
 
-    def test_command_and_script_capability_groups_are_independent_and_complete(self) -> None:
-        names = sorted(chat_protocol.REGISTERED_TOOLS)
-        base = chat_protocol.TOOLS
-        accepted = [chat_protocol.OBSERVATION_TOOLS,
-                    chat_protocol.OBSERVATION_TOOLS | chat_protocol.ACTOR_TOOLS,
-                    base, base | COMMAND_TOOLS, base | SCRIPT_TOOLS, base | COMMAND_TOOLS | SCRIPT_TOOLS]
-        for enabled in accepted:
-            with self.subTest(enabled=enabled):
-                self.assertEqual(sorted(enabled), require_capabilities(chat_protocol.capabilities(enabled), names))
-        rejected = [base | {"game_command"}, base | {"script_help"},
-                    base | COMMAND_TOOLS | {"script_run"}, base | SCRIPT_TOOLS | {"game_command_help"},
-                    chat_protocol.OBSERVATION_TOOLS | SCRIPT_TOOLS]
-        for enabled in rejected:
-            with self.subTest(enabled=enabled), self.assertRaises(RuntimeError):
-                require_capabilities(chat_protocol.capabilities(enabled), names)
-        self.assertEqual([], self.stub.requests)
-
     async def test_help_and_command_use_native_routes_jwt_and_original_envelope(self) -> None:
         async with self.stdio_client() as client:
             values = [await client.call_tool("game_command_help", {}),
@@ -141,9 +123,10 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unicode_character_boundary_is_preserved_without_utf16_or_prefix_restrictions(self) -> None:
         command = "😀" * MAX_COMMAND_CHARACTERS
-        async with BridgeClient(self.stub.config()) as bridge:
-            response = await bridge.command(**{**self.args, "command": command})
-        self.assertEqual("RETURNED", response["status"])
+        async with Client(build_server(self.stub.config())) as client:
+            response = await client.call_tool("game_command", {**self.args, "command": command})
+        self.assertFalse(response.is_error)
+        self.assertEqual("RETURNED", response.structured_content["status"])
         self.assertEqual(command, self.command_requests()[0]["body"]["data"]["command"])
 
     async def test_invalid_command_arguments_are_rejected_before_auth_without_echoing_input(self) -> None:
@@ -172,10 +155,11 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_help_accepts_any_name_and_encodes_it_as_one_query_value(self) -> None:
         names = ["shutdown", "Give", "@give", "time & mode?/中文"]
-        async with BridgeClient(self.stub.config()) as bridge:
+        async with Client(build_server(self.stub.config())) as client:
             for name in names:
-                response = await bridge.command_help(name)
-                self.assertEqual(COMMAND_GENERATION, response["command_generation"])
+                response = await client.call_tool("game_command_help", {"command": name})
+                self.assertFalse(response.is_error)
+                self.assertEqual(COMMAND_GENERATION, response.structured_content["command_generation"])
         self.assertEqual([HELP_PATH + "?command=" + quote(name, safe="") for name in names],
                          [request["path"] for request in self.stub.requests if request["path"].startswith(HELP_PATH)])
 
@@ -191,17 +175,6 @@ class CommandProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(response.is_error)
                     self.assertEqual("INVALID_ARGUMENTS", response.structured_content["error"]["code"])
                     self.assertNotIn(private, response.model_dump_json())
-        self.assertEqual([], self.stub.requests)
-
-    async def test_bridge_itself_validates_commands_before_network(self) -> None:
-        async with BridgeClient(self.stub.config()) as bridge:
-            for changes in [{"expected_command_generation": ".."}, {"command": False}, {"command": " "},
-                            {"command": "x" * (MAX_COMMAND_CHARACTERS + 1)}, {"command": "\udfff"}]:
-                with self.subTest(changes=changes), self.assertRaises(BridgeError) as raised:
-                    await bridge.command(**{**self.args, **changes})
-                self.assertEqual("INVALID_ARGUMENTS", raised.exception.code)
-            with self.assertRaises(BridgeError):
-                await bridge.command_help(" ")
         self.assertEqual([], self.stub.requests)
 
     async def test_statuses_and_native_return_facts_do_not_infer_success_or_deduplicate_locally(self) -> None:

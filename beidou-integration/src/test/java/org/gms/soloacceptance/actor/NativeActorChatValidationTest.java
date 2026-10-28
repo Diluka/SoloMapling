@@ -1,5 +1,7 @@
 package org.gms.soloacceptance.actor;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.Character;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
@@ -50,7 +52,7 @@ class NativeActorChatValidationTest {
 
     @AfterEach
     void inputChecksNeverReadProfilesOrPersistenceServices() {
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         verifyNoInteractions(profiles, accounts, characters, notes);
         verify(client, never()).sendPacket(any());
     }

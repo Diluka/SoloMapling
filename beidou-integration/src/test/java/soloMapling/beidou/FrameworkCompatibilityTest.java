@@ -1,24 +1,21 @@
 package soloMapling.beidou;
 
 import org.gms.server.maps.PlayerShopItem;
+import org.gms.client.inventory.Equip;
 import org.junit.jupiter.api.Test;
 import soloMapling.FreeMarket.ArtificialShopItem;
-import soloMapling.itemPool.EquipType;
-
-import java.util.EnumMap;
+import soloMapling.itemPool.ScrollInfoManager;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class FrameworkCompatibilityTest {
     @Test
-    void earringsAndEyeAccessoriesKeepSeparateCacheCategories() {
-        assertEquals(EquipType.EARRING, EquipType.getEquipTypeById(1032000));
-        EnumMap<EquipType, String> cache = new EnumMap<>(EquipType.class);
-        cache.put(EquipType.ACCESSORY, "eye accessory");
-        cache.put(EquipType.EARRING, "earring");
-        assertEquals(2, cache.size());
-        assertEquals("eye accessory", cache.get(EquipType.ACCESSORY));
-        assertEquals("earring", cache.get(EquipType.EARRING));
+    void earringsSelectTheirOwnScrollsWithoutTreatingEyeAccessoriesAsEarrings() {
+        var scrolls = ScrollInfoManager.getScrollInfo(new Equip(1032000, (short) 1), "int");
+        assertNotNull(scrolls);
+        assertEquals(2040302, scrolls.getPercent_10());
+        assertEquals(2040301, scrolls.getPercent_60());
+        assertNull(ScrollInfoManager.getScrollInfo(new Equip(1022000, (short) 1), "int"));
     }
 
     @Test

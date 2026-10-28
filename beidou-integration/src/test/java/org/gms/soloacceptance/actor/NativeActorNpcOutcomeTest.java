@@ -1,5 +1,7 @@
 package org.gms.soloacceptance.actor;
 
+import soloMapling.game.execution.ExecutionScope;
+
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.config.GameConfig;
@@ -88,7 +90,7 @@ class NativeActorNpcOutcomeTest {
 
     @AfterEach
     void releaseMocks() {
-        WorldEpoch.onWorldStopping();
+        ExecutionScope.tryBeginWorldStop();
         ThreadLocalUtil.removeCurrentClient();
         if (questSingleton != null) questSingleton.close();
         if (scriptSingleton != null) scriptSingleton.close();

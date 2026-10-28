@@ -6,10 +6,17 @@ import json
 from threading import Event
 import unittest
 
+from mcp import Client
+
+from solo_acceptance_mcp.server import build_server
+
 from tests import test_chat_protocol as chat_protocol
 from tests.helpers import PASSWORD, TOKEN
-from tests.test_native_script_bridge import NATIVE_ARGS, NativeScriptStub, native_operation
-from tests.test_script_bridge import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_HELP
+from tests.script_fixture import CANCEL_PATH, HELP_PATH, RUN_PATH, SCRIPT_ARGS, SCRIPT_HELP, ScriptStub, script_operation
+
+
+NATIVE_ARGS = {**SCRIPT_ARGS, "request_id": "native-script:fixture-1", "source": "",
+               "parameters": {"label": "原生脚本协议桩"}}
 
 
 class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -18,7 +25,7 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
     stdio_client = chat_protocol.ChatProtocolTests.stdio_client
 
     async def asyncSetUp(self) -> None:
-        self.stub = NativeScriptStub().start()
+        self.stub = ScriptStub().start()
 
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
@@ -44,7 +51,7 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             response = await client.call_tool("script_run", minimal)
             help_response = await client.call_tool("script_help", {"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7})
         self.assertFalse(response.is_error)
-        self.assertEqual(native_operation(minimal["request_id"]), response.structured_content)
+        self.assertEqual(script_operation(minimal["request_id"]), response.structured_content)
         self.assertEqual(SCRIPT_HELP, help_response.structured_content)
         data = next(request for request in self.stub.requests if request["path"] == RUN_PATH)["body"]["data"]
         self.assertEqual({"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7,
@@ -108,3 +115,29 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                 cleanup_complete.set()
             help_result = await client.call_tool("script_help", {"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7})
             self.assertFalse(help_result.is_error)
+
+    async def test_native_kinds_callbacks_and_close_reach_http_with_original_id(self) -> None:
+        calls = [
+            {"kind": "npc", "options": {"npc_id": 1032110}},
+            {"kind": "quest", "options": {"quest_id": 20600, "npc_id": 1101002, "phase": "start"}},
+            {"kind": "portal", "options": {"portal_id": 1}},
+            {"kind": "reactor", "options": {"reactor_oid": 218}},
+            {"kind": "event", "options": {"script": "KerningTrain"}},
+        ]
+        calls.extend([
+            {"operation": "invoke", "context_id": "native-context-fixture-1", "options": {},
+             "entry": "reply", "args": [1, 0, 0]},
+            {"operation": "close", "context_id": "native-context-fixture-1", "options": {}},
+        ])
+        async with Client(build_server(self.stub.config())) as client:
+            for changes in calls:
+                arguments = {**deepcopy(NATIVE_ARGS), **changes}
+                response = await client.call_tool("script_run", arguments)
+                self.assertFalse(response.is_error)
+                self.assertEqual(arguments["operation"] == "close",
+                                 response.structured_content["result"]["context_closed"])
+                run = next(request for request in reversed(self.stub.requests) if request["path"] == RUN_PATH)
+                self.assertEqual({"requestId": arguments["request_id"],
+                                  "data": {key: value for key, value in arguments.items() if key != "request_id"}},
+                                 run["body"])
+        self.assertEqual(len(calls), sum(request["path"] == RUN_PATH for request in self.stub.requests))

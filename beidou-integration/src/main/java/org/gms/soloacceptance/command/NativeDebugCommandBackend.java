@@ -17,32 +17,22 @@ import soloMapling.beidou.BotRegistry;
 import soloMapling.game.command.NativeCommandExecutor;
 
 import java.util.Objects;
-import java.util.function.Supplier;
 
 /** Resolves an eligible native target, then calls the same executor exposed to native scripts. */
 @Component
 @ConditionalOnProperty(prefix = "solomapling.acceptance", name = {
         "enabled", "actors-enabled", "debug-commands-enabled"}, havingValue = "true", matchIfMissing = false)
-public final class NativeDebugCommandBackend implements DebugCommandService.Backend {
+public final class NativeDebugCommandBackend {
     private final AccountService accounts;
     private final CharacterService characters;
-    private final Supplier<Server> servers;
 
     @Autowired
     public NativeDebugCommandBackend(AccountService accounts, CharacterService characters) {
-        this(accounts, characters, Server::getInstance);
-    }
-
-    NativeDebugCommandBackend(AccountService accounts, CharacterService characters, Supplier<Server> servers) {
         this.accounts = accounts;
         this.characters = characters;
-        this.servers = servers;
     }
 
-    @Override
     public DebugCommandService.Outcome execute(ActorProfiles.Resolved profile, String command) {
-        try { NativeCommandExecutor.validateCommand(command); }
-        catch (IllegalArgumentException invalid) { return failed("invalid_command_text"); }
         Target target;
         try {
             target = target(profile);
@@ -70,7 +60,7 @@ public final class NativeDebugCommandBackend implements DebugCommandService.Back
                 || !Objects.equals(stored.getWorld(), profile.world()) || !Objects.equals(stored.getGm(), 0)) {
             throw new Rejected("profile_target_not_eligible");
         }
-        Server server = servers.get();
+        Server server = Server.getInstance();
         if (server == null || !server.isOnline()) throw new Rejected("server_offline");
         World world = server.getWorld(profile.world());
         Character character = world == null ? null : world.getPlayerStorage().getCharacterById(stored.getId());
@@ -88,7 +78,7 @@ public final class NativeDebugCommandBackend implements DebugCommandService.Back
         World world = target.world();
         Channel channel = target.channel();
         if (character == null || client == null || world == null || channel == null
-                || servers.get() != target.server() || !target.server().isOnline()
+                || Server.getInstance() != target.server() || !target.server().isOnline()
                 || target.server().getWorld(world.getId()) != world
                 || world.getChannel(channel.getId()) != channel
                 || world.getPlayerStorage().getCharacterById(target.characterId()) != character

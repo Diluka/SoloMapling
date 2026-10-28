@@ -38,20 +38,12 @@ class ExecutionScopeTest {
     void startWorldEpoch() { WorldEpoch.onWorldStarted(); }
 
     @AfterEach
-    void stopWorldEpoch() { WorldEpoch.onWorldStopping(); }
+    void stopWorldEpoch() { ExecutionScope.tryBeginWorldStop(); }
 
     @Test
-    void ownerStampsPreserveIndependentObjectIdentitiesAndNeverAuthorizeForeignWork() {
-        Object runtimeA = new String("same-runtime");
-        Object runtimeB = new String("same-runtime");
-        Object moduleA = new String("same-module");
-        Object moduleB = new String("same-module");
-        ExecutionScope first = scope(runtimeA, moduleA, 2, 2);
-        ExecutionScope second = scope(runtimeB, moduleB, 2, 2);
-        assertSame(runtimeA, first.ownerStamp().runtimeGeneration());
-        assertSame(moduleA, first.ownerStamp().moduleGeneration());
-        assertNotSame(runtimeA, runtimeB);
-        assertNotSame(moduleA, moduleB);
+    void independentScopesNeverAuthorizeForeignWork() {
+        ExecutionScope first = scope(2, 2);
+        ExecutionScope second = scope(2, 2);
         ExecutionScope.WorkHandle own = first.acceptWork();
         assertSame(first, own.scope());
         assertSame(first.acceptedEpoch(), own.acceptedEpoch());
@@ -67,25 +59,8 @@ class ExecutionScopeTest {
     }
 
     @Test
-    void ownerStampEqualityUsesEachTokenObjectInItsOwnIdentitySlot() {
-        Object runtime = new String("equal-token-value");
-        Object module = new String("equal-token-value");
-        ExecutionScope.OwnerStamp original = new ExecutionScope.OwnerStamp(runtime, module);
-        ExecutionScope.OwnerStamp sameObjects = new ExecutionScope.OwnerStamp(runtime, module);
-        ExecutionScope.OwnerStamp equalValues = new ExecutionScope.OwnerStamp(
-                new String("equal-token-value"), new String("equal-token-value"));
-        ExecutionScope.OwnerStamp reversedSlots = new ExecutionScope.OwnerStamp(module, runtime);
-        assertEquals(runtime, module);
-        assertNotSame(runtime, module);
-        assertEquals(original, sameObjects);
-        assertEquals(original.hashCode(), sameObjects.hashCode());
-        assertNotEquals(original, equalValues);
-        assertNotEquals(original, reversedSlots);
-    }
-
-    @Test
     void activeWorkCapacityIsBoundedAndSettlingOneWorkAllowsAnother() {
-        ExecutionScope scope = scope(new Object(), new Object(), 2, 1);
+        ExecutionScope scope = scope(2, 1);
         ExecutionScope.WorkHandle first = scope.acceptWork();
         ExecutionScope.WorkHandle second = scope.acceptWork();
         assertInvalid("work_capacity_exceeded", scope::acceptWork);
@@ -422,11 +397,10 @@ class ExecutionScopeTest {
         assertEquals(DRAINED, scope.awaitDrained(Duration.ZERO));
     }
 
-    private static ExecutionScope scope() { return scope(new Object(), new Object(), 4, 4); }
+    private static ExecutionScope scope() { return scope(4, 4); }
 
-    private static ExecutionScope scope(Object runtime, Object module, int workLimit, int diagnosticsLimit) {
-        return new ExecutionScope(WorldEpoch.snapshot().token(), new ExecutionScope.OwnerStamp(runtime, module),
-                new ExecutionScope.Limits(workLimit, 0, diagnosticsLimit, 0));
+    private static ExecutionScope scope(int workLimit, int diagnosticsLimit) {
+        return new ExecutionScope(WorldEpoch.snapshot().token(), new ExecutionScope.Limits(workLimit, 0, diagnosticsLimit, 0));
     }
 
     private static void assertInvalid(String reason, Runnable action) {
