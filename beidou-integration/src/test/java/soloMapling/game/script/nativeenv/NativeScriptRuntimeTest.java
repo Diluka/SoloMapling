@@ -97,6 +97,24 @@ class NativeScriptRuntimeTest {
         assertClosed(fixture.closeContext(opened.contextId()));
     }
 
+    @Test void languageOutputKeepsSplitSurrogatePairsAndRespectsUtf8Budget() throws Exception {
+        Fixture fixture = fixture();
+        NativeScriptResult opened = fixture.start(
+                "console.log('中文😀'); print('🌟'); console.error('😀'); ({label:'中文😀'})", Map.of());
+        assertOpen(opened);
+        assertEquals(Map.of("label", "中文😀"), opened.result());
+        assertEquals("中文😀\n🌟\n", opened.stdout());
+        assertEquals("😀\n", opened.stderr());
+        assertFalse(opened.outputTruncated());
+
+        NativeScriptResult bounded = fixture.invoke(opened.contextId(), null, List.of(),
+                "print('x'.repeat(16382) + '😀'); 'done'");
+        assertOpen(bounded);
+        assertEquals("x".repeat(16382), bounded.stdout());
+        assertTrue(bounded.outputTruncated());
+        assertClosed(fixture.closeContext(opened.contextId()));
+    }
+
     @Test void nativeRequestJsonBudgetCountsOnlyTheThreeDeclaredRoots() {
         Map<String, Object> options = Map.of("selector", "native");
         List<Object> args = Arrays.asList(null, "中文");

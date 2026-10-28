@@ -98,14 +98,11 @@ class NativeScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(private, json.dumps(caught.exception.public_data()))
         self.assertEqual([], self.stub.requests)
 
-    async def test_native_json_budget_is_shared_by_all_three_roots_and_all_sibling_leaves(self) -> None:
+    async def test_native_json_roots_keep_the_depth_guard(self) -> None:
         too_deep = None
         for _ in range(17):
             too_deep = {"nested": too_deep}
         cases = [
-            {"parameters": {"p": "x" * 9000}, "options": {"o": "x" * 9000}},
-            {"parameters": {"a": "x" * 10000, "b": "y" * 10000}},
-            {"parameters": {"p": "x" * 6000}, "options": {"o": "x" * 6000}, "args": ["a" * 6000]},
             {"options": too_deep}, {"args": [too_deep]},
         ]
         for index, changes in enumerate(cases):
@@ -114,19 +111,13 @@ class NativeScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
         self.assertEqual([], self.stub.requests)
 
-    async def test_entry_and_shared_json_budget_accept_exact_boundaries(self) -> None:
-        parameters = {"text": "a" * (16384 - len('{"text":""}') - len('{}') - len('[]'))}
+    async def test_entry_name_boundary_is_validated_before_http(self) -> None:
         entry = "$" + "a" * 127
-        await self.run_native(parameters=parameters, options={}, entry=entry)
+        await self.run_native(entry=entry)
         self.assertEqual(entry, self.requests(RUN_PATH)[0]["body"]["data"]["entry"])
-        self.assertEqual(parameters, self.requests(RUN_PATH)[0]["body"]["data"]["parameters"])
-        for changes in [
-            {"parameters": {"text": parameters["text"] + "a"}, "options": {}},
-            {"entry": "$" + "a" * 128},
-        ]:
-            with self.subTest(changes=list(changes)), self.assertRaises(BridgeError) as caught:
-                await self.run_native(**changes)
-            self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
+        with self.assertRaises(BridgeError) as caught:
+            await self.run_native(entry="$" + "a" * 128)
+        self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
         self.assertEqual(1, len(self.requests(RUN_PATH)))
 
     async def test_native_call_change_under_original_id_preserves_conflict_without_retry(self) -> None:

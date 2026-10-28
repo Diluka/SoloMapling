@@ -21,7 +21,9 @@
 | `parameters` | JSON 对象，默认 `{}`，以同名对象供本次脚本读取 |
 | `timeout_ms` | 整数 1～5,000，默认 1,000；覆盖本次环境准备、执行和结果转换 |
 
-`options`、`args`、`parameters` 的 JSON 编码总量最多 16,384 个 UTF-8 字节，每个根的深度最多 16。`entry` 匹配 `[A-Za-z_$][A-Za-z0-9_$]{0,127}`，不能用属性路径替代原入口。
+`options`、`args`、`parameters` 的输入预算由服务端统一裁决：按服务端规范化 JSON 的 UTF-8 编码计算，三根总量最多 16,384 字节，每个根的深度最多 16。客户端保留 JSON 类型、有限数值、有效 Unicode、节点数和深度检查，不再用自身重编码的字节数作第二次预算裁决。不同编码器可能将同一数值写为 `1e+20` 或 `1.0E20`，客户端编码长度不能用来推定服务端是否接受；超出服务端预算的请求明确拒绝，不进入原生执行。
+
+`entry` 匹配 `[A-Za-z_$][A-Za-z0-9_$]{0,127}`，不能用属性路径替代原入口。
 
 `start` 创建本模块所有的真实北斗上下文，加载现有文件并执行原入口；非空 `source` 在原入口成功后追加执行，不替换原文件。`invoke` 调用 `entry/args`，或执行非空 `source`，两者互斥。`close` 只收尾原 `context_id`：`source` 必须为空，`options/args` 必须为空，且不得指定 `entry`。
 
@@ -29,7 +31,7 @@
 
 ## 输出和结果
 
-`console`、`print` 等语言输出进入本次 `stdout/stderr`，每路最多 16,384 字节，超出设置 `output_truncated=true`。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
+`console`、`print` 等语言输出按 UTF-8 收集到本次 `stdout/stderr`，保留分片写入的完整 Unicode 字符；每路最多 16,384 字节，超出设置 `output_truncated=true`。这是脚本语言输出，游戏聊天仍沿角色的原生字符集规则。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
 
 JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字符串累计额度限制。原生对象、函数、循环引用、Promise、非有限数及非法 Unicode 字符串不能作为 JSON 结果传出；脚本应明确投影所需的安全字段。终态结果不保留 Graal `Value`、Context、原生角色或 Throwable 引用。
 
@@ -80,6 +82,8 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 模块停止撤销其调用资格并取消、排空原 scope。根 `actor_close` 等模块真实结束后再释放角色；旧世界、旧 Context 及旧模块代次不能复活或清理外来、后继会话。
 
 MCP handler 中断通过独立 `/script/cancel` 请求转发到后端，携带原请求 ID 及完整相同的类型、操作、上下文、脚本、参数和期限。取消先到时留下已结算取消检查点，迟到 run 不执行；变参仍冲突。已发生的原生副作用不会撤回，未知结果不换新 ID 自动重放。
+
+提前取消尚未启动的 `invoke/close` 只结算本次调用，不自动关闭它指向的已有 Context。检查点按原 `context_id` 记录当时读到的上下文事实；已有环境保持 `OPEN` 时，不能据 `CANCELLED` 或 `invocation_settled/work_settled` 推导其已关闭。无法确认上下文时返回 `context_state=UNKNOWN`，不宣称已清理；当前状态可通过 `script_help.contexts` 核对，并在需要时显式 `close`。提前取消 `start` 的 `NOT_STARTED` 只表示该次新上下文没有创建。
 
 已取消的 MCP 请求按协议不再返回工具响应。使用相同 `request_id` 和完整原参数恢复原 operation，或用已知 `operation_id` 查询。脚本专用 HTTP 预算至少为执行期限加 5 秒，宿主工具期限另留通信与收尾余量。
 

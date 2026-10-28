@@ -122,7 +122,7 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
         cases = [{"source": value} for value in [None, False, 1, [], {}, "x" * 65537, "\ud800"]]
         cases.extend({"timeout_ms": value} for value in [None, False, 0, 5001, 1.0, "1000", private])
         cases.extend({"parameters": value} for value in [False, 3, [], "string", {"nan": float("nan")},
-                                                               {"inf": float("inf")}, {"text": "x" * 65537}])
+                                                               {"inf": float("inf")}])
         cases.extend([{"session_id": "session/other"}, {"expected_generation": True}, {"request_id": "bad\nrequest"}])
         for index, changes in enumerate(cases):
             with self.subTest(case=index), self.assertRaises(BridgeError) as caught:
@@ -139,32 +139,38 @@ class ScriptBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
         self.assertEqual([], self.stub.requests)
 
-    async def test_shared_native_json_budget_accepts_exact_utf8_and_depth_boundaries(self) -> None:
-        # Empty options and args consume two UTF-8 bytes each in the shared budget.
-        unicode_boundary = {"x": "汉" * 5457 + "a"}
-        ascii_boundary = {"x": "a" * (16384 - len('{"x":""}') - len('{}') - len('[]'))}
+    async def test_json_depth_boundary_remains_client_validation(self) -> None:
         depth_boundary = None
         for _ in range(16):
             depth_boundary = {"nested": depth_boundary}
-        for parameters in [unicode_boundary, ascii_boundary, depth_boundary]:
-            with self.subTest(kind="depth" if parameters == depth_boundary else "size"):
-                if parameters != depth_boundary:
-                    self.assertEqual(16384, len(json.dumps(parameters, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 4)
-                await self.run_script(parameters=parameters, options={})
-                self.assertEqual(parameters, self.requests(RUN_PATH)[-1]["body"]["data"]["parameters"])
-        self.assertEqual(3, len(self.requests(RUN_PATH)))
+        await self.run_script(parameters=depth_boundary)
+        self.assertEqual(depth_boundary, self.requests(RUN_PATH)[0]["body"]["data"]["parameters"])
+        with self.assertRaises(BridgeError) as caught:
+            await self.run_script(parameters={"nested": depth_boundary})
+        self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
+        self.assertEqual(1, len(self.requests(RUN_PATH)))
 
-    async def test_parameters_over_shared_16k_or_depth_16_are_rejected_before_authentication(self) -> None:
-        too_deep = None
-        for _ in range(17):
-            too_deep = {"nested": too_deep}
-        invalid = [{"x": "a" * (16384 - len('{"x":""}') - 4 + 1)},
-                   {"x": "汉" * 5457 + "aa"}, too_deep]
-        for parameters in invalid:
-            with self.subTest(kind="depth" if parameters == too_deep else "size"), self.assertRaises(BridgeError) as caught:
-                await self.run_script(parameters=parameters, options={})
-            self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
-        self.assertEqual([], self.stub.requests)
+    async def test_json_byte_budget_is_authoritative_on_the_server_without_replay(self) -> None:
+        # This fixture models the server response, not Jackson's number encoding.
+        # The bridge forwards both finite JSON values without its own byte ruling.
+        rejected = {"n": 1e20, "padding": "x" * 16340}
+
+        def respond(request: dict):
+            if request["path"] == RUN_PATH and request["body"]["data"]["parameters"] == rejected:
+                return 400, {"message": "invalid_script_parameters"}
+            return self.stub.default_response(request)
+
+        self.stub.responder = respond
+        with self.assertRaises(BridgeError) as caught:
+            await self.run_script(parameters=rejected)
+        self.assertEqual("INVALID_ARGUMENTS", caught.exception.code)
+        self.assertEqual(400, caught.exception.http_status)
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(rejected, self.requests(RUN_PATH)[0]["body"]["data"]["parameters"])
+        accepted = {"n": 1e20, "padding": "x" * 16339}
+        self.assertEqual(script_operation(SCRIPT_ARGS["request_id"]), await self.run_script(parameters=accepted))
+        self.assertEqual(2, len(self.requests(RUN_PATH)))
+        self.assertEqual([], self.requests(CANCEL_PATH))
 
     async def test_client_cancellation_waits_for_cleanup_and_preserves_flat_fingerprint(self) -> None:
         run_started, cancel_started, cleanup_complete = Event(), Event(), Event()

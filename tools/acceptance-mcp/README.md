@@ -108,7 +108,7 @@ enabled = true
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
 
-`actor_open/actor_close/operation_cancel/game_act/script_run` 都要求调用方提供 `request_id`，它是原生信封的 `requestId`。客户端成功和 HTTP/传输错误都会保留该 ID。HTTP `401` 最多刷新一次 JWT 并重发同一信封；超时或连接错误不会自动重放写请求。写请求结果未知时返回 `outcome_unknown=true`、`retryable=false`，应先查询已有操作，或明确使用原请求 ID 恢复，不换新 ID 盲重试。无效参数在发 HTTP 前拒绝。
+`actor_open/actor_close/operation_cancel/game_act/script_run` 都要求调用方提供 `request_id`，它是原生信封的 `requestId`。客户端成功和 HTTP/传输错误都会保留该 ID。HTTP `401` 最多刷新一次 JWT 并重发同一信封；超时或连接错误不会自动重放写请求。写请求结果未知时返回 `outcome_unknown=true`、`retryable=false`，应先查询已有操作，或明确使用原请求 ID 恢复，不换新 ID 盲重试。客户端可判定的字段、类型、有限数值、Unicode与深度等错误在发 HTTP 前拒绝；脚本16KiB预算由服务端规范化JSON统一裁决，超额以已知HTTP 400拒绝且不执行。
 
 `actor_open` 只按后端明确配置的 profile 工作，可选 world/channel 必须符合后端 profile。打开返回 `QUEUED` 只表示已受理；查询到 `SUCCEEDED`、`observed_outcome=native_actor_online`、原生在线和实际场景身份后才确认登录。已关闭 session 的旧打开请求必须返回原操作，不能重新创建角色。
 
@@ -179,11 +179,13 @@ script_run(session_id="实际session_id", expected_generation=实际session_gene
            context_id="实际context_id")
 ```
 
-start不带context_id，invoke/close必须带；invoke的非空source与entry互斥。close使用source/options/args的空默认值，不得指定entry。source默认空字符串，parameters/options默认{}，args默认[]，timeout_ms默认1000、范围1～5000。详细JSON额度、入口规则及五类选择见[公共执行契约](../../docs/robot-runtime/script-execution.md#请求)和[北斗上下文](../../docs/robot-runtime/beidou-script-environment.md)。
+start不带context_id，invoke/close必须带；invoke的非空source与entry互斥。close使用source/options/args的空默认值，不得指定entry。source默认空字符串，parameters/options默认{}，args默认[]，timeout_ms默认1000、范围1～5000。三根JSON输入的16KiB预算按服务端规范化UTF-8编码统一裁决，客户端保留类型、有限数值、Unicode、节点数和深度检查，不重复裁决本地编码字节数。详细JSON额度、入口规则及五类选择见[公共执行契约](../../docs/robot-runtime/script-execution.md#请求)和[北斗上下文](../../docs/robot-runtime/beidou-script-environment.md)。
 
 工具返回既有 `kind=SCRIPT` operation，result包含JSON结果、stdout/stderr、错误和上下文状态。成功调用可以保留 `context_state=OPEN,context_closed=false`；本次 `invocation_settled/work_settled` 与最终环境关闭分开核验。语法、运行、结果、期限、取消及清理状态分别表达，详见[结果参考](../../docs/robot-runtime/script-execution.md#输出和结果)。不为取得context_closed=true而盲目重放原入口。
 
 官方SDK task取消会发送MCP取消通知。桥在受保护的收尾段内向内部 `/script/cancel` 转发原请求ID和完整平铺参数，等待实际收尾；没有新增script_cancel工具。取消先到的检查点阻止迟到run执行。已取消请求按协议不再返回工具响应，使用相同request_id及完整原参数恢复原operation，或用已知operation_id查询；变参冲突，未知结果不换新ID重发。
+
+提前取消未启动的invoke/close不会自动关闭已有Context；检查点中的本次结算与原上下文状态分别核对。仍为OPEN的环境按需显式close，状态UNKNOWN时先查询script_help，不把CANCELLED当作清理完成。
 
 NPC/任务复用原管理器，门户/机关使用当前真实对象，事件有角色自有原生EM和引擎，不接管频道共享事件。北斗Java API保留实际副作用；服务端warp不是普通玩家门户准入，开UI不等于完成交易，任务脚本入口不替代普通接取资格。guest循环已停止不证明host Java方法已返回，未核实执行和调度资源继续保留债务。
 

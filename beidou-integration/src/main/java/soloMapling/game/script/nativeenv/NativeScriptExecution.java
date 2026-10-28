@@ -8,6 +8,10 @@ import soloMapling.game.script.ScriptValues;
 import soloMapling.game.script.ScriptResult;
 
 import javax.script.ScriptException;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -28,6 +32,8 @@ public final class NativeScriptExecution {
     private final CompletableFuture<Object> callbackResult = new CompletableFuture<>();
     final ScriptValues.CapturedOutput stdout = new ScriptValues.CapturedOutput();
     final ScriptValues.CapturedOutput stderr = new ScriptValues.CapturedOutput();
+    private final Writer stdoutWriter = new OutputStreamWriter(stdout, StandardCharsets.UTF_8);
+    private final Writer stderrWriter = new OutputStreamWriter(stderr, StandardCharsets.UTF_8);
     private volatile ScriptResult.Status status = ScriptResult.Status.CANCELLED;
     private volatile ScriptResult.ScriptError error;
     private volatile boolean guestExited;
@@ -57,6 +63,7 @@ public final class NativeScriptExecution {
         return start(work, session, request, callback);
     }
     public ExecutionScope.WorkHandle work() { return work; }
+    Writer output(boolean error) { return error ? stderrWriter : stdoutWriter; }
     Map<String, Object> parameters() { return request.parameters(); }
     public CompletionStage<NativeScriptResult> completion() { return completion.minimalCompletionStage(); }
     public void cancel() {
@@ -99,6 +106,7 @@ public final class NativeScriptExecution {
             error = new ScriptResult.ScriptError("native_script_carrier_failed", null, null);
             session.requestClose();
         } finally {
+            if (guestExited) finishOutput();
             boolean verified = guestExited && (!closeNeeded || session.isClosed() && session.contextClosed());
             try { work.settleCarrier(() -> { if (!verified) throw new IllegalStateException("native_script_cleanup_unverified"); }); }
             catch (RuntimeException ignored) { /* Original work retains the failed settlement debt. */ }
@@ -113,6 +121,16 @@ public final class NativeScriptExecution {
             if (callback != null) {
                 if (finalStatus == ScriptResult.Status.SUCCEEDED) callbackResult.complete(rawCallbackResult);
                 else callbackResult.completeExceptionally(new ScriptException("native_script_callback_" + finalStatus.name().toLowerCase()));
+            }
+        }
+    }
+    /** Finish each invocation's encoder only after its guest can no longer write. */
+    private void finishOutput() {
+        for (Writer output : List.of(stdoutWriter, stderrWriter)) {
+            try { output.close(); }
+            catch (IOException failed) {
+                status = ScriptResult.Status.RESULT_ERROR;
+                if (error == null) error = new ScriptResult.ScriptError("native_script_output_unavailable", null, null);
             }
         }
     }
