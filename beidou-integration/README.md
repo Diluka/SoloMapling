@@ -102,6 +102,10 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 后续按 [共享基础 #116](https://github.com/Diluka/SoloMapling/issues/116) 的 #120～#129 实际依赖推进，
 不扩展平行实现；已有MCP交付不冒充公共动作/NPC层完成，礼包及出行暂后排。
 
+## MCP 控制模块接入
+
+[#139](https://github.com/Diluka/SoloMapling/issues/139) 的 MCP 接入在统一宿主内复用 #117～#119：根角色资源、原生来源和唯一 lane 归 `CharacterRuntime`，MCP 模块消费聊天/观察上下文，外层保留鉴权、profile、请求历史与现有额度。接线与回归/部署约定见 [MCP 模块说明](../docs/mcp-acceptance/runtime-module.md)，交付及各层验收证据以对应 Issue 为准。`runtime_generation` 仍表示世界代次；完整暂停/卸载重挂与复杂关闭留 #140，生产自治、巡逻、刷怪不属于本轮。
+
 ## 验证边界
 
 构建会验证 submodule 始终干净；默认执行独立的 LLM 与集成 JUnit 测试，

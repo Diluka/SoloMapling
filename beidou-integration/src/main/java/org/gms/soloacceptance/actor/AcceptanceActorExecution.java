@@ -1,205 +1,238 @@
 package org.gms.soloacceptance.actor;
 
-import org.gms.net.server.channel.Channel;
-import org.gms.net.server.world.World;
 import org.gms.soloacceptance.ObservationException;
 import org.springframework.http.HttpStatus;
-import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeChatAction;
+import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.RuntimeEvents;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.atomic.AtomicReference;
 
-/** One MCP session's thin ownership adapter; operations and policy remain in ActorControlService. */
+/** MCP consumes one host. Native ownership, scopes, grants, the lane and its executor belong to that host. */
 final class AcceptanceActorExecution {
     private final NativeActorBackend backend;
-    private final ExecutionScope scope;
-    private volatile CharacterCommandLane lane;
-    private volatile CharacterCommandLane.Grant grant;
-    private volatile CharacterCommandLane.AdmissionPermit admission;
-    // The factory creates this session-private executor. The lane borrows the same queue, never another one.
-    private final ExecutorService ownedExecutor;
-    private final Object ownershipMonitor = new Object();
-    private volatile CharacterCommandLane.ControlPermit control;
-    private volatile ScopeResources.Registration registration;
-    private volatile NativeActorHandle adopted;
+    private final CharacterRuntime runtime;
+    private final String moduleInstance;
+    private volatile AcceptanceRuntimeOrigin origin;
+    private volatile McpControlModule module;
     private volatile Map<String, Object> cleanupEvidence;
-    private World originWorld;
-    private Channel originChannel;
+    private volatile Map<String, Object> diagnostics = Map.of();
+    private long moduleGeneration;
 
-    AcceptanceActorExecution(NativeActorBackend backend, Object sessionIdentity, WorldEpoch.Token acceptedEpoch,
+    AcceptanceActorExecution(NativeActorBackend backend, String moduleInstance, WorldEpoch.Token epoch,
                              ExecutorService executor) {
         this.backend = backend;
-        this.ownedExecutor = executor;
-        scope = new ExecutionScope(acceptedEpoch, new ExecutionScope.OwnerStamp(sessionIdentity, new Object()),
-                new ExecutionScope.Limits(16, 1, 16, 1));
-        try {
-            lane = new CharacterCommandLane(8, 1, executor);
-            grant = lane.declareGrant(scope);
-            admission = lane.admissionPermit(scope);
-        } catch (RuntimeException failure) {
-            if (lane != null) lane.close();
-            ownedExecutor.shutdown();
-            WorldEpoch.State current = WorldEpoch.snapshot();
-            if ((!current.active() || current.token() != acceptedEpoch)
-                    && (failure instanceof IllegalStateException && "scope_not_current".equals(failure.getMessage())
-                    || failure instanceof ExecutionScope.Invalid invalid && "scope_not_active".equals(invalid.reason()))) {
-                throw new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_world_offline");
-            }
-            throw failure;
-        }
+        this.moduleInstance = moduleInstance;
+        runtime = new CharacterRuntime(epoch, new CharacterRuntime.Options(8, 1,
+                new ExecutionScope.Limits(16, 1, 16, 1), 64, 1), executor);
+        refreshDiagnostics();
     }
 
-    ExecutionScope scope() { return scope; }
-    ExecutionScope.WorkHandle acceptWork() { return scope.acceptWork(); }
-    void cancel(ExecutionScope.WorkHandle work) { if (work != null) scope.requestCancel(work); }
-    NativeActorHandle adoptedHandle() { return adopted; }
-    boolean resourceReleased() { return scope.resources().snapshot().outstanding() == 0; }
+    CharacterRuntime runtime() { return runtime; }
+    ExecutionScope scope() { return runtime.lifecycleScope(); }
+    ExecutionScope moduleScope() { return requireModule().context().scope(); }
+    CharacterRuntime.ModuleContext moduleContext() { return requireModule().context(); }
+
+    ExecutionScope.WorkHandle acceptOpeningWork() {
+        ExecutionScope.WorkHandle work = runtime.acceptOpeningWork();
+        trackRoot(work);
+        return work;
+    }
+
+    ExecutionScope.WorkHandle acceptWork() {
+        try { return requireModule().acceptWork(); }
+        catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
+    }
+
+    void cancel(ExecutionScope.WorkHandle work) {
+        if (work == null) return;
+        if (work.scope() == runtime.lifecycleScope()) runtime.lifecycleScope().requestCancel(work);
+        else requireModule().context().cancel(work);
+    }
+
+    NativeActorHandle adoptedHandle() {
+        AcceptanceRuntimeOrigin source = origin;
+        return source == null ? null : source.adoptedHandle();
+    }
+
+    boolean resourceReleased() { return runtime.originReleased(); }
 
     NativeActorBackend.OpenOwnership beginOpen(ExecutionScope.WorkHandle work) {
-        ScopeResources.Registration owned = scope.resources().beginOwnedResult(work, "native_actor");
-        registration = owned;
-        return new NativeActorBackend.OpenOwnership() {
-            @Override public void bindOrigin(World world, Channel channel) {
-                owned.requirePendingCleanupOrigin();
-                synchronized (ownershipMonitor) {
-                    if (originWorld != null && (originWorld != world || originChannel != channel)) throw unverified();
-                    originWorld = world;
-                    originChannel = channel;
-                }
-            }
-
-            @Override public void adopt(NativeActorHandle handle) {
-                synchronized (ownershipMonitor) {
-                    if (originWorld == null || handle.world() != originWorld || handle.channel() != originChannel
-                            || adopted != null && adopted != handle) throw unverified();
-                    adopted = handle;
-                }
-                owned.attach(handle, () -> { /* The service schedules cleanup on the same lane. */ });
-            }
-
-            @Override public void rollback(NativeActorHandle handle) {
-                if (adopted != handle) throw unverified();
-                rollbackInline();
-            }
-
-            @Override public void confirmAbsent() { owned.confirmAbsent(); }
-
-            @Override public void creationFailed(String reason) {
-                if (adopted == null && "PENDING".equals(owned.state())) owned.creationFailed(reason);
-            }
-
-            @Override public void requireOrigin(World world, Channel channel) {
-                synchronized (ownershipMonitor) {
-                    if (originWorld == null || originWorld != world || originChannel != channel) throw unverified();
-                }
-                owned.requirePendingCleanupOrigin();
-            }
-        };
+        AcceptanceRuntimeOrigin source = new AcceptanceRuntimeOrigin(runtime, backend, work);
+        origin = source;
+        return source;
     }
 
     CharacterCommandLane.Submission submitOpen(ExecutionScope.WorkHandle work, Runnable body, Runnable settled) {
-        return lane.submitInitialization(work, admission, body, settled);
+        return runtime.submitOpening(work, body, settled);
     }
 
-    void bindActor(NativeActorHandle handle) {
-        if (adopted != handle) throw unverified();
-        control = lane.bindGrantedPermit(scope, handle.characterRef(), grant, () -> {
-            if (!backend.isCurrent(handle)) {
-                throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
-            }
-        });
+    void bindActor(NativeActorHandle exactHandle) {
+        if (adoptedHandle() != exactHandle) throw unverified();
+        runtime.bindAdoptedOrigin();
+        McpControlModule attached = new McpControlModule(moduleInstance);
+        module = attached;
+        CharacterRuntime.ModuleRef reference = runtime.mount(attached.spec(), attached, true);
+        runtime.context(reference); // Mounting without an active context is not OPEN success.
+        moduleGeneration = reference.generation();
+        refreshDiagnostics();
     }
 
     CharacterCommandLane.Submission submitAction(ExecutionScope.WorkHandle work, Runnable body, Runnable settled) {
-        CharacterCommandLane.ControlPermit permit = control;
-        if (permit == null) throw unverified();
-        return lane.submit(work, permit, body, settled);
+        return requireModule().submitInteraction(work, () -> { }, body, settled);
     }
 
     NativeActionService.ActionHandle prepareChat(ExecutionScope.WorkHandle work, NativeActorHandle exactHandle,
                                                 String text, Runnable mcpPreflight) {
-        CharacterCommandLane currentLane = lane;
-        CharacterCommandLane.Grant currentGrant = grant;
-        if (adopted != exactHandle || currentLane == null || currentGrant == null || control == null) {
-            throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
-        }
-        CharacterCommandLane.ControlPermit permit = currentLane.bindGrantedPermit(scope,
-                exactHandle.characterRef(), currentGrant, mcpPreflight);
-        return backend.prepareChat(exactHandle, currentLane, permit, work, new NativeChatAction(text));
+        if (adoptedHandle() != exactHandle) throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
+        return requireModule().prepareChat(work, mcpPreflight, (lane, permit, original, character) ->
+                backend.prepareChat(exactHandle, lane, permit, original, new NativeChatAction(text)));
     }
 
     NativeActionService.SubmissionReceipt submitChat(NativeActionService.ActionHandle action) {
         return backend.submitChat(action);
     }
 
-    boolean publishOpen(ExecutionScope.WorkHandle work, Runnable apply) { return scope.publishOnce(work, apply); }
-
-    void beginDrain(Optional<ExecutionScope.WorldStopTicket> stop) {
-        // A stop broadcast may include old quarantines; it cannot renew their cleanup window.
-        stop.filter(ticket -> ticket.sourceEpoch() == scope.acceptedEpoch()).ifPresent(scope::joinWorldStop);
-        scope.beginDrain();
-        CharacterCommandLane.Grant current = grant;
-        if (current != null) current.revoke();
+    void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {
+        requireModule().recordResult(work, result);
     }
 
-    ScopeResources.CleanupAttempt cleanupAttempt() {
-        ScopeResources.Registration owned = registration;
-        if (owned == null || adopted == null) throw unverified();
-        return owned.acquireCleanup();
-    }
-
-    CharacterCommandLane.Submission submitCleanup(ScopeResources.CleanupAttempt attempt, Runnable body, Runnable settled) {
-        return lane.submitOwnedCleanup(attempt, body, settled);
-    }
-
-    Map<String, Object> cleanup(ScopeResources.CleanupAttempt attempt, NativeActorHandle exactHandle) {
-        if (adopted != exactHandle || registration == null) throw unverified();
-        Map<String, Object> evidence = backend.close(exactHandle, attempt.permit());
-        if (evidence == null || !Boolean.TRUE.equals(evidence.get("native_cleanup_verified"))
-                || !Boolean.TRUE.equals(evidence.get("persisted_state_verified"))) throw unverified();
-        registration.confirmReleased(attempt.permit(), exactHandle);
-        cleanupEvidence = new LinkedHashMap<>(evidence);
-        return new LinkedHashMap<>(evidence);
-    }
-
-    Map<String, Object> rollbackInline() {
-        Map<String, Object> verified = cleanupEvidence;
-        if (verified != null) return new LinkedHashMap<>(verified);
-        NativeActorHandle exactHandle = adopted;
-        ScopeResources.CleanupAttempt attempt = cleanupAttempt();
-        AtomicReference<Map<String, Object>> outcome = new AtomicReference<>();
-        scope.runTracked(attempt.work(), () -> outcome.set(cleanup(attempt, exactHandle)));
-        verified = outcome.get();
-        if (verified == null) verified = cleanupEvidence;
-        if (verified == null) throw unverified();
-        return new LinkedHashMap<>(verified);
-    }
-
-    void closeLane() {
-        CharacterCommandLane current = lane;
-        if (current != null) current.close();
-        ownedExecutor.shutdown();
-        if (resourceReleased()) {
-            lane = null;
-            grant = null;
-            admission = null;
-            control = null;
-            registration = null;
-            adopted = null;
-            synchronized (ownershipMonitor) { originWorld = null; originChannel = null; }
+    Map<String, Object> observeOrigin() {
+        try {
+            Map<String, Object> facts = new LinkedHashMap<>(runtime.observeOrigin());
+            refreshDiagnostics();
+            return facts;
+        } catch (ObservationException known) { throw known; }
+        catch (ExecutionScope.Invalid | CharacterRuntime.Invalid changed) {
+            WorldEpoch.State current = WorldEpoch.snapshot();
+            if (!current.active()) throw new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_world_offline");
+            if (current.token() != runtime.acceptedEpoch()) throw new ObservationException(HttpStatus.GONE, "stale_actor_session");
+            throw new ObservationException(HttpStatus.CONFLICT, "actor_context_mismatch");
         }
     }
 
-    ExecutionScope.DrainResult awaitDrained(Duration timeout) { return scope.awaitDrained(timeout); }
+    boolean publishOpen(ExecutionScope.WorkHandle work, Runnable apply) {
+        return runtime.lifecycleScope().publishOnce(work, apply);
+    }
+
+    void beginDrain(Optional<ExecutionScope.WorldStopTicket> stop) {
+        runtime.beginClose(stop);
+        refreshDiagnostics();
+    }
+
+    ScopeResources.CleanupAttempt cleanupAttempt() {
+        ScopeResources.CleanupAttempt attempt = runtime.acquireOriginCleanup();
+        trackRoot(attempt.work());
+        return attempt;
+    }
+
+    CharacterCommandLane.Submission submitCleanup(ScopeResources.CleanupAttempt attempt, Runnable body, Runnable settled) {
+        return runtime.submitOriginCleanup(attempt, body, settled);
+    }
+
+    Map<String, Object> cleanup(ScopeResources.CleanupAttempt attempt, NativeActorHandle exactHandle) {
+        if (adoptedHandle() != exactHandle) throw unverified();
+        if (!runtime.releaseOrigin(attempt).released()) throw unverified();
+        return rememberCleanup();
+    }
+
+    Map<String, Object> rollbackInline() {
+        runtime.beginClose(Optional.empty());
+        AcceptanceRuntimeOrigin source = origin;
+        if (source == null) throw unverified();
+        Map<String, Object> proof = source.rollbackInline();
+        cleanupEvidence = new LinkedHashMap<>(proof);
+        refreshDiagnostics();
+        return new LinkedHashMap<>(proof);
+    }
+
+    void closeLane() { // Compatibility name: only the host can close its lane.
+        runtime.beginClose(Optional.empty());
+        finalized();
+    }
+
+    boolean finalized() {
+        boolean closed = runtime.tryFinalizeClose();
+        refreshDiagnostics();
+        if (closed) { origin = null; module = null; }
+        return closed;
+    }
+
+    ExecutionScope.DrainResult awaitDrained(Duration timeout) {
+        ExecutionScope.DrainResult result = runtime.awaitClosed(timeout);
+        finalized();
+        return result;
+    }
+
+    Map<String, Object> diagnostics() { return diagnostics; }
+    void refresh() { refreshDiagnostics(); }
+
+    private void trackRoot(ExecutionScope.WorkHandle work) {
+        work.completion().whenComplete((ignored, failure) -> finalized());
+    }
+
+    private Map<String, Object> rememberCleanup() {
+        AcceptanceRuntimeOrigin source = origin;
+        Map<String, Object> proof = source == null ? cleanupEvidence : source.cleanupEvidence();
+        if (proof == null || !runtime.originReleased()) throw unverified();
+        cleanupEvidence = new LinkedHashMap<>(proof);
+        return new LinkedHashMap<>(proof);
+    }
+
+    private McpControlModule requireModule() {
+        McpControlModule attached = module;
+        if (attached == null) throw new ObservationException(HttpStatus.CONFLICT, "actor_not_actable");
+        return attached;
+    }
+
+    private ObservationException controlFailure(CharacterRuntime.Invalid failure) {
+        WorldEpoch.State current = WorldEpoch.snapshot();
+        if (!current.active() || current.token() != runtime.acceptedEpoch()) {
+            return new ObservationException(HttpStatus.SERVICE_UNAVAILABLE, "actor_world_offline");
+        }
+        return new ObservationException(HttpStatus.CONFLICT, "actor_not_actable");
+    }
+
+    private void refreshDiagnostics() {
+        CharacterRuntime.Snapshot state = runtime.snapshot();
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("id", state.runtimeId()); info.put("epoch", state.epoch());
+        info.put("state", state.state().name()); info.put("origin_kind", state.originKind());
+        info.put("character_id", state.characterId());
+        Map<String, Object> attached = new LinkedHashMap<>();
+        attached.put("type_id", "mcp-control"); attached.put("instance_id", moduleInstance);
+        CharacterRuntime.ModuleSnapshot selected = state.modules().stream()
+                .filter(entry -> entry.instanceId().equals(moduleInstance)).findFirst().orElse(null);
+        if (selected != null) moduleGeneration = selected.generation();
+        attached.put("generation", moduleGeneration);
+        attached.put("state", selected == null ? moduleGeneration == 0 ? "NOT_ATTACHED" : "UNLOADED" : selected.state().name());
+        info.put("module", java.util.Collections.unmodifiableMap(attached));
+        info.put("lane", Map.of("pending", state.lane().pending(), "ordinary", state.lane().ordinary(),
+                "cleanup", state.lane().cleanup(), "closed", state.lane().closed()));
+        RuntimeEvents.Window window = runtime.events(0, 64);
+        List<Map<String, Object>> items = window.events().stream().map(event -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("sequence", event.sequence()); item.put("kind", event.kind().name());
+            item.put("runtime_id", event.runtimeId()); item.put("module_id", event.moduleId());
+            item.put("module_generation", event.moduleGeneration()); item.put("work_id", event.workId());
+            item.put("reason", event.reason()); item.put("outcome", event.outcome());
+            return java.util.Collections.unmodifiableMap(item);
+        }).toList();
+        info.put("events", Map.of("cursor_scope", "runtime_event_sequence", "items", items,
+                "next_cursor", window.nextCursor(), "cursor_expired", window.cursorExpired(), "truncated", window.truncated()));
+        diagnostics = java.util.Collections.unmodifiableMap(info);
+    }
 
     private static ObservationException unverified() {
         return new ObservationException(HttpStatus.CONFLICT, "native_actor_cleanup_unverified");

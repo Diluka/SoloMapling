@@ -107,6 +107,35 @@ class CharacterRuntimeTest {
     }
 
     @Test
+    void stopBetweenOpeningAdmissionAndSubmissionStillSettlesTheExactWorkWithoutEnteringItsBody() {
+        Fixture fixture = manual();
+        var work = fixture.runtime.acceptOpeningWork();
+        fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+        AtomicInteger bodies = new AtomicInteger(), settlements = new AtomicInteger();
+        assertEquals(CharacterRuntime.State.CLOSING, fixture.runtime.snapshot().state());
+        assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::acceptOpeningWork);
+        assertThrows(CharacterRuntime.Invalid.class, () -> fixture.runtime.submitOpening(
+                mock(ExecutionScope.WorkHandle.class), bodies::incrementAndGet, settlements::incrementAndGet));
+
+        var submission = assertDoesNotThrow(() -> fixture.runtime.submitOpening(
+                work, bodies::incrementAndGet, settlements::incrementAndGet));
+        assertEquals(CharacterCommandLane.Status.ENQUEUED, submission.status());
+        assertFalse(work.isSettled());
+        assertEquals(1, fixture.runtime.snapshot().lane().pending());
+        fixture.runQueued();
+
+        assertTrue(work.isSettled());
+        assertTrue(work.snapshot().skipped());
+        assertEquals(0, bodies.get());
+        assertEquals(1, settlements.get());
+        assertEquals(0, fixture.role.releases.get());
+        assertEquals(0, fixture.runtime.lifecycleScope().resources().snapshot().registeredTotal());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
+        assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+        assertTrue(fixture.executor.isShutdown());
+    }
+
+    @Test
     void independentModulesShareOneLaneAndAConflictingControlWaitsForItsActualOwnerToLeave() {
         Fixture fixture = opened();
         var movement = fixture.mount("movement", Set.of("movement"));
@@ -366,6 +395,73 @@ class CharacterRuntimeTest {
         assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
         assertEquals(1, fixture.role.releases.get());
         assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+    }
+
+    @Test
+    void lateFactoryResultRetainsItsStoppedReferenceAndUsesOnlyTheOriginalRootCleanupWindow() {
+        Fixture fixture = manual();
+        var work = fixture.runtime.acceptOpeningWork();
+        AtomicReference<TestRole> late = new AtomicReference<>();
+        fixture.runtime.submitOpening(work, () -> {
+            var origin = fixture.runtime.reserveOrigin(work);
+            var stop = ExecutionScope.beginWorldStop();
+            fixture.runtime.beginClose(Optional.of(stop));
+            TestRole result = new TestRole(WorldEpoch.snapshot().token());
+            late.set(result);
+            assertSame(stop.stoppedEpoch(), result.characterRef().epoch());
+            assertNotSame(fixture.runtime.acceptedEpoch(), result.characterRef().epoch());
+
+            origin.adopt(result);
+            assertEquals(1, fixture.runtime.lifecycleScope().resources().snapshot().attached());
+            assertEquals(0, fixture.runtime.lifecycleScope().resources().snapshot().pending());
+            assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::bindAdoptedOrigin);
+            assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::observeOrigin);
+            assertSame(stop.stoppedEpoch(), result.characterRef().epoch());
+            assertFalse(fixture.runtime.originReleased());
+
+            var cleanup = fixture.runtime.acquireOriginCleanup();
+            assertSame(fixture.runtime.lifecycleScope(), cleanup.work().scope());
+            assertSame(fixture.runtime.acceptedEpoch(), cleanup.work().acceptedEpoch());
+            fixture.runtime.lifecycleScope().runTracked(cleanup.work(), () -> fixture.runtime.releaseOrigin(cleanup));
+            assertTrue(fixture.runtime.originReleased());
+        }, () -> {});
+        fixture.runQueued();
+        assertTrue(work.isSettled());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(WAIT));
+        assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
+        assertEquals(1, late.get().releases.get());
+        assertFalse(late.get().online);
+        assertEquals(0, fixture.role.releases.get());
+    }
+
+    @Test
+    void lateFactoryResultAfterRestartRemainsOwnedButCannotBindOrBorrowTheNewWorldsCleanupWindow() {
+        Fixture fixture = manual();
+        var work = fixture.runtime.acceptOpeningWork();
+        AtomicReference<TestRole> late = new AtomicReference<>();
+        fixture.runtime.submitOpening(work, () -> {
+            var origin = fixture.runtime.reserveOrigin(work);
+            fixture.runtime.beginClose(Optional.of(ExecutionScope.beginWorldStop()));
+            WorldEpoch.onWorldStarted();
+            TestRole result = new TestRole(WorldEpoch.snapshot().token());
+            late.set(result);
+
+            origin.adopt(result);
+            assertEquals(1, fixture.runtime.lifecycleScope().resources().snapshot().attached());
+            assertEquals(0, fixture.runtime.lifecycleScope().resources().snapshot().pending());
+            assertNotSame(fixture.runtime.acceptedEpoch(), result.characterRef().epoch());
+            assertThrows(CharacterRuntime.Invalid.class, fixture.runtime::bindAdoptedOrigin);
+            assertThrows(RuntimeException.class, fixture.runtime::acquireOriginCleanup);
+            assertThrows(RuntimeException.class, origin::confirmAbsent);
+            assertFalse(fixture.runtime.originReleased());
+        }, () -> {});
+        fixture.runQueued();
+        assertTrue(work.isSettled());
+        assertEquals(1, fixture.runtime.lifecycleScope().resources().snapshot().outstanding());
+        assertNotEquals(ExecutionScope.DrainResult.DRAINED, fixture.runtime.awaitClosed(Duration.ZERO));
+        assertEquals(CharacterRuntime.State.CLOSING, fixture.runtime.snapshot().state());
+        assertEquals(0, late.get().releases.get());
+        assertTrue(late.get().online);
     }
 
     @Test

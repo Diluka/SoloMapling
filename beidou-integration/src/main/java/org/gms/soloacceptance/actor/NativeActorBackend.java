@@ -393,6 +393,9 @@ public final class NativeActorBackend {
         return Collections.unmodifiableMap(response);
     }
 
+    /** Trusted MCP origin adapter retains the same ordinary-role policy as existing actions. */
+    void requireCurrentRole(NativeActorHandle handle) { requireOrdinaryActor(handle); }
+
     private void requireOrdinaryActor(NativeActorHandle handle) {
         if (!isCurrent(handle) || handle.character().gmLevel() != 0 || BotRegistry.isBot(handle.character())) {
             throw conflict("actor_session_stale");

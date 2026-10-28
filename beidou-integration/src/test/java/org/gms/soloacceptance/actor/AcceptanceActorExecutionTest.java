@@ -19,6 +19,7 @@ import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.runtime.CharacterRuntime;
 
 import java.time.Duration;
 import java.util.Map;
@@ -44,6 +45,7 @@ class AcceptanceActorExecutionTest {
     private Character character;
     private ThreadPoolExecutor executor;
     private AcceptanceActorExecution execution;
+    private boolean expectedUnreleasedOrigin;
 
     @BeforeEach
     void oneSessionAndOneRealSerialQueue() {
@@ -54,6 +56,7 @@ class AcceptanceActorExecutionTest {
         channel = mock(Channel.class);
         client = mock(AcceptanceClient.class);
         character = mock(Character.class);
+        when(character.getId()).thenReturn(73);
         handle = handleAtCurrentEpoch();
         when(backend.isCurrent(any())).thenReturn(true);
         doAnswer(invocation -> {
@@ -65,19 +68,43 @@ class AcceptanceActorExecutionTest {
         executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
                 Thread.ofVirtual().uncaughtExceptionHandler((thread, failure) -> { }).factory(),
                 new ThreadPoolExecutor.AbortPolicy());
-        execution = new AcceptanceActorExecution(backend, new Object(), WorldEpoch.snapshot().token(), executor);
+        execution = new AcceptanceActorExecution(backend, "helper-module", WorldEpoch.snapshot().token(), executor);
     }
 
     @AfterEach
-    void stopOnlyThisFixtureWithoutInventingResourceRelease() throws InterruptedException {
-        execution.closeLane();
-        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
-        WorldEpoch.onWorldStopping();
+    void stopOnlyThisFixtureWithoutInventingResourceRelease() throws Exception {
+        try {
+            execution.beginDrain(ExecutionScope.tryBeginWorldStop());
+            if (!execution.resourceReleased() && execution.adoptedHandle() != null) {
+                try {
+                    NativeActorHandle exactHandle = execution.adoptedHandle();
+                    ScopeResources.CleanupAttempt cleanup = execution.cleanupAttempt();
+                    execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, exactHandle), () -> { });
+                    await(cleanup.work());
+                } catch (RuntimeException unavailable) {
+                    if (!expectedUnreleasedOrigin) throw unavailable;
+                }
+            }
+            execution.closeLane();
+            execution.finalized();
+        } finally {
+            if (!executor.isShutdown()) {
+                // Unknown native ownership remains visible. Only terminate this completed test's private executor;
+                // this does not prove root close or erase its outstanding resource registration.
+                assertEquals(CharacterRuntime.State.CLOSING, execution.runtime().snapshot().state());
+                assertFalse(execution.runtime().snapshot().lane().closed());
+                assertTrue(executor.getQueue().isEmpty());
+                assertEquals(0, execution.scope().snapshot().acceptedWork());
+                executor.shutdown();
+            }
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+            WorldEpoch.onWorldStopping();
+        }
     }
 
     @Test
     void pendingRegistrationPrecedesNativeCreationAndAnAdoptedFailureRetainsTheExactResource() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         AtomicReference<NativeActorHandle> atFailure = new AtomicReference<>();
         AtomicInteger settled = new AtomicInteger();
         assertEquals(CharacterCommandLane.Status.ENQUEUED, execution.submitOpen(open, () -> {
@@ -105,7 +132,7 @@ class AcceptanceActorExecutionTest {
 
     @Test
     void inlineRollbackRunsOnTheOpenBodyWithoutWaitingBehindItselfAndCachesOnlyVerifiedCleanup() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         AtomicInteger settled = new AtomicInteger();
         AtomicReference<Thread> openThread = new AtomicReference<>();
         doAnswer(invocation -> {
@@ -133,7 +160,7 @@ class AcceptanceActorExecutionTest {
 
     @Test
     void cleanupNeedsBothNativeProofsAndReusesAnInflightAttemptBeforeAllowingAnExplicitRetry() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         execution.submitOpen(open, () -> adopt(open, handle), () -> { });
         await(open);
         execution.beginDrain(Optional.empty());
@@ -178,7 +205,7 @@ class AcceptanceActorExecutionTest {
 
     @Test
     void aLateOpenResultUsesItsAcceptedStopWindowEvenWhenTheHandleCapturedTheStoppedEpoch() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
         AtomicReference<NativeActorHandle> late = new AtomicReference<>();
@@ -211,7 +238,8 @@ class AcceptanceActorExecutionTest {
 
     @Test
     void aNewWorldCannotRenewAnOldLateResultsCleanupPermitOrPublishItsActor() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        expectedUnreleasedOrigin = true;
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
         AtomicReference<NativeActorHandle> late = new AtomicReference<>();
@@ -244,7 +272,7 @@ class AcceptanceActorExecutionTest {
 
     @Test
     void submittingTheSameInternalWorkCannotReplaceItsBodyOrSettlementHook() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
         AtomicInteger bodies = new AtomicInteger();
@@ -271,7 +299,7 @@ class AcceptanceActorExecutionTest {
 
     @Test
     void bodyExitAndResourceAbsenceDoNotProveDrainWhileItsSettlementHookStillRuns() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         CountDownLatch settling = new CountDownLatch(1);
         CountDownLatch complete = new CountDownLatch(1);
         AtomicInteger settlements = new AtomicInteger();
@@ -306,6 +334,8 @@ class AcceptanceActorExecutionTest {
             awaitLatch(release);
         }, () -> { });
         ExecutionScope.WorkHandle chat = execution.acceptWork();
+        assertSame(execution.moduleScope(), chat.scope());
+        assertNotSame(execution.scope(), chat.scope());
         AtomicInteger preflightCalls = new AtomicInteger();
         NativeActionService.ActionHandle action;
         try {
@@ -345,6 +375,7 @@ class AcceptanceActorExecutionTest {
         assertTrue(chat.snapshot().queueDeparted());
         assertTrue(chat.snapshot().carrierSettled());
         assertEquals(ExecutionScope.BodyState.NOT_STARTED, chat.snapshot().bodyState());
+        execution.recordResult(chat, result);
         assertFalse(execution.resourceReleased(), "chat cancellation cannot close the actor");
         verify(backend, times(1)).prepareChat(eq(handle), any(), any(), eq(chat), any());
         verify(backend, times(2)).submitChat(action);
@@ -361,6 +392,8 @@ class AcceptanceActorExecutionTest {
         bindOwnedActor();
         wireRealChatService();
         ExecutionScope.WorkHandle chat = execution.acceptWork();
+        assertSame(execution.moduleScope(), chat.scope());
+        assertNotSame(execution.scope(), chat.scope());
         CountDownLatch preflightEntered = new CountDownLatch(1);
         CountDownLatch releasePreflight = new CountDownLatch(1);
         CountDownLatch resultCallbackEntered = new CountDownLatch(1);
@@ -411,8 +444,39 @@ class AcceptanceActorExecutionTest {
         verify(backend).close(eq(handle), any());
     }
 
+    @Test
+    void moduleUnloadKeepsTheSameOriginObservableAndRootCloseRemainsIndependentlyAvailable() throws Exception {
+        bindOwnedActor();
+        doReturn(Map.of("character_id", 73, "level", 1)).when(backend).snapshot(handle);
+        var context = execution.moduleContext();
+        assertNotSame(execution.scope(), context.scope());
+        assertEquals(73, execution.observeOrigin().get("character_id"));
+        assertSame(handle, execution.adoptedHandle());
+
+        CharacterRuntime.ModuleStop stopped = execution.runtime().stop(context.reference(), CharacterRuntime.StopMode.UNLOAD);
+        assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
+        assertEquals(CharacterRuntime.State.BOUND, execution.runtime().snapshot().state());
+        assertTrue(execution.runtime().snapshot().modules().isEmpty());
+        assertFalse(execution.resourceReleased());
+        assertFalse(executor.isShutdown());
+        verify(backend, never()).close(any(), any());
+        assertThrows(CharacterRuntime.Invalid.class, context::acceptWork);
+
+        doReturn(Map.of("character_id", 73, "level", 2)).when(backend).snapshot(handle);
+        assertEquals(2, execution.observeOrigin().get("level"), "origin projection must remain fresh after module unload");
+        execution.beginDrain(Optional.empty());
+        ScopeResources.CleanupAttempt cleanup = execution.cleanupAttempt();
+        execution.submitCleanup(cleanup, () -> execution.cleanup(cleanup, handle), () -> { });
+        await(cleanup.work());
+        assertEquals(ExecutionScope.DrainResult.DRAINED, execution.awaitDrained(Duration.ofSeconds(5)));
+        assertTrue(execution.finalized());
+        assertEquals(CharacterRuntime.State.CLOSED, execution.runtime().snapshot().state());
+        assertTrue(execution.resourceReleased());
+        verify(backend).close(eq(handle), any());
+    }
+
     private void bindOwnedActor() throws Exception {
-        ExecutionScope.WorkHandle open = execution.acceptWork();
+        ExecutionScope.WorkHandle open = execution.acceptOpeningWork();
         execution.submitOpen(open, () -> {
             adopt(open, handle);
             execution.bindActor(handle);

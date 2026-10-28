@@ -1,0 +1,58 @@
+package org.gms.soloacceptance.actor;
+
+import soloMapling.game.action.NativeActionResult;
+import soloMapling.game.execution.CharacterCommandLane;
+import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.RuntimeModule;
+
+import java.util.Objects;
+import java.util.Set;
+
+/** MCP controls consume a host-owned context; role lifetime and execution accounting stay with the host. */
+public final class McpControlModule implements RuntimeModule {
+    private final Spec spec;
+    private volatile CharacterRuntime.ModuleContext context;
+
+    public McpControlModule(String instanceId) {
+        spec = new Spec("mcp-control", instanceId, Set.of("chat", "interaction"),
+                new ExecutionScope.Limits(16, 0, 16, 0));
+    }
+
+    public Spec spec() { return spec; }
+
+    @Override
+    public void onActivated(CharacterRuntime.ModuleContext context) {
+        this.context = Objects.requireNonNull(context);
+    }
+
+    @Override
+    public void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) {
+        // The host revokes and drains this module. Existing CM and the native role belong to the root.
+    }
+
+    /** Retained after stopping for factual results; each ordinary context operation checks host authority. */
+    public CharacterRuntime.ModuleContext context() {
+        CharacterRuntime.ModuleContext captured = context;
+        if (captured == null) throw new CharacterRuntime.Invalid("module_not_active");
+        return captured;
+    }
+
+    public ExecutionScope.WorkHandle acceptWork() { return context().acceptWork(); }
+
+    public CharacterCommandLane.Submission submitInteraction(ExecutionScope.WorkHandle work, Runnable preflight,
+                                                              Runnable body, Runnable settled) {
+        return context().submit("interaction", work, preflight, body, settled);
+    }
+
+    public <T> T prepareChat(ExecutionScope.WorkHandle work, Runnable preflight,
+                             CharacterRuntime.NativePreparation<T> preparation) {
+        return context().prepareNative("chat", work, preflight, preparation);
+    }
+
+    public void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {
+        context().recordResult(work, result);
+    }
+
+    public CharacterRuntime.ModuleRef reference() { return context().reference(); }
+}
