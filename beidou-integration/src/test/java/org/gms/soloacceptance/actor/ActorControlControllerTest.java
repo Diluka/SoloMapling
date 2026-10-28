@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.gms.model.dto.SubmitBody;
 import org.gms.soloacceptance.ObservationException;
+import org.gms.soloacceptance.AcceptanceAccess;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -20,7 +24,10 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import soloMapling.beidou.CharacterTestContext;
 
 import java.io.ByteArrayInputStream;
@@ -28,6 +35,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -77,17 +85,21 @@ class ActorControlControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.act(null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
-                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
+                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100, 0)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.cancel("op", null)).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.scriptRun(null)).status());
+        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ObservationException.class,
+                () -> controller.scriptStream(null, 0, mock(HttpServletRequest.class), mock(HttpServletResponse.class))).status());
         assertEquals(HttpStatus.UNAUTHORIZED,
                 assertThrows(ObservationException.class, () -> controller.scriptCancel(null)).status());
 
         authenticate("reader", "ROLE_USER");
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ObservationException.class,
+                () -> controller.scriptStream(null, 0, mock(HttpServletRequest.class), mock(HttpServletResponse.class))).status());
         assertEquals(HttpStatus.FORBIDDEN,
-                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100)).status());
+                assertThrows(ObservationException.class, () -> controller.operation("op", 0, 100, 0)).status());
         assertEquals(HttpStatus.FORBIDDEN,
                 assertThrows(ObservationException.class, () -> controller.observe(null)).status());
         assertEquals(HttpStatus.FORBIDDEN,
@@ -116,8 +128,8 @@ class ActorControlControllerTest {
         when(service.close("operator-a", "close-request", closeData)).thenReturn(Map.of("status", "QUEUED"));
         assertEquals("close-request", controller.close(new SubmitBody<>("close-request", closeData)).getResponseId());
 
-        when(service.get("operator-a", "op-id", 12, 25)).thenReturn(Map.of("status", "RUNNING"));
-        assertEquals("RUNNING", controller.operation("op-id", 12, 25).getData().get("status"));
+        when(service.get("operator-a", "op-id", 12, 25, 0)).thenReturn(Map.of("status", "RUNNING"));
+        assertEquals("RUNNING", controller.operation("op-id", 12, 25, 0).getData().get("status"));
 
         when(service.cancel("operator-a", "cancel-request", "op-id")).thenReturn(Map.of("status", "CANCEL_REQUESTED"));
         var cancelled = controller.cancel("op-id", new SubmitBody<>("cancel-request", null));
@@ -125,7 +137,7 @@ class ActorControlControllerTest {
         assertEquals("CANCEL_REQUESTED", cancelled.getData().get("status"));
         verify(service).open("operator-a", "open-request", openData);
         verify(service).close("operator-a", "close-request", closeData);
-        verify(service).get("operator-a", "op-id", 12, 25);
+        verify(service).get("operator-a", "op-id", 12, 25, 0);
         verify(service).cancel("operator-a", "cancel-request", "op-id");
     }
 
@@ -464,12 +476,42 @@ class ActorControlControllerTest {
                 null, List.of(), "cm.getPlayer().getName()", Map.of(), 1000L);
         when(service.scriptRun("script-admin", "script-id", script)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
         assertEquals("SUCCEEDED", controller.scriptRun(new SubmitBody<>("script-id", script)).getData().get("status"));
+        StreamingResponseBody stream = output -> { };
+        when(service.scriptStream("script-admin", "script-id", script, 3)).thenReturn(stream);
+        var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3,
+                mock(HttpServletRequest.class), mock(HttpServletResponse.class));
+        assertSame(stream, streamed.getBody());
+        assertEquals("application/x-ndjson", streamed.getHeaders().getContentType().toString());
         var cancel = new ActorScriptCancelRequest("session", 7L, "script-id", script.kind(), script.operation(),
                 script.contextId(), script.options(), script.entry(), script.args(), script.source(), script.parameters(), script.timeoutMs());
         when(service.scriptCancel("script-admin", "cancel-id", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
         assertEquals("cancel-id", controller.scriptCancel(new SubmitBody<>("cancel-id", cancel)).getResponseId());
         verify(service).scriptRun("script-admin", "script-id", script);
+        verify(service).scriptStream("script-admin", "script-id", script, 3);
         verify(service).scriptCancel("script-admin", "cancel-id", cancel);
+    }
+
+    @Test
+    void streamCompletionRedispatchRetainsTheAlreadyAuthorizedRequestIdentity() throws Exception {
+        ActorControlService service = mock(ActorControlService.class);
+        ActorControlController controller = new ActorControlController(service);
+        var invocation = new ActorScriptRequest("session", 7L, "npc", "start", null,
+                Map.of("npc_id", 1032110), null, List.of(), "print('stream')", Map.of(), 1000L);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        Map<String, Object> attributes = new HashMap<>();
+        doAnswer(call -> { attributes.put(call.getArgument(0), call.getArgument(1)); return null; })
+                .when(request).setAttribute(anyString(), any());
+        when(request.getAttribute(anyString())).thenAnswer(call -> attributes.get(call.getArgument(0)));
+        when(request.getDispatcherType()).thenReturn(DispatcherType.ASYNC);
+        authenticate("stream-admin", "ROLE_ADMIN");
+        when(service.scriptStream("stream-admin", "stream-id", invocation, 0)).thenReturn(output -> { });
+        controller.scriptStream(new SubmitBody<>("stream-id", invocation), 0, request, response);
+
+        SecurityContextHolder.clearContext();
+        new SecurityContextHolderFilter(new RequestAttributeSecurityContextRepository())
+                .doFilter(request, response, (redispatched, streamed) -> assertEquals("stream-admin", AcceptanceAccess.requireAdmin()));
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
     }
 
     @Test

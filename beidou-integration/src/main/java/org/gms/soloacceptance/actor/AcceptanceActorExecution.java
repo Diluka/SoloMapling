@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 /** MCP consumes one host. Native ownership, scopes, grants, the lane and its executor belong to that host. */
 final class AcceptanceActorExecution {
@@ -144,9 +145,14 @@ final class AcceptanceActorExecution {
     }
 
     NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request) {
+        return runNativeScript(work, request, ignored -> { });
+    }
+
+    NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
+                                        Consumer<NativeScriptExecution.Output> output) {
         NativeActorHandle exactHandle = adoptedHandle();
         if (exactHandle == null) throw new ObservationException(HttpStatus.CONFLICT, "actor_not_actable");
-        try { return requireModule().runNativeScript(work, request, backend.nativeScriptAdapter(exactHandle, request.kind())); }
+        try { return requireModule().runNativeScript(work, request, backend.nativeScriptAdapter(exactHandle, request.kind()), output); }
         catch (CharacterRuntime.Invalid failure) { throw controlFailure(failure); }
     }
 

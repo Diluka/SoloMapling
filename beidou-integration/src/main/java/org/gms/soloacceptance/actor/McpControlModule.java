@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /** MCP controls consume a host-owned context; role lifetime and execution accounting stay with the host. */
 public final class McpControlModule implements RuntimeModule {
@@ -54,6 +55,12 @@ public final class McpControlModule implements RuntimeModule {
     public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                   NativeScriptAdapter adapter) {
         return context().runNativeScript(work, request, adapter);
+    }
+
+    public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
+                                                  NativeScriptAdapter adapter,
+                                                  Consumer<NativeScriptExecution.Output> output) {
+        return context().runNativeScript(work, request, adapter, output);
     }
 
     public List<Map<String, Object>> nativeScriptContexts() { return context().nativeScriptContexts(); }

@@ -11,8 +11,8 @@ from mcp import Client
 from solo_acceptance_mcp.server import build_server
 
 from tests import test_chat_protocol as chat_protocol
-from tests.helpers import PASSWORD, TOKEN
-from tests.script_fixture import CANCEL_PATH, RUN_PATH, SCRIPT_ARGS, ScriptStub, script_operation
+from tests.helpers import PASSWORD, TOKEN, envelope
+from tests.script_fixture import CANCEL_PATH, RUN_PATH, STREAM_PATH, SCRIPT_ARGS, ScriptStub, script_operation
 
 
 NATIVE_ARGS = {**SCRIPT_ARGS, "request_id": "native-script:fixture-1", "source": "",
@@ -29,6 +29,85 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
+
+    async def test_stdio_progress_receives_output_before_completion_with_unicode_and_channels(self) -> None:
+        release = Event()
+        observed = asyncio.Event()
+        notifications = []
+        operation = script_operation(NATIVE_ARGS["request_id"])
+        operation["result"].update(stdout="开始😀\n", stderr="B中文\n")
+        association = {"request_id": NATIVE_ARGS["request_id"], "operation_id": operation["operation_id"]}
+
+        def stream(request):
+            yield {"type": "started", **association}
+            first = {"type": "output", **association, "seq": 1, "channel": "stdout",
+                     "text": "开始😀\n", "output_truncated": False}
+            encoded = (json.dumps(first, ensure_ascii=False) + "\n").encode()
+            boundary = encoded.index("😀".encode()) + 1
+            yield encoded[:boundary]
+            yield encoded[boundary:]
+            release.wait(4)
+            yield {"type": "output", **association, "seq": 2, "channel": "stderr",
+                   "text": "B中文\n", "output_truncated": False}
+            yield {"type": "result", "operation": operation}
+
+        async def progress(value, total, message):
+            event = json.loads(message)
+            notifications.append((value, event))
+            if event["type"] == "output" and event["seq"] == 1:
+                observed.set()
+
+        self.stub.stream_responder = stream
+        async with self.stdio_client() as client:
+            running = asyncio.create_task(client.call_tool("script_run", deepcopy(NATIVE_ARGS), progress_callback=progress))
+            try:
+                await asyncio.wait_for(observed.wait(), 4)
+                self.assertFalse(running.done(), "首段输出已到达时，脚本应仍在等待后续执行。")
+                self.assertEqual("开始😀\n", notifications[-1][1]["text"])
+            finally:
+                release.set()
+            result = await asyncio.wait_for(running, 4)
+        self.assertEqual([1, 2, 3], [item[0] for item in notifications])
+        self.assertEqual(["stdout", "stderr"], [event["channel"] for _, event in notifications if event["type"] == "output"])
+        self.assertEqual(operation, result.structured_content)
+
+    async def test_same_request_recovers_output_from_cursor_and_queries_its_window(self) -> None:
+        notifications = []
+        arguments = {**NATIVE_ARGS, "since_output": 4}
+        operation = script_operation(NATIVE_ARGS["request_id"])
+        association = {"request_id": NATIVE_ARGS["request_id"], "operation_id": operation["operation_id"]}
+        output = {"type": "output", **association, "seq": 7, "channel": "stdout",
+                  "text": "恢复后的输出\n", "output_truncated": True}
+        operation["script_output"] = {"items": [output], "next_cursor": 7, "oldest_cursor": 7,
+                                      "latest_cursor": 7, "cursor_expired": True, "output_truncated": True}
+
+        def stream(request):
+            yield {"type": "started", **association}
+            yield {"type": "gap", **association, "oldest_cursor": 7, "latest_cursor": 7}
+            yield output
+            yield {"type": "result", "operation": operation}
+
+        def respond(request):
+            if request["path"].startswith("/solo/acceptance/v1/operation/"):
+                return 200, envelope(operation)
+            return self.stub.default_response(request)
+
+        async def progress(value, total, message):
+            notifications.append(json.loads(message))
+
+        self.stub.stream_responder = stream
+        self.stub.responder = respond
+        async with self.stdio_client() as client:
+            result = await client.call_tool("script_run", arguments, progress_callback=progress)
+            queried = await client.call_tool("operation_get", {"operation_id": operation["operation_id"],
+                                                               "since_output": 4})
+        self.assertEqual(["started", "gap", "output"], [event["type"] for event in notifications])
+        self.assertEqual(operation, result.structured_content)
+        self.assertEqual(operation["script_output"], queried.structured_content["script_output"])
+        request = next(request for request in self.stub.requests if request["path"].startswith(STREAM_PATH))
+        self.assertTrue(request["path"].endswith("?since_output=4"))
+        self.assertNotIn("since_output", request["body"]["data"])
+        self.assertEqual(NATIVE_ARGS["request_id"], request["body"]["requestId"])
 
     async def test_flat_schema_requires_kind_operation_and_has_no_environment_parameter(self) -> None:
         async with self.stdio_client() as client:
