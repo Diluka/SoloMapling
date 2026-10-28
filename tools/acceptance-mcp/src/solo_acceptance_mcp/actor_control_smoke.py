@@ -123,16 +123,22 @@ class ActorControlAcceptance(NpcCenterAcceptance):
         check(replay.get("operation_id") == original["operation_id"], "MODULE_DUPLICATE_CREATED_OPERATION")
         check(self.control_result(replay, session, args) == original["result"], "MODULE_DUPLICATE_CHANGED_RESULT")
 
+    def session_runtime(self, value: dict[str, Any] | None, state: str, reason: str) -> dict[str, Any]:
+        session = value.get("session") if isinstance(value, dict) else None
+        runtime = session.get("runtime") if isinstance(session, dict) else None
+        lane = runtime.get("lane") if isinstance(runtime, dict) else None
+        check(isinstance(runtime, dict) and isinstance(runtime.get("id"), str) and bool(runtime["id"].strip())
+              and runtime.get("epoch") == self.generation and runtime.get("state") == state
+              and isinstance(lane, dict) and lane.get("closed") is (state == "CLOSED"), reason)
+        return runtime
+
     def closed(self, value: dict[str, Any]) -> None:
         super().closed(value)
         check(value.get("result", {}).get("native_dialogue_cleanup_verified") is True,
               "MODULE_CLOSE_DIALOGUE_UNVERIFIED")
-        runtime = value["session"].get("runtime")
-        expected_runtime = None if self.active is None else self.active["session"]["actor"].get("runtime")
-        check(isinstance(expected_runtime, dict) and isinstance(runtime, dict)
-              and runtime.get("id") == expected_runtime.get("id") and runtime.get("epoch") == self.generation
-              and runtime.get("state") == "CLOSED"
-              and runtime.get("lane", {}).get("closed") is True, "MODULE_ROOT_CLOSE_UNVERIFIED")
+        expected_runtime = self.session_runtime(self.active, "BOUND", "MODULE_ROOT_CLOSE_UNVERIFIED")
+        runtime = self.session_runtime(value, "CLOSED", "MODULE_ROOT_CLOSE_UNVERIFIED")
+        check(runtime["id"] == expected_runtime["id"], "MODULE_ROOT_CLOSE_UNVERIFIED")
 
     async def run(self, client: Client) -> None:
         self.client = client
@@ -213,8 +219,9 @@ class ActorControlAcceptance(NpcCenterAcceptance):
         reopened = deepcopy(self.opened_actor(second))
         self.unchanged(reopened, position=False)
         self.dialogue(reopened, False)
+        reopened_runtime = self.session_runtime(second, "BOUND", "MODULE_REOPEN_HOST_UNVERIFIED")
         check(second["session_id"] != first["session_id"]
-              and reopened.get("runtime", {}).get("id") != self.host_id, "MODULE_REOPEN_REUSED_CLOSED_HOST")
+              and reopened_runtime["id"] != self.host_id, "MODULE_REOPEN_REUSED_CLOSED_HOST")
         self.report["reopened_actor"] = reopened
         self.report["second_close"] = (await self.close(self.prefix + ":module-close2"))["result"]
         self.report.update(module_control_verified=True, actor_control_verified=True,

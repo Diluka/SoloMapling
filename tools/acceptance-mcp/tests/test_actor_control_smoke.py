@@ -35,7 +35,8 @@ class ActorControlStub(NpcCenterStub):
                               "generation": 2, "state": "ACTIVE"},
                    "lane": {"closed": False, "pending": 0, "ordinary": 0, "cleanup": 0}}
         self.runtimes["session-" + str(number)] = runtime
-        actor["runtime"] = runtime
+        if self.mode == "reopen_reuses_host" and number > 1:
+            runtime["id"] = self.runtimes["session-1"]["id"]
         return actor
 
     def response(self, operation: dict, *, queued: bool = False) -> dict:
@@ -43,6 +44,18 @@ class ActorControlStub(NpcCenterStub):
         runtime = self.runtimes.get(result["session_id"])
         if runtime is not None:
             result["session"]["runtime"] = deepcopy(runtime)
+        # OPEN/operation responses expose the runtime at session level; only actor
+        # observation adds actor.runtime, matching the real HTTP response layout.
+        if operation["kind"] == "CLOSE":
+            if self.mode == "close_missing_runtime":
+                result["session"].pop("runtime", None)
+            elif self.mode == "close_missing_host_id":
+                result["session"]["runtime"].pop("id", None)
+        elif operation["kind"] == "OPEN" and result["session_id"] != "session-1":
+            if self.mode == "reopen_missing_runtime":
+                result["session"].pop("runtime", None)
+            elif self.mode == "reopen_empty_host_id":
+                result["session"]["runtime"]["id"] = ""
         return result
 
     def default_response(self, request: dict) -> tuple[int, object]:
@@ -57,6 +70,12 @@ class ActorControlStub(NpcCenterStub):
                 caps["actor_control"].pop("module_control")
             elif self.mode == "bad_capability":
                 caps["actor_control"]["module_control"]["pause_preserves_native_dialogue"] = False
+            return status, payload
+        if path == "/solo/acceptance/v1/actor/observe":
+            status, payload = super().default_response(request)
+            if status == 200:
+                session_id = request["body"]["data"]["session_id"]
+                payload["data"]["actor"]["runtime"] = deepcopy(self.runtimes[session_id])
             return status, payload
         if path == "/solo/acceptance/v1/actor/act":
             session_id = request["body"]["data"]["session_id"]
@@ -150,6 +169,8 @@ class ActorControlSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report["module_control_verified"])
         self.assertTrue(report["same_host_verified"])
         self.assertTrue(report["root_closed_verified"])
+        self.assertNotIn("runtime", report["first_actor"])
+        self.assertNotIn("runtime", report["reopened_actor"])
         self.assertEqual(["pause", "resume"], stub.control_transitions)
         self.assertEqual(["chat", "npc_cancel"], stub.paused_actions)
         self.assertEqual(1, len(stub.broadcasts))
@@ -178,12 +199,25 @@ class ActorControlSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("MODULE_SOURCE_MISMATCH", report["failure"])
         self.assertEqual(0, stub.creations)
 
-    async def test_root_close_does_not_accept_a_foreign_closed_host(self):
-        stub, report = await self.run_fixture("close_wrong_runtime")
-        self.assertFalse(report["passed"])
-        self.assertEqual("MODULE_ROOT_CLOSE_UNVERIFIED", report["failure"])
-        self.assertFalse(report["cleanup"]["verified"])
-        self.assertEqual(1, len(stub.close_requests))
+    async def test_root_close_does_not_accept_a_foreign_or_missing_closed_host(self):
+        for mode in ["close_wrong_runtime", "close_missing_runtime", "close_missing_host_id"]:
+            with self.subTest(mode=mode):
+                stub, report = await self.run_fixture(mode)
+                self.assertFalse(report["passed"])
+                self.assertEqual("MODULE_ROOT_CLOSE_UNVERIFIED", report["failure"])
+                self.assertFalse(report["cleanup"]["verified"])
+                self.assertEqual(1, len(stub.close_requests))
+
+    async def test_reopen_requires_a_present_nonempty_and_different_session_host(self):
+        for mode, reason in [("reopen_missing_runtime", "MODULE_REOPEN_HOST_UNVERIFIED"),
+                             ("reopen_empty_host_id", "MODULE_REOPEN_HOST_UNVERIFIED"),
+                             ("reopen_reuses_host", "MODULE_REOPEN_REUSED_CLOSED_HOST")]:
+            with self.subTest(mode=mode):
+                stub, report = await self.run_fixture(mode)
+                self.assertFalse(report["passed"])
+                self.assertEqual(reason, report["failure"])
+                self.assertFalse(report["module_control_verified"])
+                self.assertEqual(2, stub.creations)
 
     async def test_incomplete_pause_wrong_state_or_changed_dialogue_cannot_be_reported_as_passed(self):
         for mode, reason in [("pause_not_drained", "MODULE_PAUSE_NOT_DRAINED"),
