@@ -176,7 +176,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": SESSION_ID, "expected_generation": 1, "request_id": "stdio-close",
                 })
                 closed = await client.call_tool("operation_get", {"operation_id": CLOSE_ID})
-        self.assertEqual(TOOLS | {"game_act"}, names)
+        self.assertEqual(TOOLS | {"game_act", "game_command_help", "game_command"}, names)
         self.assertTrue(all(not result.is_error for result in [opened, online, closing, closed]))
         self.assertEqual("QUEUED", opened.structured_content["status"])
         self.assertEqual(42, online.structured_content["session"]["actor"]["character_id"])
