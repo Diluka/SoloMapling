@@ -1,92 +1,88 @@
-# 运行体脚本执行：纯脚本基础
+# 运行体中的北斗脚本执行
 
-本页描述 [#199](https://github.com/Diluka/SoloMapling/issues/199) 与 [#204](https://github.com/Diluka/SoloMapling/issues/204) 的本轮源码基础切片。源码测试、CI、隔离 MCP 和实际部署结果由 Issue 分别留证，不能由本页推导部署已完成。
+`script_run` 只执行北斗脚本。调用方直接指定 `kind`、`operation` 和相应上下文参数，由现有角色运行体加载原脚本、绑定真实对象并管理执行。独立纯 JavaScript 模式及外层 `environment` 参数已移除；只有 `source` 的旧请求不会自动选择环境。
 
-本片让已有角色上的 MCP 调用执行纯 JavaScript、传入 JSON 参数、收集语言输出并取得可序列化结果。本文约定适用于未传 `environment` 的纯脚本模式；[#216 北斗脚本环境](beidou-script-environment.md) 另按真实入口绑定原生对象并保留必要上下文。纯函数注册目录为空，现有 `game_act` 保留；动作迁移、行为模块脚本和共享观察/事件目录另行推进。
+本文为当前源码的公共执行契约。五类对象的来源、原入口和连续调用示例见[北斗脚本上下文](beidou-script-environment.md)；MCP 使用流程见[工具说明](../../tools/acceptance-mcp/README.md#脚本基础调用)。源码测试、CI、隔离验收与实际部署结果按对应 Issue 分别记录，不能仅由本文推导部署状态。
 
-## 归属与执行
+## 请求
 
-`CharacterRuntime.ModuleContext.runScript(work, request)` 消费调用模块已经接纳的原 `ExecutionScope.WorkHandle`。角色、世界来源与模块执行代次仍由该 Context 核验，不另建角色宿主、scope 或工作账本。
+先正常打开专用角色并保存实际 `session_id/session_generation`，后者作为 `expected_generation`。脚本请求继续核验管理员鉴权、owner、角色来源、世界及模块执行代次，不接受任意角色 ID。
 
-`ScriptExecution` 使用运行体管理的执行载体运行 guest，并等待 guest 真正退出。纯计算、解析和结果转换不进入角色短命令 lane；本模式没有原生游戏调用，也不授予脚本新的原生入口。需要真实北斗对象时显式使用原生环境，角色来源和工作归属仍由同一运行体管理。
-
-纯脚本模式每次调用创建独立 GraalJS Context，不保留此前脚本的变量、函数或闭包。Java host access、类查找、IO、guest 建线程、native access 和 polyglot access 均关闭。此模式不会注入现有 NPC/任务/事件脚本的 `cm/im/qm/rm/em` 或原生角色对象；#201 对旧游戏脚本环境的调查不能当作这个 Context 的能力目录。传入原生 `environment` 时按另一份契约复用北斗加载器、host access 和对应真实绑定，不据纯模式的限制推断其能力。
-
-## 语言输入和结果
-
-| 项目 | 当前约定 |
+| 参数 | 约定 |
 |---|---|
-| 语言 | JavaScript，能力公告值为 `javascript` |
-| `source` | 非空脚本文本，最多 65,536 个 UTF-16 单元 |
-| `parameters` | JSON 对象，默认 `{}`；作为同名 guest 对象提供，编码后最多 16,384 个 UTF-8 字节 |
-| `timeout_ms` | 整数 1～5,000，MCP 默认 1,000；期限包括 Context 创建、绑定、执行和结果转换 |
-| 语言输出 | `console`、`print` 等 GraalJS 输出进入本次 `stdout/stderr`；每路最多 16,384 字节，超出设置 `output_truncated=true` |
-| 返回值 | `source` 最后表达式的值；返回对象时可使用 `({ ... })`，或调用自执行函数 |
-| JSON 结果 | 独立于 Context 的 JSON 值，编码后最多 16,384 个 UTF-8 字节，最大嵌套深度 32，并受节点与字符串累计额度限制 |
+| `session_id`、`expected_generation` | 必填，使用当前实际角色会话和代次 |
+| `request_id` | 必填，调用方保存的唯一请求 ID；同 ID 只能恢复完全相同的调用 |
+| `kind` | 必填，`npc/quest/portal/reactor/event` 中的一种 |
+| `operation` | 必填，`start/invoke/close` 中的一种 |
+| `context_id` | `start` 不传；`invoke/close` 必须使用此前返回的原值 |
+| `options` | JSON 对象，默认 `{}`；`start` 按 `kind` 选择实际脚本及对象 |
+| `entry`、`args` | 原脚本入口及其参数；`args` 默认为 `[]`，按实际原生签名使用 |
+| `source` | 默认空字符串，最多 65,536 个 UTF-16 单元；非空时在同一北斗引擎中执行代码片段 |
+| `parameters` | JSON 对象，默认 `{}`，以同名对象供本次脚本读取 |
+| `timeout_ms` | 整数 1～5,000，默认 1,000；覆盖本次环境准备、执行和结果转换 |
 
-函数、循环引用、Promise 等不能作为同步 JSON 结果返回，返回 `RESULT_ERROR`；结果转换仍在可取消的 guest 执行期间进行。终态结果不保留 Graal `Value`、Context、原生角色或 Throwable 引用。
+`options`、`args`、`parameters` 的 JSON 编码总量最多 16,384 个 UTF-8 字节，每个根的深度最多 16。`entry` 匹配 `[A-Za-z_$][A-Za-z0-9_$]{0,127}`，不能用属性路径替代原入口。
 
-示例脚本：
+`start` 创建本模块所有的真实北斗上下文，加载现有文件并执行原入口；非空 `source` 在原入口成功后追加执行，不替换原文件。`invoke` 调用 `entry/args`，或执行非空 `source`，两者互斥。`close` 只收尾原 `context_id`：`source` 必须为空，`options/args` 必须为空，且不得指定 `entry`。
 
-```javascript
-console.log("开始计算", parameters.label);
-const total = parameters.values.reduce((sum, value) => sum + value, 0);
-({ label: parameters.label, total, count: parameters.values.length });
-```
+缺少 `kind/operation` 或提交旧 `environment` 字段时拒绝请求。脚本内仍可做参数运算、整理结果和语言输出，这些代码始终运行在选定的北斗上下文中。
 
-传入 `{"label":"首环","values":[2,3,5]}` 时，结果为 `{"label":"首环","total":10,"count":3}`，输出在 `stdout` 中。该示例没有游戏副作用。
+## 输出和结果
 
-## 最小函数接点
+`console`、`print` 等语言输出进入本次 `stdout/stderr`，每路最多 16,384 字节，超出设置 `output_truncated=true`。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
 
-宿主维护一份 `ScriptRegistry`。可信模块通过 `ModuleContext.registerScriptFunction(definition, body)` 注册当前模块代次的函数；`ScriptFunction` 同时描述名称、用途、参数名与返回说明。函数只对当前调用模块的精确代次可见，同模块的 `script_help` 与 `functions.<name>(...)` 使用相同注册项，调用前后复核模块当前性；停止时移除原代次的注册项。不同模块可各自使用相同函数名，不能据此获得彼此的注册项。
+JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字符串累计额度限制。原生对象、函数、循环引用、Promise、非有限数及非法 Unicode 字符串不能作为 JSON 结果传出；脚本应明确投影所需的安全字段。终态结果不保留 Graal `Value`、Context、原生角色或 Throwable 引用。
 
-这只是本片需要的最小描述与绑定接点。机制测试可注册中立纯函数验证同源；生产没有注册游戏函数，所以全局 `functions` 是空对象，`script_help()` 返回 `functions=[]`。按名称查询缺失项在 `unavailable` 中列出，不合成可执行定义。跨模块能力贡献、提供者调用与在途生命周期属于 #204 后续范围。
-
-本片不实现完整模块能力发现、共享事实与事件、模块内部行为脚本或导出闭包生命周期，也不通过注册接点提前公开游戏操作。
-
-## 结果与错误
-
-MCP 使用既有 operation 外壳，`kind=SCRIPT`。`result` 为本次脚本的独立 JSON 投影：
+响应使用既有 operation 外壳，`kind=SCRIPT`；这与请求中选择脚本类型的 `kind` 分属不同位置。其 `result` 示例：
 
 ```json
 {
   "status": "SUCCEEDED",
-  "result": {"total": 10},
-  "stdout": "开始计算 首环\n",
+  "result": {"name": "McpPrimary"},
+  "stdout": "已读取角色\n",
   "stderr": "",
   "output_truncated": false,
+  "context_id": "native-...",
+  "context_state": "OPEN",
   "engine_exited": true,
-  "context_closed": true,
+  "context_closed": false,
+  "invocation_settled": true,
   "work_settled": true
 }
 ```
 
-| 脚本 `result.status` | 含义 |
+成功调用可以保留 `OPEN` Context 和原脚本全局变量，以便后续对话或事件回调继续执行。`invocation_settled/work_settled` 证明本次调用真实结算；`context_closed=false` 表示上下文正常保留。最终关闭还需核验 Context、原生会话、调度资源和原 scope 真正释放，不能把单次请求结束当作整个环境关闭。
+
+| `result.status` | 含义 |
 |---|---|
-| `SUCCEEDED` | 求值和 JSON 结果转换完成 |
+| `SUCCEEDED` | 本次调用及 JSON 结果转换完成 |
 | `PARSE_ERROR` | 脚本语法错误 |
-| `RUNTIME_ERROR` | 求值或受管调用异常 |
+| `RUNTIME_ERROR` | 求值或原生调用异常 |
 | `RESULT_ERROR` | 结果不能投影为声明范围内的 JSON |
 | `TIMED_OUT` | 执行期限已到并触发停止 |
 | `CANCELLED` | 调用或所属生命周期请求停止 |
-| `CLEANUP_ERROR` | 引擎退出或 Context 清理未证实 |
+| `CLEANUP_ERROR` | 执行退出或清理未证实 |
 
-错误可附有界 `error={message,line,column}`；无法定位时行列为 `null`。外层 operation 的 `status` 分别使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`，外层 `error.reason` 标明脚本失败类别。脚本失败在 MCP 中设置 `is_error=true`，同时保留本次已收集输出和收尾标记。
+错误可附有界 `error={message,line,column}`，无法定位时行列为 `null`。外层 operation 使用 `SUCCEEDED/FAILED/CANCELLED/INDETERMINATE`；脚本失败设置 MCP `is_error=true`，同时保留已收集输出、首个已知脚本错误和真实收尾标记。
 
-## 期限、取消与真实收尾
+## 帮助
 
-执行载体监视期限、原 work 的取消请求及模块 scope 状态。停止使用 `Context.close(true)` 中断 guest；纯 JavaScript 无限循环即使捕获普通异常，也不能因此吞掉引擎取消。最终收尾还必须等待实际 guest 执行退出、Context 关闭以及原 work 的 carrier 结算。
+`script_help(session_id, expected_generation)` 只读返回 `schema_version/language/native_environments/contexts/maximum_contexts_per_module`。`native_environments` 与实际适配器说明同源，列出对象类型、选择参数、原入口和所有权；`contexts` 列当前模块的存活上下文。它不创建脚本工作或 operation。
 
-纯模式 `ScriptExecution.completion()` 的结果区分 `engine_exited/context_closed/work_settled`。全部为真才证明本次脚本收尾完成；`Future.cancel()`、`isDone()`、取消通知或请求返回不是替代证据。清理无法核实时保留原 scope 债务和 `INDETERMINATE`，不清空句柄假报完成。原生模式可以在本次 `invocation_settled/work_settled` 后保留 `OPEN` Context，最终环境关闭另行核验，见[原生结果与收尾](beidou-script-environment.md#结果帮助与收尾)。
+帮助不再接收 `names`，不返回已移除的纯函数 `functions/unavailable` 目录，也不为北斗每个已有 Java 方法另造一套同义函数。
 
-模块停止撤销其当前调用资格并取消、排空原 scope。根 `actor_close` 继续等待模块真实退出后释放角色；旧 Context 和旧模块代次不能恢复或作用于新模块。Context 是原 work 的词法资源，在退出路径显式关闭，不另立可独立修改的资源账本。
+## 归属、取消和真实收尾
 
-MCP handler 中断会通过桥的独立 `/script/cancel` 请求将取消转发到后端，并保留收尾余量。该请求携带原 `request_id`、source、parameters 与期限的完整指纹；若取消先于 run 受理，后端为原 ID 建立已结算取消检查点，不启动引擎。迟到的同指纹 run 只恢复此结果，变参仍冲突。
+`CharacterRuntime.ModuleContext.runNativeScript` 消费调用模块已接纳的原 `ExecutionScope.WorkHandle`。每模块最多保留一个原生脚本上下文；上下文和原生调度资源登记在同一 scope，长执行不占角色短命令 lane，不另建角色宿主、动作队列或物理工作账本。
 
-已取消的 MCP 请求按协议不再返回工具响应。重新连接后使用相同 `request_id` 和相同参数恢复原 run 结果，或用已知 `operation_id` 查询；不能换新 ID 盲重放。传输或取消失败时保持结果未知，不宣称后台已停止。脚本专用 HTTP 预算至少为执行期限加 5 秒，宿主工具预算还须留出通信与收尾时间。
+执行载体监视期限、原 work 的取消请求和模块状态。`Context.close(true)` 能停止 guest JavaScript 无限循环，但不能替代正在执行的 Java host 方法实际返回。执行体、Context、原生会话或调度资源未退出时保留原 scope 债务及未确定结果；`Future.cancel/isDone`、取消通知、`dispose()` 返回或 HTTP 返回均不是替代证据。
+
+模块停止撤销其调用资格并取消、排空原 scope。根 `actor_close` 等模块真实结束后再释放角色；旧世界、旧 Context 及旧模块代次不能复活或清理外来、后继会话。
+
+MCP handler 中断通过独立 `/script/cancel` 请求转发到后端，携带原请求 ID 及完整相同的类型、操作、上下文、脚本、参数和期限。取消先到时留下已结算取消检查点，迟到 run 不执行；变参仍冲突。已发生的原生副作用不会撤回，未知结果不换新 ID 自动重放。
+
+已取消的 MCP 请求按协议不再返回工具响应。使用相同 `request_id` 和完整原参数恢复原 operation，或用已知 `operation_id` 查询。脚本专用 HTTP 预算至少为执行期限加 5 秒，宿主工具期限另留通信与收尾余量。
 
 ## 验证边界
 
-本轮源码验证覆盖纯计算、嵌套参数、语言输出、JSON 结果边界、解析/运行错误，以及期限和取消后的真实退出。运行体机制、官方 SDK stdio 端到端、隔离服务和实际部署各自留证。无限循环、世界停启及其他故障探针仅在隔离环境执行；实际部署仅做已授权的正常角色与脚本循环。
-
-脚本基础可用不代表机器人交互、具体游戏函数或真实客户端玩法已验收。后续按实际调试任务选择最小游戏函数，再独立核验权限、原生规则、动作结果与收尾。
+本接口用于机器人开发调试，代表脚本、原生规则和实际行为按任务分别验收。EIM 创建及其一分钟延迟地图释放尚未接通，运行体所有的 EM 明确拒绝相关入口；完整 EIM、更多脚本组合、真实机器人交互和客户端玩法不由基础执行通过推导完成。官方北斗 submodule 保持只读。

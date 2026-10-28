@@ -119,8 +119,8 @@ MCP 观察要从同一个宿主和原生来源读取，不建立另一份角色�
 
 #200 的方向移动属于模块内有界编排，定时资源和父工作由原scope拥有，短tick沿原lane。`whenModulesDrained()`仅在宿主关闭且模块hook、scope、grant和资源真实退出后完成，回调锁外触发；它是排空事实，不授予根cleanup许可。根来源退出仍走精确原资源的cleanup attempt。其他短基本动作共用原作用域与lane，见[基本操作](../shared-game-foundation/basic-control.md)。
 
-## 纯脚本基础
+## 北斗脚本执行
 
-[#199/#204](script-execution.md) 的本轮源码切片在运行体内增加受管脚本执行与最小函数描述接点，消费当前模块的原 scope/work，在短命令 lane 之外运行。MCP 新增 `script_run/script_help`；生产函数目录为空，现有动作保留。超时、取消、模块停止和根关闭均按引擎退出、Context 关闭及原 work 结算核验；具体游戏函数和完整行为模块不属于本片。
+[统一脚本入口](script-execution.md)让MCP在当前角色运行体内执行北斗脚本，直接指定 `kind/operation` 和真实上下文选择。独立纯JS模式及外层 `environment` 已移除；运行体继续消费原模块scope/work，在短命令lane之外执行，持久Context、本次调用和最终资源释放分别核验。
 
-[#216 北斗脚本环境](beidou-script-environment.md) 在同一工具上增加可选 `environment`，按入口提供真实 `cm/qm/pi/rm/em` 和原生 Java API。持久会话归当前模块的原 scope，单次调用结算与 Context 最终关闭分开核验；NPC/任务保留原管理器状态，门户/机关及角色自有事件使用独占引擎，避免取消一个角色时关闭共享环境。现有动作和管理入口继续保留，各层实际验收以 Issue 为准。
+[#216的北斗脚本上下文](beidou-script-environment.md)复用真实 `cm/qm/pi/rm/em`、原文件和原生Java API。NPC/任务保留原管理器状态；门户、机关及角色自有事件使用独占引擎，避免单角色取消关闭共享环境。`script_help` 从同一适配描述列环境及存活上下文。现有动作和管理入口保留，完整EIM、共享能力与行为模块按后续任务验收；源码、CI、隔离和实际交付结果分别记录。

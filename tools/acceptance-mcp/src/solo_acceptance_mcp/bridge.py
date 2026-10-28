@@ -162,7 +162,6 @@ EQUIPMENT_SLOTS = (*range(-1, -14, -1), *range(-15, -20, -1), -49, -50)
 IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
-SCRIPT_FUNCTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 NATIVE_SCRIPT_ENTRY = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]{0,127}")
 SCRIPT_MAX_SOURCE_UNITS = 65_536
 SCRIPT_MAX_PARAMETERS_BYTES = 16_384
@@ -170,7 +169,7 @@ SCRIPT_MAX_TIMEOUT_MS = 5_000
 SCRIPT_CLEANUP_SECONDS = 5.0
 NATIVE_SCRIPT_KINDS = frozenset({"npc", "quest", "portal", "reactor", "event"})
 NATIVE_SCRIPT_OPERATIONS = frozenset({"start", "invoke", "close"})
-NATIVE_SCRIPT_FIELDS = frozenset({"kind", "operation", "context_id", "options", "entry", "args"})
+_SCRIPT_DEFAULT = object()
 
 
 def validate_identifier(value: str, label: str, pattern: re.Pattern[str] = IDENTIFIER) -> None:
@@ -189,24 +188,41 @@ def validate_script_target(session_id: str, expected_generation: int) -> None:
 
 
 def validate_script_run(
-    session_id: str, expected_generation: int, request_id: str, source: str,
-    parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
-    environment: dict[str, Any] | None = None,
+    session_id: str, expected_generation: int, request_id: str, kind: str, operation: str,
+    source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+    context_id: str | None = None, options: Any = _SCRIPT_DEFAULT,
+    entry: str | None = None, args: Any = _SCRIPT_DEFAULT,
 ) -> None:
     validate_script_target(session_id, expected_generation)
     validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
-    if (not isinstance(source, str) or (environment is None and not source.strip())
+    if (not isinstance(source, str)
             or sum(2 if ord(char) > 0xFFFF else 1 for char in source) > SCRIPT_MAX_SOURCE_UNITS
             or any(0xD800 <= ord(char) <= 0xDFFF for char in source)):
-        raise BridgeError("INVALID_ARGUMENTS", "source 必须是有界 Unicode 脚本，纯脚本模式不得为空。")
+        raise BridgeError("INVALID_ARGUMENTS", "source 必须是有界 Unicode 脚本。")
     validate_integer(timeout_ms, "timeout_ms", 1, SCRIPT_MAX_TIMEOUT_MS)
-    if parameters is None:
-        parameters = {}
-    if not isinstance(parameters, dict):
-        raise BridgeError("INVALID_ARGUMENTS", "parameters 必须是 JSON 对象。")
-    size = _validate_script_json(parameters, "parameters")
-    if environment is not None:
-        size += validate_script_environment(environment, source)
+    if (not isinstance(kind, str) or kind not in NATIVE_SCRIPT_KINDS
+            or not isinstance(operation, str) or operation not in NATIVE_SCRIPT_OPERATIONS):
+        raise BridgeError("INVALID_ARGUMENTS", "kind 或 operation 不受支持。")
+    if operation == "start":
+        if context_id is not None:
+            raise BridgeError("INVALID_ARGUMENTS", "start 不接受已有 context_id。")
+    else:
+        validate_identifier(context_id, "context_id")
+    if entry is not None and (
+        not isinstance(entry, str) or NATIVE_SCRIPT_ENTRY.fullmatch(entry) is None
+    ):
+        raise BridgeError("INVALID_ARGUMENTS", "entry 必须是有效入口名。")
+    parameters = {} if parameters is None else parameters
+    options = {} if options is _SCRIPT_DEFAULT else options
+    args = [] if args is _SCRIPT_DEFAULT else args
+    if not isinstance(parameters, dict) or not isinstance(options, dict) or not isinstance(args, list):
+        raise BridgeError("INVALID_ARGUMENTS", "parameters、options 必须是 JSON 对象，args 必须是 JSON 列表。")
+    if operation == "invoke" and source.strip() and entry is not None:
+        raise BridgeError("INVALID_ARGUMENTS", "invoke 不得同时提交 source 和 entry。")
+    if operation == "close" and (source != "" or options or args or entry is not None):
+        raise BridgeError("INVALID_ARGUMENTS", "close 只接受空 source 和已有 context_id，不执行 options、entry 或 args。")
+    size = (_validate_script_json(parameters, "parameters")
+            + _validate_script_json(options, "options") + _validate_script_json(args, "args"))
     if size > SCRIPT_MAX_PARAMETERS_BYTES:
         raise BridgeError("INVALID_ARGUMENTS", "parameters、options 和 args 超过允许的 JSON 总大小。")
 
@@ -237,41 +253,8 @@ def _validate_script_json(value: Any, label: str) -> int:
     return len(encoded)
 
 
-def validate_script_environment(environment: dict[str, Any], source: str) -> int:
-    if (not isinstance(environment, dict) or not {"kind", "operation"} <= set(environment)
-            or set(environment) - NATIVE_SCRIPT_FIELDS):
-        raise BridgeError("INVALID_ARGUMENTS", "environment 必须包含原生脚本 kind 和 operation，且不得包含额外字段。")
-    kind, operation = environment["kind"], environment["operation"]
-    if (not isinstance(kind, str) or kind not in NATIVE_SCRIPT_KINDS
-            or not isinstance(operation, str) or operation not in NATIVE_SCRIPT_OPERATIONS):
-        raise BridgeError("INVALID_ARGUMENTS", "environment.kind 或 operation 不受支持。")
-    if operation == "start":
-        if "context_id" in environment:
-            raise BridgeError("INVALID_ARGUMENTS", "start 不接受已有 context_id。")
-    else:
-        validate_identifier(environment.get("context_id"), "environment.context_id")
-    if "entry" in environment and (
-        not isinstance(environment["entry"], str) or NATIVE_SCRIPT_ENTRY.fullmatch(environment["entry"]) is None
-    ):
-        raise BridgeError("INVALID_ARGUMENTS", "environment.entry 必须是有效入口名。")
-    options, args = environment.get("options", {}), environment.get("args", [])
-    if not isinstance(options, dict) or not isinstance(args, list):
-        raise BridgeError("INVALID_ARGUMENTS", "environment.options 必须是 JSON 对象，args 必须是 JSON 列表。")
-    if operation == "invoke" and source.strip() and "entry" in environment:
-        raise BridgeError("INVALID_ARGUMENTS", "invoke 不得同时提交 source 和 entry。")
-    if operation == "close" and (source != "" or options or args or "entry" in environment):
-        raise BridgeError("INVALID_ARGUMENTS", "close 只接受空 source 和已有 context_id，不执行 options、entry 或 args。")
-    return _validate_script_json(options, "environment.options") + _validate_script_json(args, "environment.args")
-
-
-def validate_script_help(session_id: str, expected_generation: int, names: list[str] | None = None) -> None:
+def validate_script_help(session_id: str, expected_generation: int) -> None:
     validate_script_target(session_id, expected_generation)
-    if names is None:
-        names = []
-    if (not isinstance(names, list) or len(names) > 64
-            or any(not isinstance(name, str)
-                   or SCRIPT_FUNCTION_NAME.fullmatch(name) is None for name in names)):
-        raise BridgeError("INVALID_ARGUMENTS", "names 必须是最多64项的有效函数名列表。")
 
 
 def validate_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
@@ -503,20 +486,23 @@ class BridgeClient:
         }, request_id)
 
     async def script_run(
-        self, session_id: str, expected_generation: int, *, request_id: str,
-        source: str, parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
-        environment: dict[str, Any] | None = None,
+        self, session_id: str, expected_generation: int, *, request_id: str, kind: str, operation: str,
+        source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+        context_id: str | None = None, options: dict[str, Any] | None = None,
+        entry: str | None = None, args: list[Any] | None = None,
     ) -> dict[str, Any]:
-        validate_script_run(session_id, expected_generation, request_id, source, parameters, timeout_ms, environment)
-        # Round-trip the validated input so callers cannot change the fingerprint
-        # while the run and its cancellation cross independent HTTP connections.
-        data = {
+        options = {} if options is None else options
+        args = [] if args is None else args
+        validate_script_run(session_id, expected_generation, request_id, kind, operation, source,
+                            parameters, timeout_ms, context_id, options, entry, args)
+        # Freeze the complete validated native invocation before run and cancel
+        # cross independent HTTP connections. Defaults are explicit in both.
+        data = json.loads(json.dumps({
             "session_id": session_id, "expected_generation": expected_generation,
-            "source": source, "parameters": json.loads(json.dumps(parameters or {}, ensure_ascii=False)),
-            "timeout_ms": timeout_ms,
-        }
-        if environment is not None:
-            data["environment"] = json.loads(json.dumps(environment, ensure_ascii=False))
+            "kind": kind, "operation": operation, "context_id": context_id,
+            "source": source, "parameters": parameters if parameters is not None else {},
+            "timeout_ms": timeout_ms, "options": options, "entry": entry, "args": args,
+        }, ensure_ascii=False))
         # Keep run + cleanup within the host tool's 45-second window even when
         # ordinary observation HTTP requests use the configurable 30 seconds.
         budget = timeout_ms / 1000 + SCRIPT_CLEANUP_SECONDS
@@ -572,14 +558,11 @@ class BridgeClient:
             except (BridgeError, asyncio.CancelledError):
                 pass
 
-    async def script_help(
-        self, session_id: str, expected_generation: int, *, names: list[str] | None = None,
-    ) -> dict[str, Any]:
-        validate_script_help(session_id, expected_generation, names)
+    async def script_help(self, session_id: str, expected_generation: int) -> dict[str, Any]:
+        validate_script_help(session_id, expected_generation)
         return await self._authorized_request(
             "POST", "/solo/acceptance/v1/script/help", {"requestId": str(uuid4()), "data": {
                 "session_id": session_id, "expected_generation": expected_generation,
-                "names": list(names or []),
             }},
         )
 

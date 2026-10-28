@@ -20,9 +20,10 @@ import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
-import soloMapling.game.script.ScriptRequest;
 import soloMapling.game.script.ScriptResult;
+import soloMapling.game.script.ScriptValues;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -91,6 +92,45 @@ class NativeScriptRuntimeTest {
         NativeScriptResult result = fixture.invoke(opened.contextId(), "nullable", Arrays.asList((Object) null), "");
         assertOpen(result); assertNull(result.result());
         assertClosed(fixture.closeContext(opened.contextId()));
+    }
+
+    @Test void nativeRequestJsonBudgetCountsOnlyTheThreeDeclaredRoots() {
+        Map<String, Object> options = Map.of("selector", "native");
+        List<Object> args = Arrays.asList(null, "中文");
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("payload", "");
+        int overhead = ScriptValues.json(options).getBytes(StandardCharsets.UTF_8).length
+                + ScriptValues.json(args).getBytes(StandardCharsets.UTF_8).length
+                + ScriptValues.json(parameters).getBytes(StandardCharsets.UTF_8).length;
+        String payload = "x".repeat(16_384 - overhead);
+        parameters.put("payload", payload);
+
+        NativeScriptRequest accepted = request("start", null, options, null, args, "", parameters, 1000);
+        assertEquals(16_384, ScriptValues.json(accepted.options()).getBytes(StandardCharsets.UTF_8).length
+                + ScriptValues.json(accepted.args()).getBytes(StandardCharsets.UTF_8).length
+                + ScriptValues.json(accepted.parameters()).getBytes(StandardCharsets.UTF_8).length);
+        assertNull(accepted.args().get(0));
+        parameters.put("payload", payload + "x");
+        assertThrows(IllegalArgumentException.class,
+                () -> request("start", null, options, null, args, "", parameters, 1000));
+    }
+
+    @Test void separateNativeJsonRootsRemainDetachedFromCallerMutation() {
+        Map<String, Object> nestedOption = new LinkedHashMap<>(Map.of("value", 21));
+        Map<String, Object> options = new LinkedHashMap<>(Map.of("nested", nestedOption));
+        List<Object> args = new ArrayList<>(Arrays.asList(null, nestedOption));
+        List<Object> values = new ArrayList<>(List.of("original"));
+        Map<String, Object> parameters = new LinkedHashMap<>(Map.of("values", values));
+        NativeScriptRequest captured = request("start", null, options, null, args, "", parameters, 1000);
+
+        nestedOption.put("value", 99);
+        options.clear();
+        args.clear();
+        values.add("later");
+        parameters.clear();
+        assertEquals(Map.of("nested", Map.of("value", 21)), captured.options());
+        assertEquals(Arrays.asList(null, Map.of("value", 21)), captured.args());
+        assertEquals(Map.of("values", List.of("original")), captured.parameters());
     }
 
     @Test void errorsAndInvalidUnicodeRemainSerializableAndSettleTheirInvocation() throws Exception {
@@ -213,14 +253,9 @@ class NativeScriptRuntimeTest {
         fixture.assertDrained();
     }
 
-    @Test void nativeContextExcludesPureScriptsAndASecondNativeStart() throws Exception {
+    @Test void nativeContextExcludesASecondNativeStart() throws Exception {
         Fixture fixture = fixture();
         NativeScriptResult opened = fixture.start("0", Map.of());
-        var pureWork = fixture.context.acceptWork();
-        try {
-            assertThrows(RuntimeException.class, () -> fixture.context.runScript(pureWork,
-                    new ScriptRequest("42", Map.of(), 1000)));
-        } finally { pureWork.reject(); }
         var otherWork = fixture.context.acceptWork();
         try {
             assertThrows(RuntimeException.class, () -> fixture.context.runNativeScript(otherWork,

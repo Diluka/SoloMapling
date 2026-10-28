@@ -4,7 +4,7 @@ import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.graalvm.polyglot.Context;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
-import soloMapling.game.script.ScriptExecution;
+import soloMapling.game.script.ScriptValues;
 import soloMapling.game.script.ScriptResult;
 
 import javax.script.Invocable;
@@ -107,7 +107,7 @@ public final class NativeScriptSession {
         try {
             // JSR-223 imports its bindings into a script-engine global scope. Put an actual language
             // global through that same engine; Context.getBindings().putMember alone is insufficient.
-            engine().eval("globalThis.parameters = JSON.parse(" + ScriptExecution.json(ScriptExecution.json(parameters)) + ")");
+            engine().eval("globalThis.parameters = JSON.parse(" + ScriptValues.json(ScriptValues.json(parameters)) + ")");
         } catch (ScriptException failure) { recordFailure(failure); throw new IllegalStateException("native_script_parameters_failed"); }
     }
 
@@ -130,7 +130,7 @@ public final class NativeScriptSession {
             column = script.getColumnNumber() < 1 ? null : script.getColumnNumber();
         }
         recordedFailureStatus = status;
-        recordedFailure = new ScriptResult.ScriptError(ScriptExecution.errorText(selected.getMessage()), line, column);
+        recordedFailure = new ScriptResult.ScriptError(ScriptValues.errorText(selected.getMessage()), line, column);
     }
     ScriptResult.ScriptError recordedFailure() { return recordedFailure; }
     ScriptResult.Status recordedFailureStatus() { return recordedFailureStatus; }

@@ -26,8 +26,8 @@ MCP 的外部 session、角色宿主和控制模块承担不同责任。它们�
 | `game_act/chat` | 模块取得宿主受控动作上下文，准备现有 `NativeActionService` 后只向原 lane 提交一次；不在队列 body 内再次 submit/join/get 等自己 |
 | `game_observe(scope="actor")` | 从同一宿主的角色来源读取事实，继续核 owner/session 和包窗口权限；不维护第二份角色状态，也不从只读快照取得普通动作控制权 |
 | 现有 NPC 动作 | 保留已审来源、offer、dialogue_version 和 legacy/NextLevel 路由，使用同一宿主 lane，不借迁移扩大菜单或收益路径 |
-| `script_run` | 本轮纯脚本设施消费当前模块原 work，在运行体管理载体执行，投影输出、JSON 结果与引擎/Context/work 的真实收尾；不占短命令 lane |
-| `script_help` | 本轮只读查询运行体同源函数描述，生产未注册游戏函数时返回空目录；不创建 operation 或执行 work |
+| `script_run` | 直接按kind/operation执行北斗原脚本，消费当前模块原work，投影输出、JSON结果、本次调用及持久Context的真实收尾；不占短命令lane |
+| `script_help` | 只读查询同源native_environments、当前contexts与容量；不创建operation或执行work |
 | `actor_close` | 请求根宿主的正常角色关闭，经来源核原生清理、对话及声明范围存档；模块停止或卸载不能替代此操作 |
 
 MCP 的根来源由两个包内适配承接：
@@ -98,12 +98,12 @@ actor 观察结果的 `actor.runtime` 和操作响应的 `session.runtime` 投�
 
 MCP模块额外声明movement/combat控制资源并为调度资源与cleanup工作保留额度。移动控制器只管理本模块的有界移动编排，原生帧共用宿主lane；根角色关闭待 `whenModulesDrained` 后再提交原根cleanup，避免lane暂空时抢先退出。物品与普攻经相同basic Handle映射事实结果，不增加物理队列或工作账本。完整边界见[基本操作](../shared-game-foundation/basic-control.md)。
 
-## 脚本基础接入
+## 北斗脚本接入
 
-#199/#204 的纯脚本首片贯通 `script_run/script_help` 和必要运行体支撑，不等待 #200 全部完成。`AcceptanceActorExecution` 经 MCP 模块将已接纳的原 work 交给 `ModuleContext.runScript`，脚本不再申请第二份工作，也不排入角色短命令 lane。外层沿既有 request/operation 历史保留幂等、鉴权与有界结果投影，首次 close 的历史名额仍保留。
+`script_run` 直接接收 `kind/operation/context_id/options/entry/args`，仅执行北斗脚本，不保留独立纯JS及外层environment模式。`AcceptanceActorExecution` 经MCP模块把已接纳的原work交给 `ModuleContext.runNativeScript`，不申请第二份工作，也不排入角色短命令lane。外层沿既有request/operation历史保留幂等、鉴权与有界结果投影，首次close历史名额继续保留。
 
-MCP 中断通过独立取消请求转发；取消先到时建立原请求的取消检查点，迟到 run 不能复活执行。纯模式正常返回须核 `engine_exited/context_closed/work_settled`；原生模式的持久 Context 可以在本次 `invocation_settled/work_settled` 后保持 `OPEN`，不能误报为清理失败。最终关闭与未知收尾仍分别核实，未知债务保留；角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 投影同一原作用域的工作与资源计数，不能把计数快照单独当作执行事实。
+MCP中断通过独立取消请求转发；取消先到时建立原请求检查点，迟到run不执行。持久Context可以在本次 `invocation_settled/work_settled` 后保持OPEN；最终关闭与未知收尾另核，债务保留，角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 投影同一原作用域的工作与资源计数，单个计数快照不能替代实际事实。
 
-纯函数帮助与绑定来自运行体的一份最小注册描述，未注册时目录为空。行为模块脚本、共享事实/事件目录和现有动作迁移仍留待各自任务，本片不改变旧 `game_act`。详细契约见[运行体脚本设施](../robot-runtime/script-execution.md)与[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
+`script_help` 只返回当前角色的同源环境描述、存活上下文及容量，不再接收names或维护纯函数目录。行为模块、共享事实/事件和现有动作迁移仍归各自任务，详细契约见[脚本执行参考](../robot-runtime/script-execution.md)和[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
 
-#216 的[北斗环境接入](../robot-runtime/beidou-script-environment.md) 复用原管理器、原脚本和实际对象，帮助的 `native_environments/contexts` 与适配器说明同源。纯函数目录 `functions=[]` 不再表示没有可用原生环境；这也不等于完整共享能力目录或直接动作迁移已完成。
+[#216北斗脚本上下文](../robot-runtime/beidou-script-environment.md)复用原管理器、原文件和真实对象，NPC/QM连续回调及事件原调度保持同一引擎。owned EIM实例创建尚未接入延迟地图清理，入口明确拒绝；完整共享能力目录、直接动作迁移及真实机器人交互不由基础执行通过推导完成。

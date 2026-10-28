@@ -116,22 +116,19 @@ python3 beidou-integration/scripts/build.py --help
 - 移动取消可保留已发生位移并报告已真实停止，不以Future.cancel或lane暂空当排空。根退出需等待 `whenModulesDrained` 真实信号再向原lane提交根cleanup。
 - 攻击 `basic_melee_v1` 是共享后端基于原生属性和怪物数据的基础近战政策，不宣称与全部客户端算法等价；不接受damage/skill/任意包。物品使用只开放普通HP/MP药剂，拾取只普通库存地物，装备沿原生元数据和有限普通槽位。具体参数、事实与验收见 `docs/shared-game-foundation/basic-control.md`。
 
-## #199/#204 脚本基础切片
+## 北斗脚本执行入口
 
-- MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。次要游戏操作按需求进入脚本环境；本轮只贯通纯脚本、JSON 参数、有界语言输出与结果，以及解析/运行错误。
-- 本轮源码新增 `script_run`、`script_help`；加上 #207 两项管理工具后，当前客户端共十一工具。实际部署与各层验收以对应 Issue 证据及 `game_capabilities` 为准，不把源码存在当作已上线。
-- 脚本设施由 `CharacterRuntime` 承载，调用使用当前角色、模块执行代次及原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令 lane。MCP 只保留协议、鉴权、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
-- 纯模式的帮助与实际函数绑定共用最小注册描述来源；未注册函数时返回空目录，不得从旧脚本调查推导纯模式可用 `cm/im/qm/rm/em` 或 Java 互操作。显式北斗 `environment` 的原生对象和 host access 按 #216 的实际适配契约及帮助核对。
-- 纯脚本超时、MCP 中断、模块停止和根关闭均须核实脚本推进已停止、Context 已关闭及原 work 真正结算。`Future.cancel/isDone`、HTTP 返回或 operation 终态不能单独证明收尾；纯脚本无限循环也必须能被真实终止。原生持久环境的本次结算与最终关闭另按 #216 核验。
-- 本轮不展开行为模块脚本、共享观察/事件大全或游戏函数，不迁移或删除现有 `game_act`。移动、攻击、背包、NPC、加点等函数及直接动作迁移后续独立验收；基础切片通过不关闭整个 #199/#204。接口与边界见 `docs/robot-runtime/script-execution.md`。
+- MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。`script_run` 只执行北斗脚本，直接接收顶层 `kind/operation/context_id/options/entry/args`，不保留独立纯JS模式或外层 `environment` 兼容分支；缺少kind/operation及旧字段请求明确拒绝。
+- `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。`script_help` 只按当前角色列实际 `native_environments/contexts/maximum_contexts_per_module`，不接收names，也不维护已删除的纯函数目录。
+- 脚本设施由 `CharacterRuntime` 承载，消费当前模块代次的原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令lane。MCP保留鉴权、协议、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
+- 当前客户端仍为十一工具，既有十三动作及独立管理指令保留。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。
 
-## #216 北斗脚本环境接入
+## #216 北斗脚本上下文
 
-- `script_run` 的可选 `environment` 选择 `npc/quest/portal/reactor/event` 及 `start/invoke/close`，不增加 MCP 工具，不迁移现有十三动作或独立管理指令。`script_help` 的 `native_environments/contexts` 来自实际适配描述，不为每个北斗 Java 方法另写同义函数目录。
-- NPC/QM 复用原管理器创建的精确 CM/QM、Client 缓存引擎和回调状态；原生入口不是玩家附近点选 NPC。门户和机关从当前实际地图取得精确对象并加载匹配原脚本；独占引擎不接管全局门户缓存。事件使用实际 Channel 与同一受管 Invocable 创建角色自有原生 EventManager，不替换或取消频道共享事件。
-- 原生 Context 可跨调用保留。`invocation_settled/work_settled` 证明本次调用结算，`context_closed=false,context_state=OPEN` 是正常保留；最终关闭、取消、模块停止及根关闭另核引擎、精确原生会话和调度资源真实释放，不能套用纯模式每次关闭的断言。已有外来或后继 CM/QM 不得被接管或清理。
-- 沿原 CharacterRuntime、模块代次、scope/work 与资源登记管理，不另建角色宿主、动作队列或物理工作账本。guest 循环能强制停止不代表正在执行的 host Java 调用已返回；原生调度异步取消、已出队回调和 EIM 延迟清理必须据实保留债务。完整 EIM/地图实例、机器人实际交互和真实客户端玩法按独立证据验收，不把静态方法可达性当已交付。
-- 首环 #219 明确拒绝尚未接入的 EIM 实例创建，不能让原脚本创建实例地图后漏记其一分钟延迟清理。官方北斗 submodule 保持只读，适配和织入只维护在 Solo。接口、来源、连续调用及结果见 `docs/robot-runtime/beidou-script-environment.md`；源码、CI、隔离 MCP 与实际部署结果分别记录，不提前将整个 #216 标为完成。
+- `kind` 选择npc/quest/portal/reactor/event，`operation` 为start/invoke/close。帮助与实际适配器说明同源，不为北斗每个Java方法另造同义函数。NPC/QM复用原管理器、精确CM/QM、Client缓存引擎和回调状态；门户和机关来自当前实际地图；事件使用实际Channel与同一受管Invocable创建角色自有原生EventManager，不替换或取消频道共享事件。
+- 每模块最多一个持久Context，后续调用使用原context_id及原模块代次。`invocation_settled/work_settled` 证明本次调用结算；`context_closed=false,context_state=OPEN` 可以是正常保留，最终关闭另核引擎、精确原生会话和调度资源真实释放。不得接管或清理外来、后继CM/QM，旧世界或旧模块不能续权。
+- 期限、取消、模块停止及根关闭均须核实际执行退出。`Future.cancel/isDone`、HTTP返回或operation终态不能单独证明收尾；guest循环已停也不代表host Java方法已返回。原生异步调度、已出队回调和未知资源继续保留原scope债务。
+- 首环#219在原生预热副作用前明确拒绝尚未接入的owned EIM创建；完整EIM及一分钟延迟地图释放、更多脚本组合、机器人实际交互和真实客户端玩法仍按各自证据验收。北斗submodule只读，适配和织入仅在Solo维护。对象来源和连续调用见 `docs/robot-runtime/beidou-script-environment.md`，不提前将整个#216标完成。
 
 ## #207 独立管理指令调试入口
 
