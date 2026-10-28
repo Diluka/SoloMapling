@@ -1,4 +1,4 @@
-"""Official MCP SDK 2.x tools for observations and dedicated actor operations."""
+"""Official MCP SDK 2.x observation, actor, and administrator debug tools."""
 from __future__ import annotations
 
 import argparse
@@ -15,7 +15,7 @@ from . import __version__
 from .bridge import (
     BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT,
     SCRIPT_MAX_SOURCE_UNITS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
-    validate_script_help, validate_script_run,
+    validate_command_help, validate_command_request, validate_script_help, validate_script_run,
 )
 
 
@@ -119,7 +119,14 @@ class ExpectedContext(BaseModel):
     runtime_generation: Identifier
 
 
+class GiveItemParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    item_id: Annotated[int, Field(ge=1, le=MAX_INT, strict=True)]
+    quantity: Annotated[int, Field(ge=1, le=32767, strict=True)]
+
+
 CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
+COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "parameters", "expected_command_generation"})
 SCRIPT_RUN_REQUIRED = frozenset({"session_id", "expected_generation", "request_id", "source"})
 SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"parameters", "timeout_ms"}
 SCRIPT_HELP_REQUIRED = frozenset({"session_id", "expected_generation"})
@@ -130,7 +137,7 @@ class AcceptanceMCPServer(MCPServer):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name in {"script_run", "script_help"}:
+            if tool.name in {"game_command", "game_command_help", "script_run", "script_help"}:
                 tool.input_schema = {**tool.input_schema, "additionalProperties": False}
             if tool.name == "game_act":
                 tool.input_schema = {**tool.input_schema, "additionalProperties": False, "allOf": [{"oneOf": [
@@ -157,6 +164,18 @@ class AcceptanceMCPServer(MCPServer):
             try:
                 # Reject raw input safely before SDK model errors can echo values.
                 validate_action_request(**arguments)
+            except BridgeError as failure:
+                return result(failure.public_data(), is_error=True)
+        elif name in {"game_command", "game_command_help"}:
+            try:
+                if name == "game_command":
+                    if set(arguments) != COMMAND_ARGUMENTS:
+                        raise BridgeError("INVALID_ARGUMENTS", "game_command 参数缺失或包含额外字段。")
+                    validate_command_request(**arguments)
+                else:
+                    if set(arguments) - {"command"}:
+                        raise BridgeError("INVALID_ARGUMENTS", "game_command_help 只接受可选 command。")
+                    validate_command_help(**arguments)
             except BridgeError as failure:
                 return result(failure.public_data(), is_error=True)
         elif name in {"script_run", "script_help"}:
@@ -200,7 +219,8 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "取消操作不等于结束NPC对话。game_act 支持普通聊天、已审NPC回复、背包移位，以及受控移动/停止、单次近战普通攻击、库存物品拾取/丢弃、普通HP/MP药剂使用和装备穿脱；实际能力以桥公告为准。"
                       "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
                       "script_run 在同一角色运行体中执行有期限的纯 JavaScript，script_help 返回真实函数目录；"
-                      "当前尚无游戏脚本函数，参数使用 parameters，输出使用 console/print，结果为最后表达式。"),
+                      "当前尚无游戏脚本函数，参数使用 parameters，输出使用 console/print，结果为最后表达式。"
+                      "game_command_help 与 game_command 是独立管理员调试入口，按服务端实际配置向专用 profile 提供原生 give 物品能力，不经过角色运行体或 lane。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -223,6 +243,27 @@ def build_server(config: BridgeConfig) -> MCPServer:
         """读取验收桥实际版本、源码身份、在线状态及已开放能力。"""
         try:
             return result(await bridge.capabilities())
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=read_annotations)
+    async def game_command_help(command: Literal["give"] | None = None) -> CallToolResult:
+        """查询实际开放的管理员调试指令及参数；省略 command 时列出目录。指令独立于角色运行体，实际开关和物品范围以服务端说明为准。"""
+        try:
+            return result(await bridge.command_help(command))
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=open_annotations)
+    async def game_command(
+        profile_id: ProfileId, request_id: RequestId, command: Literal["give"],
+        parameters: GiveItemParameters, expected_command_generation: Identifier,
+    ) -> CallToolResult:
+        """对已登记专用 profile 调用原生 give 物品管理服务，不经过 CharacterRuntime 或角色 lane。先从帮助取得 command_generation，作为 expected_command_generation；它独立于角色与世界代次。必须提供 request_id，同 ID 同参数恢复原结果、不重复发放。超时或未知结果只用原 ID 和原指令代次恢复，不能换新 ID 或刷新代次重发；重启后的旧指令代次会被拒绝。"""
+        try:
+            return result(await bridge.command(profile_id, request_id=request_id, command=command,
+                                               parameters=parameters.model_dump(),
+                                               expected_command_generation=expected_command_generation))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
 

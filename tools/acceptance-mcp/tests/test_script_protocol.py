@@ -22,11 +22,10 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
 
-    async def test_stdio_registers_nine_tools_with_strict_script_schema_and_annotations(self) -> None:
+    async def test_stdio_registers_implemented_tools_with_strict_script_schema_and_annotations(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual({"game_capabilities", "game_observe", "actor_open", "actor_close", "operation_get",
-                          "operation_cancel", "game_act", "script_run", "script_help"}, set(tools))
+        self.assertEqual(chat_protocol.REGISTERED_TOOLS, set(tools))
         self.assertFalse(tools["script_run"].annotations.read_only_hint)
         self.assertTrue(tools["script_run"].annotations.idempotent_hint)
         self.assertTrue(tools["script_help"].annotations.read_only_hint)

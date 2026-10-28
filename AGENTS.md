@@ -119,8 +119,14 @@ python3 beidou-integration/scripts/build.py --help
 ## #199/#204 脚本基础切片
 
 - MCP 用于机器人开发调试：Agent 进入游戏，与待测机器人交互并核对实际行为。次要游戏操作按需求进入脚本环境；本轮只贯通纯脚本、JSON 参数、有界语言输出与结果，以及解析/运行错误。
-- 本轮源码新增 `script_run`、`script_help`，客户端共九工具。实际部署与各层验收以对应 Issue 证据及 `game_capabilities` 为准，不把源码存在当作已上线。
+- 本轮源码新增 `script_run`、`script_help`；加上 #207 两项管理工具后，当前客户端共十一工具。实际部署与各层验收以对应 Issue 证据及 `game_capabilities` 为准，不把源码存在当作已上线。
 - 脚本设施由 `CharacterRuntime` 承载，调用使用当前角色、模块执行代次及原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令 lane。MCP 只保留协议、鉴权、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
 - 帮助与实际函数绑定共用最小注册描述来源；生产未注册游戏函数时返回空目录，不能把现有 NPC 脚本的 `cm/im/qm/rm/em` 或 Java 互操作当成可用能力。
 - 超时、MCP 中断、模块停止和根关闭均须核实脚本推进已停止、Context 已关闭及原 work 真正结算。`Future.cancel/isDone`、HTTP 返回或 operation 终态不能单独证明收尾；纯脚本无限循环也必须能被真实终止。
 - 本轮不展开行为模块脚本、共享观察/事件大全或游戏函数，不迁移或删除现有 `game_act`。移动、攻击、背包、NPC、加点等函数及直接动作迁移后续独立验收；基础切片通过不关闭整个 #199/#204。接口与边界见 `docs/robot-runtime/script-execution.md`。
+
+## #207 独立管理指令调试入口
+
+- 管理指令直接复用北斗原生管理服务，与 CharacterRuntime、模块 scope/Grant 和角色 lane 解耦。角色、背包和存档数据仍在北斗服务端；不得以未经验证的并发假设强加运行体前置。后续 #199 只需将同一适配绑定到脚本环境，不复制实现。
+- `game_command_help` / `game_command` 独立于 `game_act`；需本地 `enabled`、`actors-enabled`、`debug-commands-enabled` 三开关同时启用，新增开关默认关闭。沿正常管理员 JWT，目标限已有 profile 登记的在线普通专用角色；首轮仅普通 USE/ETC 可堆叠物品，不透传全服、提权或其他资源分支。
+- 请求携带独立 `expected_command_generation`，从 help/capabilities 获取。按 owner/request_id 保留本进程最多256条历史且不淘汰，原ID同参数恢复事实、变参拒绝、旧进程代次拒绝；未知结果不新ID重发。实际数量前后态和同CID重开存档分开验证。各层交付以 #207 为准，详见 `docs/mcp-acceptance/commands.md`。

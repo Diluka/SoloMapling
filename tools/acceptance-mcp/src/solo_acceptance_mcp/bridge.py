@@ -1,4 +1,4 @@
-"""Authenticated client for observation and dedicated acceptance actor sessions.
+"""Authenticated observation, actor session, and administrator command client.
 
 Credentials and response error bodies stay absent from public errors. Mutation
 requests retain caller-supplied IDs and are never replayed after transport errors.
@@ -319,6 +319,24 @@ def validate_action_request(session_id: str, expected_generation: int, request_i
     validate_action(action, parameters, expected_context)
 
 
+def validate_command_help(command: str | None = None) -> None:
+    if command is not None and (not isinstance(command, str) or command != "give"):
+        raise BridgeError("INVALID_ARGUMENTS", "command 当前只支持 give。")
+
+
+def validate_command_request(profile_id: str, request_id: str, command: str,
+                             parameters: dict[str, Any], expected_command_generation: str) -> None:
+    validate_identifier(profile_id, "profile_id", PROFILE_IDENTIFIER)
+    validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
+    validate_identifier(expected_command_generation, "expected_command_generation")
+    if not isinstance(command, str) or command != "give":
+        raise BridgeError("INVALID_ARGUMENTS", "command 当前只支持 give。")
+    if not isinstance(parameters, dict) or set(parameters) != {"item_id", "quantity"}:
+        raise BridgeError("INVALID_ARGUMENTS", "give parameters 必须且只能包含 item_id 和 quantity。")
+    validate_integer(parameters["item_id"], "item_id", 1, MAX_INT)
+    validate_integer(parameters["quantity"], "quantity", 1, 32767)
+
+
 class BridgeClient:
     MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
@@ -345,6 +363,32 @@ class BridgeClient:
 
     async def capabilities(self) -> dict[str, Any]:
         return await self._authorized_request("GET", "/solo/acceptance/v1/capabilities")
+
+    async def command_help(self, command: str | None = None) -> dict[str, Any]:
+        validate_command_help(command)
+        path = "/solo/acceptance/v1/command/help"
+        if command is not None:
+            path += "?command=" + command
+        return await self._authorized_request("GET", path)
+
+    async def command(
+        self, profile_id: str, *, request_id: str, command: str, parameters: dict[str, Any],
+        expected_command_generation: str,
+    ) -> dict[str, Any]:
+        validate_command_request(profile_id, request_id, command, parameters, expected_command_generation)
+        try:
+            return await self._mutation("/solo/acceptance/v1/command/execute", {
+                "profile_id": profile_id, "command": command, "parameters": dict(parameters),
+                "expected_command_generation": expected_command_generation,
+            }, request_id)
+        except BridgeError as failure:
+            if failure.http_status != 409:
+                raise
+            raise BridgeError(
+                "COMMAND_CONFLICT", "请求与指令进程代次或历史请求冲突，请保留原 request_id 和原指令代次核对结果，不自动重发。",
+                http_status=409, retryable=False, backend_code=failure.backend_code,
+                request_id=request_id, outcome_unknown=failure.outcome_unknown,
+            ) from None
 
     async def observe(
         self, scope: str = "world", scene_ref: str | None = None, limit: int = 100,

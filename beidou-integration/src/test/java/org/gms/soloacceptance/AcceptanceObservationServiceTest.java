@@ -7,6 +7,8 @@ import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.scripting.event.EventInstanceManager;
+import org.gms.soloacceptance.command.DebugCommandService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.gms.server.maps.MapManager;
 import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.AfterEach;
@@ -76,12 +78,35 @@ class AcceptanceObservationServiceTest {
         Map<String, Object> result = observations.capabilities();
         assertEquals(List.of("game_capabilities", "game_observe"), result.get("enabled_tools"));
         assertEquals(List.of(), result.get("actions"));
+        assertEquals(Map.of("enabled", false, "enabled_tools", List.of(), "commands", List.of()),
+                result.get("debug_commands"));
         assertEquals(true, result.get("server_online"));
         Map<?, ?> source = assertInstanceOf(Map.class, result.get("source"));
         assertEquals("test-revision", source.get("soloGitRevision"));
         assertEquals("engine-revision", source.get("beidouRevision"));
         assertFalse(source.containsKey("password"));
         assertFalse(result.toString().contains("must-not-escape"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void enabledCommandsAreAnnouncedIndependentlyOfActorActions() throws ReflectiveOperationException {
+        DebugCommandService commands = mock(DebugCommandService.class);
+        Map<String, Object> commandCapabilities = Map.of("enabled", true,
+                "enabled_tools", List.of("game_command_help", "game_command"),
+                "command_generation", "commands-test-generation", "commands", List.of("give"));
+        when(commands.publicCapabilities()).thenReturn(commandCapabilities);
+        ObjectProvider<DebugCommandService> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(commands);
+        var field = AcceptanceObservationService.class.getDeclaredField("debugCommands");
+        field.setAccessible(true);
+        field.set(observations, provider);
+
+        Map<String, Object> result = observations.capabilities();
+        assertEquals(List.of("game_capabilities", "game_observe", "game_command_help", "game_command"),
+                result.get("enabled_tools"));
+        assertEquals(commandCapabilities, result.get("debug_commands"));
+        assertEquals(List.of(), result.get("actions"));
     }
 
     @Test

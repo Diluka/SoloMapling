@@ -21,7 +21,7 @@ TOOLS = {
     "game_capabilities", "game_observe", "actor_open", "actor_close",
     "operation_get", "operation_cancel",
 }
-READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get", "script_help"}
+READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get", "game_command_help", "script_help"}
 ACTOR_PATH = "/solo/acceptance/v1/actor/observe"
 MAX_LONG = 2**63 - 1
 
@@ -92,10 +92,10 @@ class ActorObserveProtocolTests(unittest.IsolatedAsyncioTestCase):
             async with Client(params, read_timeout_seconds=10) as client:
                 yield client
 
-    async def test_stdio_lists_nine_tools_and_keeps_observation_read_only(self) -> None:
+    async def test_stdio_lists_implemented_tools_and_keeps_observation_read_only(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS | {"game_act", "script_run", "script_help"}, set(tools))
+        self.assertEqual(TOOLS | {"game_act", "game_command_help", "game_command", "script_run", "script_help"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
             self.assertTrue(tool.annotations.idempotent_hint, name)

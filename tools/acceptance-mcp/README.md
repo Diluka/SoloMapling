@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现九个工具；`script_run/script_help` 为本轮源码提供的脚本基础，实际部署与各层验收结果见 #199。后端是否已开启角色、已审 NPC、基本动作与脚本，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现十一工具，包含角色观察与操作、脚本基础和独立管理指令；实际开放范围以 `game_capabilities.enabled_tools`、`actions` 与 `debug_commands` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -13,10 +13,14 @@
 | `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC 及运行体基本动作，当前源码包含十三动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
 | `script_run` | 在现有角色运行体中同步执行有期限的纯 JavaScript，收集输出和 JSON 结果 | 必须有 request_id；本片无游戏函数，仍按受管调用记录 |
 | `script_help` | 查询同源函数目录或指定函数说明，未注册时返回空目录 | 只读；不创建脚本 work 或 operation |
+| `game_command_help` | 查询独立管理指令的实际范围、参数和管理进程代次 | 只读；需启用 debug-commands-enabled |
+| `game_command` | 对已登记在线调试角色调用原生 give 物品服务 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
+
+管理指令的配置、目标、真实结果与原 ID 恢复见[管理指令说明](../../docs/mcp-acceptance/commands.md)。新增工具不扩大 `game_act` 范围，后端未启用时不公告为可用能力。
 
 MCP 用于机器人开发调试，让 Agent 进入游戏，与待测机器人交互并检查实际行为。[#199](https://github.com/Diluka/SoloMapling/issues/199) 首片直接贯通纯脚本基础，不等待 [#200](https://github.com/Diluka/SoloMapling/issues/200) 全部完成；次要游戏操作以后按需进入脚本环境。本片保留现有 `game_act`，不迁移具体游戏函数，能力公告只列实际实现范围。
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及同时开放两个脚本工具的完整九项组合。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅含已审查路径的 select/decline；礼包 accept、任意 NPC、未审查选项、任意封包、SocialBot 完整互动及游戏脚本函数仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及分别开放两个脚本工具、两个管理工具的组合，全部开启时为十一工具。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端 schema 存在不代表后端已开启。回复仅含已审查路径的 select/decline；礼包 accept、任意 NPC、未审查选项、任意封包、SocialBot 完整互动及游戏脚本函数仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 `inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；此动作不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
 
