@@ -88,7 +88,7 @@ MCP 客户端列出工具不代表后端已启用；以实际 `game_capabilities
 `implementation_round` 保留 `R2a`，以顶层 `enabled_tools/actions` 和观察能力字段判别。
 #110 保持七工具，仅在 game_act 增加无收益 npc_reply/select、decline，并扩展已审子菜单的正常取消；
 以实际完整offer、已审路径与最新version限制派发，截断城镇菜单禁止选择目的地。
-本项已完成隔离及实际部署 SDK 验收，PR #115 交付；accept礼包、完整菜单出行、SocialBot、移动和recipe继续独立交付。
+本项已完成隔离及实际部署 SDK 验收，PR #115 交付；accept礼包、完整菜单出行与SocialBot继续独立验收，#200逐片补充基本调试动作，后续同步脚本由#199单独交付。
 
 共享基础的内部ABI及验收范围见 [共享游戏基建](../docs/shared-game-foundation/README.md)。
 统一角色壳与模块协议的首轮入口见 [运行体 v0.1](../docs/robot-runtime/README.md)。
