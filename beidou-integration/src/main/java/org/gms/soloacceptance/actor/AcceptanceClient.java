@@ -25,6 +25,7 @@ public final class AcceptanceClient extends Client {
                     Map.of("event_type", "player_hint", "opcode", PacketEventDecoder.PLAYER_HINT),
                     Map.of("event_type", "server_message", "opcode", PacketEventDecoder.SERVER_MESSAGE,
                             "message_types", List.of(0, 1, 2, 3, 4, 5, 6, 7)),
+                    Map.of("event_type", "yellow_tip", "opcode", PacketEventDecoder.YELLOW_TIP),
                     Map.of("event_type", "npc_dialogue", "opcode", PacketEventDecoder.NPC_TALK,
                             "message_types", List.of(4, 12))));
     private final World boundWorld;
