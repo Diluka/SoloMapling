@@ -7,6 +7,8 @@ import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.action.NativeInventoryActions;
 import soloMapling.game.action.NativeInventoryMoveAction;
+import soloMapling.game.action.NativeBasicActions;
+import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
@@ -20,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletionStage;
 
 /** MCP consumes one host. Native ownership, scopes, grants, the lane and its executor belong to that host. */
 final class AcceptanceActorExecution {
@@ -117,6 +120,22 @@ final class AcceptanceActorExecution {
         return backend.submitInventoryMove(action);
     }
 
+    NativeBasicActions.Handle prepareBasic(ExecutionScope.WorkHandle work, NativeActorHandle exactHandle,
+                                           String action, ActorActRequest.Parameters parameters, Runnable mcpPreflight) {
+        if (adoptedHandle() != exactHandle) throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
+        McpControlModule active = requireModule();
+        if ("move".equals(action) || "stop".equals(action)) {
+            return backend.prepareMovement(exactHandle, active.movement(), active.context(), work,
+                    action, parameters, mcpPreflight);
+        }
+        return active.prepareBasic(ActorBasicRequests.control(action), work, mcpPreflight,
+                (lane, permit, original, character) -> backend.prepareBasic(exactHandle, lane, permit, original, action, parameters));
+    }
+
+    NativeActionService.SubmissionReceipt submitBasic(NativeBasicActions.Handle action) {
+        return backend.submitBasic(action, requireModule().movement());
+    }
+
     void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {
         requireModule().recordResult(work, result);
     }
@@ -150,8 +169,10 @@ final class AcceptanceActorExecution {
         return attempt;
     }
 
-    CharacterCommandLane.Submission submitCleanup(ScopeResources.CleanupAttempt attempt, Runnable body, Runnable settled) {
-        return runtime.submitOriginCleanup(attempt, body, settled);
+    CompletionStage<CharacterCommandLane.Submission> submitCleanup(ScopeResources.CleanupAttempt attempt, Runnable body, Runnable settled) {
+        // A movement clock can still own work while the native lane is idle. Root cleanup
+        // waits for the host's factual module drain, without blocking that same lane.
+        return runtime.whenModulesDrained().thenApply(ignored -> runtime.submitOriginCleanup(attempt, body, settled));
     }
 
     Map<String, Object> cleanup(ScopeResources.CleanupAttempt attempt, NativeActorHandle exactHandle) {

@@ -62,8 +62,8 @@ class McpControlModuleTest {
         McpControlModule inactive = new McpControlModule("primary");
         assertEquals("mcp-control", inactive.spec().typeId());
         assertEquals("primary", inactive.spec().instanceId());
-        assertEquals(Set.of("chat", "interaction", "inventory"), inactive.spec().controls());
-        assertEquals(new ExecutionScope.Limits(16, 0, 16, 0), inactive.spec().limits());
+        assertEquals(Set.of("chat", "interaction", "inventory", "movement", "combat"), inactive.spec().controls());
+        assertEquals(new ExecutionScope.Limits(16, 2, 16, 2), inactive.spec().limits());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::context).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::acceptWork).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::reference).reason());

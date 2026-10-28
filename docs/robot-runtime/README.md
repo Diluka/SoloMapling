@@ -114,3 +114,7 @@ MCP 观察要从同一个宿主和原生来源读取，不建立另一份角色�
 ## 背包基本动作
 
 [#200](https://github.com/Diluka/SoloMapling/issues/200) 的首片 #164 通过同一 `ModuleContext.prepareNative("inventory", ...)` 消费共享 `NativeInventoryActions`，只提交原 lane 一次。具体物品规则由北斗执行，宿主只负责控制权、工作和 `NativeActionFact` 安全摘要，不持有第二份库存。参数、结果与存档验收见[背包移位](../shared-game-foundation/inventory-move.md)，各层验收及实际部署以 Issue 记录为准。
+
+## 持续基本动作与关闭屏障
+
+#200 的方向移动属于模块内有界编排，定时资源和父工作由原scope拥有，短tick沿原lane。`whenModulesDrained()`仅在宿主关闭且模块hook、scope、grant和资源真实退出后完成，回调锁外触发；它是排空事实，不授予根cleanup许可。根来源退出仍走精确原资源的cleanup attempt。其他短基本动作共用原作用域与lane，见[基本操作](../shared-game-foundation/basic-control.md)。

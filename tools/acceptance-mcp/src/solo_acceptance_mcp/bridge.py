@@ -152,6 +152,12 @@ def validate_observation(
 
 MAX_LONG = 2**63 - 1
 MAX_INT = 2**31 - 1
+ACTION_NAMES = (
+    "chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",
+    "move", "stop", "attack", "pickup", "drop", "use_item", "equip", "unequip",
+)
+INVENTORY_TYPES = frozenset({"EQUIP", "USE", "SETUP", "ETC", "CASH"})
+EQUIPMENT_SLOTS = (*range(-1, -14, -1), *range(-15, -20, -1), -49, -50)
 IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
@@ -167,9 +173,9 @@ def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None
         raise BridgeError("INVALID_ARGUMENTS", label + " 必须是允许范围内的整数。")
 
 
-def validate_chat_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
-    if not isinstance(action, str) or action not in {"chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"}:
-        raise BridgeError("INVALID_ARGUMENTS", "action 只支持 chat、npc_center_open、npc_cancel、npc_reply 或 inventory_move。")
+def validate_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
+    if not isinstance(action, str) or action not in ACTION_NAMES:
+        raise BridgeError("INVALID_ARGUMENTS", "action 必须是已实现的受控角色动作；实际开放项以 game_capabilities 为准。")
     if not isinstance(parameters, dict):
         raise BridgeError("INVALID_ARGUMENTS", "parameters 必须为当前动作对应的对象。")
     if action == "chat":
@@ -180,9 +186,9 @@ def validate_chat_action(action: str, parameters: dict[str, Any], expected_conte
                 or sum(2 if ord(char) > 0xFFFF else 1 for char in text) > 127
                 or any(0xD800 <= ord(char) <= 0xDFFF for char in text)):
             raise BridgeError("INVALID_ARGUMENTS", "text 必须是1～127个 UTF-16 单元的非空白普通聊天，首字符不能为 @ 或 /。")
-    elif action == "npc_center_open":
+    elif action in {"npc_center_open", "stop"}:
         if parameters:
-            raise BridgeError("INVALID_ARGUMENTS", "npc_center_open parameters 必须为空对象。")
+            raise BridgeError("INVALID_ARGUMENTS", action + " parameters 必须为空对象。")
     elif action == "npc_cancel":
         if set(parameters) != {"dialogue_version"}:
             raise BridgeError("INVALID_ARGUMENTS", "npc_cancel parameters 必须且只能包含 dialogue_version。")
@@ -191,12 +197,45 @@ def validate_chat_action(action: str, parameters: dict[str, Any], expected_conte
         if set(parameters) != {"inventory_type", "source_slot", "target_slot"}:
             raise BridgeError("INVALID_ARGUMENTS", "inventory_move parameters 必须且只能包含 inventory_type、source_slot 和 target_slot。")
         inventory_type = parameters["inventory_type"]
-        if not isinstance(inventory_type, str) or inventory_type not in {"EQUIP", "USE", "SETUP", "ETC", "CASH"}:
+        if not isinstance(inventory_type, str) or inventory_type not in INVENTORY_TYPES:
             raise BridgeError("INVALID_ARGUMENTS", "inventory_type 只支持 EQUIP、USE、SETUP、ETC 或 CASH。")
         validate_integer(parameters["source_slot"], "source_slot", 1, 127)
         validate_integer(parameters["target_slot"], "target_slot", 1, 127)
         if parameters["source_slot"] == parameters["target_slot"]:
             raise BridgeError("INVALID_ARGUMENTS", "source_slot 和 target_slot 必须不同。")
+    elif action == "move":
+        if set(parameters) != {"direction", "duration_ms"}:
+            raise BridgeError("INVALID_ARGUMENTS", "move parameters 必须且只能包含 direction 和 duration_ms。")
+        direction = parameters["direction"]
+        if not isinstance(direction, str) or direction not in {"LEFT", "RIGHT"}:
+            raise BridgeError("INVALID_ARGUMENTS", "direction 只支持 LEFT 或 RIGHT。")
+        validate_integer(parameters["duration_ms"], "duration_ms", 100, 3000)
+    elif action in {"attack", "pickup"}:
+        field = "target_oid" if action == "attack" else "object_id"
+        if set(parameters) != {field}:
+            raise BridgeError("INVALID_ARGUMENTS", action + " parameters 必须且只能包含 " + field + "。")
+        validate_integer(parameters[field], field, 1, MAX_INT)
+    elif action == "drop":
+        if set(parameters) != {"inventory_type", "source_slot", "quantity"}:
+            raise BridgeError("INVALID_ARGUMENTS", "drop parameters 必须且只能包含 inventory_type、source_slot 和 quantity。")
+        inventory_type = parameters["inventory_type"]
+        if not isinstance(inventory_type, str) or inventory_type not in INVENTORY_TYPES:
+            raise BridgeError("INVALID_ARGUMENTS", "inventory_type 只支持 EQUIP、USE、SETUP、ETC 或 CASH。")
+        validate_integer(parameters["source_slot"], "source_slot", 1, 127)
+        validate_integer(parameters["quantity"], "quantity", 1, 32767)
+    elif action == "use_item":
+        if set(parameters) != {"source_slot"}:
+            raise BridgeError("INVALID_ARGUMENTS", "use_item parameters 必须且只能包含 source_slot。")
+        validate_integer(parameters["source_slot"], "source_slot", 1, 127)
+    elif action in {"equip", "unequip"}:
+        if set(parameters) != {"source_slot", "target_slot"}:
+            raise BridgeError("INVALID_ARGUMENTS", action + " parameters 必须且只能包含 source_slot 和 target_slot。")
+        positive = "source_slot" if action == "equip" else "target_slot"
+        equipped = "target_slot" if action == "equip" else "source_slot"
+        validate_integer(parameters[positive], positive, 1, 127)
+        validate_integer(parameters[equipped], equipped, -50, -1)
+        if parameters[equipped] not in EQUIPMENT_SLOTS:
+            raise BridgeError("INVALID_ARGUMENTS", equipped + " 必须是原生普通装备位，不能是现金位或未开放槽位。")
     else:
         kind = parameters.get("kind")
         if not isinstance(kind, str) or kind not in {"select", "decline"}:
@@ -218,7 +257,7 @@ def validate_action_request(session_id: str, expected_generation: int, request_i
     validate_identifier(session_id, "session_id")
     validate_integer(expected_generation, "expected_generation", 1, MAX_LONG)
     validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
-    validate_chat_action(action, parameters, expected_context)
+    validate_action(action, parameters, expected_context)
 
 
 class BridgeClient:

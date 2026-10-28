@@ -137,3 +137,5 @@ java -jar target/SoloMapling-BeiDou.jar --spring.config.location=./application.y
 部署冒烟按用户授权沿用实际配置及数据库执行正常应用读写，开始前应保留可恢复备份。
 测试建库、故障注入和清理逻辑不得指向实际游戏数据。
 构建成功不等于数据与玩法全部兼容，报告需区分构建、隔离验证及实际部署检查。
+
+#200 的移动/停止、一次基础近战、普通库存拾取丢弃、HP/MP药剂与装备穿脱候选说明见[角色基本操作](../docs/shared-game-foundation/basic-control.md)。共享Java能力属于运行体，MCP仅投影协议；以Issue的构建、CI、隔离和实际部署证据分别确认，不从工具schema枚举推导后端已上线。

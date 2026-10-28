@@ -103,7 +103,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tools["actor_close"].annotations.destructive_hint)
         for name in ["actor_open", "actor_close", "operation_cancel"]:
             self.assertIn("request_id", tools[name].input_schema["required"], name)
-        self.assertFalse(tools["game_act"].annotations.destructive_hint)
+        self.assertTrue(tools["game_act"].annotations.destructive_hint)
         self.assertNotIn("recipe_run", tools)
 
     async def test_queued_and_cancel_requested_results_are_not_promoted_to_completion(self) -> None:

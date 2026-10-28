@@ -133,3 +133,5 @@ public final class NativeContextChecks {
 ## 基本动作增量
 
 [#164 背包移位](inventory-move.md) 提供运行体模块可直接消费的中立原生能力，MCP 仅作薄接线；其实际交付与部署证据单独核对。
+
+[#200 角色基本操作](basic-control.md) 扩展移动与停止、单次近战攻击、拾取丢弃、药剂使用及装备穿脱；运行体共用执行、证据与取消排空，MCP只做薄接入。各层实际交付见对应Issue。

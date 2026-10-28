@@ -45,9 +45,14 @@ import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.action.NativeInventoryActions;
 import soloMapling.game.action.NativeInventoryMoveAction;
+import soloMapling.game.action.NativeBasicActions;
+import soloMapling.game.action.NativeAttackActions;
+import soloMapling.game.action.NativeItemActions;
+import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.runtime.CharacterRuntime;
 
 import java.sql.Date;
 import java.util.ArrayList;
@@ -171,6 +176,46 @@ public final class NativeActorBackend {
     public void validateInventoryMove(NativeActorHandle handle, NativeInventoryMoveAction action) {
         requireOrdinaryActor(handle);
         Objects.requireNonNull(action);
+    }
+
+    public void validateBasic(NativeActorHandle handle, String action, ActorActRequest.Parameters parameters) {
+        requireOrdinaryActor(handle);
+        ActorBasicRequests.validate(action, parameters);
+    }
+
+    /** Finite typed shared actions, after ordinary-profile and exact-origin identity checks. */
+    public NativeBasicActions.CommandHandle prepareBasic(NativeActorHandle handle, CharacterCommandLane lane,
+                                                          CharacterCommandLane.ControlPermit permit,
+                                                          ExecutionScope.WorkHandle work, String action,
+                                                          ActorActRequest.Parameters parameters) {
+        requireOrdinaryActor(handle);
+        ActorBasicRequests.validate(action, parameters);
+        Server server = servers.get();
+        GameContext.SceneRef scene = basicScene(server, handle);
+        return "attack".equals(action)
+                ? NativeAttackActions.prepareAttack(server, lane, permit, work, scene, ActorBasicRequests.attack(parameters))
+                : NativeItemActions.prepare(server, lane, permit, work, scene, ActorBasicRequests.item(action, parameters));
+    }
+
+    /** Movement orchestration belongs to the active module; the backend supplies only the native source. */
+    public NativeBasicActions.Handle prepareMovement(NativeActorHandle handle, NativeMovementActions movement,
+                                                      CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work,
+                                                      String action, ActorActRequest.Parameters parameters, Runnable preflight) {
+        requireOrdinaryActor(handle);
+        ActorBasicRequests.validate(action, parameters);
+        Server server = servers.get();
+        GameContext.SceneRef scene = basicScene(server, handle);
+        return "stop".equals(action) ? movement.prepareStop(server, context, work, scene, preflight)
+                : movement.prepareMove(server, context, work, scene, ActorBasicRequests.movement(parameters), preflight);
+    }
+
+    public NativeActionService.SubmissionReceipt submitBasic(NativeBasicActions.Handle action, NativeMovementActions movement) {
+        return action instanceof NativeMovementActions.MoveHandle moving ? movement.submitMove(moving) : NativeBasicActions.submit(action);
+    }
+
+    private static GameContext.SceneRef basicScene(Server server, NativeActorHandle handle) {
+        try { return NativeContextChecks.captureScene(server, handle.characterRef()); }
+        catch (GameContext.Invalid invalid) { throw chatContextFailure(invalid); }
     }
 
     public Map<String, Object> chatTimingCapabilities() {
@@ -642,6 +687,9 @@ public final class NativeActorBackend {
         result.put("is_bot", BotRegistry.isBot(character));
         result.put("inventory_summary", inventorySummary(character));
         result.put("inventory", inventorySnapshot(character));
+        result.put("equipped", AcceptanceBasicObservations.equipped(character));
+        result.put("stats", AcceptanceBasicObservations.stats(character));
+        result.put("scene_objects", AcceptanceBasicObservations.scene(scene.map()));
         result.put("quest_summary", questSummary(character));
         result.put("packet_events", handle.client().packetSummaries());
         result.put("packet_events_dropped", handle.client().droppedPacketCount());
