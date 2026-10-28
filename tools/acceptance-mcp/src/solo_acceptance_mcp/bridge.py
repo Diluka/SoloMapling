@@ -1,4 +1,4 @@
-"""Authenticated client for observation and dedicated acceptance actor sessions.
+"""Authenticated observation, actor session, and administrator command client.
 
 Credentials and response error bodies stay absent from public errors. Mutation
 requests retain caller-supplied IDs and are never replayed after transport errors.

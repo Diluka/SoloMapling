@@ -1,4 +1,4 @@
-"""Official MCP SDK 2.x tools for observations and dedicated actor operations."""
+"""Official MCP SDK 2.x observation, actor, and administrator debug tools."""
 from __future__ import annotations
 
 import argparse
