@@ -87,3 +87,7 @@ actor 观察结果的 `actor.runtime` 和操作响应的 `session.runtime` 投�
 部署继续使用根目录 `build.sh` 验证后的镜像、本地只读配置与原北斗数据；不得为接入模块另挂 JAR、改用环境变量覆盖业务配置或另建实际角色库。独立实验使用临时库/一致副本，候选通过后沿正常保存、一致备份、切换和实际短流程回归推进；真实玩家活动单独归因。运行源码身份核对构建报告和 capabilities，不能把工作树代码或测试替身当成已部署能力。
 
 本轮 MCP 迁移以原 `a09cec866649d97b2d0ac071c6a06faec0e24d90` 的外部契约与来源行为为基线，组合运行体 `24a36509929e4d2179bdefc22b95293f8c34b1a9` 的协议；后续修正及最终运行源码身份以构建报告、capabilities 和 Issue 证据核对，不把本页基线当当前部署版本。
+
+## 背包动作接入
+
+#164 为 MCP 模块增加 `inventory` 控制资源，经原 `ModuleContext.prepareNative` 准备共享 `NativeInventoryActions.MoveHandle`，直接提交原 lane 一次，保留同 work 的真实结算与外部 ACTION 配额。中立动作持有短命原生证据，运行体仅记录 `NativeActionFact` 摘要；MCP 不维护另一份库存或物品规则。具体协议与分层验收见[背包移位](../shared-game-foundation/inventory-move.md)。

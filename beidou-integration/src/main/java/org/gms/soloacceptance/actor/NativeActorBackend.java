@@ -43,6 +43,8 @@ import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeChatAction;
+import soloMapling.game.action.NativeInventoryActions;
+import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
@@ -93,6 +95,7 @@ public final class NativeActorBackend {
     private final Supplier<Server> servers;
     private final long cleanupTimeoutNanos;
     private final NativeActionService actions = new NativeActionService();
+    private final NativeInventoryActions inventoryActions = new NativeInventoryActions();
 
     @Autowired
     public NativeActorBackend(ActorProfiles profiles, AccountService accounts,
@@ -147,6 +150,27 @@ public final class NativeActorBackend {
 
     public NativeActionService.SubmissionReceipt submitChat(NativeActionService.ActionHandle action) {
         return actions.submitChat(action);
+    }
+
+    /** The MCP adapter supplies ordinary identity; inventory rules and evidence remain in the shared action. */
+    public NativeInventoryActions.MoveHandle prepareInventoryMove(NativeActorHandle handle, CharacterCommandLane lane,
+                                                                  CharacterCommandLane.ControlPermit permit,
+                                                                  ExecutionScope.WorkHandle work, NativeInventoryMoveAction action) {
+        requireOrdinaryActor(handle);
+        Server server = servers.get();
+        GameContext.SceneRef scene;
+        try { scene = NativeContextChecks.captureScene(server, handle.characterRef()); }
+        catch (GameContext.Invalid invalid) { throw chatContextFailure(invalid); }
+        return inventoryActions.prepareMove(server, lane, permit, work, scene, action);
+    }
+
+    public NativeActionService.SubmissionReceipt submitInventoryMove(NativeInventoryActions.MoveHandle action) {
+        return inventoryActions.submitMove(action);
+    }
+
+    public void validateInventoryMove(NativeActorHandle handle, NativeInventoryMoveAction action) {
+        requireOrdinaryActor(handle);
+        Objects.requireNonNull(action);
     }
 
     public Map<String, Object> chatTimingCapabilities() {
@@ -617,6 +641,7 @@ public final class NativeActorBackend {
         result.put("persisted", matchingIdentity(characters.findById(character.getId()), handle));
         result.put("is_bot", BotRegistry.isBot(character));
         result.put("inventory_summary", inventorySummary(character));
+        result.put("inventory", inventorySnapshot(character));
         result.put("quest_summary", questSummary(character));
         result.put("packet_events", handle.client().packetSummaries());
         result.put("packet_events_dropped", handle.client().droppedPacketCount());
@@ -826,6 +851,32 @@ public final class NativeActorBackend {
         result.put("account_created", handle.accountCreated());
         result.put("character_created", handle.characterCreated());
         return result;
+    }
+
+    /** Fresh values copied under each native inventory lock; this is not a second inventory ledger. */
+    static Map<String, Object> inventorySnapshot(Character character) {
+        List<Map<String, Object>> inventories = new ArrayList<>();
+        boolean complete = true;
+        for (InventoryType type : INVENTORIES) {
+            if (type == InventoryType.EQUIPPED) continue;
+            var inventory = character.getInventory(type);
+            inventory.lockInventory();
+            try {
+                int slotLimit = Byte.toUnsignedInt(inventory.getSlotLimit());
+                int observedLimit = Math.min(slotLimit, 127);
+                boolean inventoryComplete = slotLimit <= 127;
+                List<Map<String, Object>> items = new ArrayList<>();
+                for (short slot = 1; slot <= observedLimit; slot++) {
+                    var item = inventory.getItem(slot);
+                    if (item != null) items.add(Map.of("slot", (int) slot, "item_id", item.getItemId(),
+                            "quantity", (int) item.getQuantity()));
+                }
+                inventories.add(Map.of("inventory_type", type.name(), "slot_limit", slotLimit,
+                        "complete", inventoryComplete, "items", List.copyOf(items)));
+                complete &= inventoryComplete;
+            } finally { inventory.unlockInventory(); }
+        }
+        return Map.of("complete", complete, "inventories", List.copyOf(inventories));
     }
 
     private static Map<String, Object> inventorySummary(Character character) {

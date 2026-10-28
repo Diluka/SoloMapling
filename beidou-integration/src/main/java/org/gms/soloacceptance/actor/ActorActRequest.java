@@ -23,7 +23,17 @@ public record ActorActRequest(
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Parameters(String text, @JsonProperty("dialogue_version") Long dialogueVersion,
-                             String kind, Integer selection) {
+                             String kind, Integer selection,
+                             @JsonProperty("inventory_type") String inventoryType,
+                             @JsonProperty("source_slot") Integer sourceSlot,
+                             @JsonProperty("target_slot") Integer targetSlot) {
+        public Parameters(String text, Long dialogueVersion, String kind, Integer selection) {
+            this(text, dialogueVersion, kind, selection, null, null, null);
+        }
+
+        public Parameters(String inventoryType, int sourceSlot, int targetSlot) {
+            this(null, null, null, null, inventoryType, sourceSlot, targetSlot);
+        }
         public Parameters(String text) {
             this(text, null, null, null);
         }
@@ -44,6 +54,7 @@ public record ActorActRequest(
         private static final Set<String> NPC_CANCEL_PARAMETER_FIELDS = Set.of("dialogue_version");
         private static final Set<String> NPC_REPLY_PARAMETER_FIELDS = Set.of("dialogue_version", "kind");
         private static final Set<String> NPC_SELECT_PARAMETER_FIELDS = Set.of("dialogue_version", "kind", "selection");
+        private static final Set<String> INVENTORY_MOVE_FIELDS = Set.of("inventory_type", "source_slot", "target_slot");
         private static final Set<String> KNOWN_PARAMETER_FIELDS = Set.of("text", "dialogue_version");
         private static final Set<String> CONTEXT_FIELDS = Set.of("scene_ref", "runtime_generation");
 
@@ -57,6 +68,7 @@ public record ActorActRequest(
                     ? string(rawParameters.get("kind"), context) : null;
             Set<String> parameterFields = switch (action == null ? "" : action) {
                 case "chat" -> CHAT_PARAMETER_FIELDS;
+                case "inventory_move" -> INVENTORY_MOVE_FIELDS;
                 case "npc_center_open" -> Set.of();
                 case "npc_cancel" -> NPC_CANCEL_PARAMETER_FIELDS;
                 case "npc_reply" -> "select".equals(kind) ? NPC_SELECT_PARAMETER_FIELDS : NPC_REPLY_PARAMETER_FIELDS;
@@ -70,7 +82,9 @@ public record ActorActRequest(
                     action,
                     parameters == null ? null : new Parameters(
                             string(parameters.get("text"), context), integer(parameters.get("dialogue_version"), context),
-                            kind, selection(parameters.get("selection"), context)),
+                            kind, selection(parameters.get("selection"), context),
+                            string(parameters.get("inventory_type"), context),
+                            selection(parameters.get("source_slot"), context), selection(parameters.get("target_slot"), context)),
                     expectedContext == null ? null : new ExpectedContext(
                             string(expectedContext.get("scene_ref"), context),
                             string(expectedContext.get("runtime_generation"), context)));

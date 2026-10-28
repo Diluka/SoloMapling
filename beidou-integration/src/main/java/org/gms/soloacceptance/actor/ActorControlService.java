@@ -10,6 +10,9 @@ import org.springframework.stereotype.Service;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.action.NativeActionService;
+import soloMapling.game.action.NativeInventoryActions;
+import soloMapling.game.action.NativeInventoryMoveAction;
+import soloMapling.game.action.InventoryMoveResult;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
@@ -274,7 +277,10 @@ public final class ActorControlService {
         Integer selection = request.parameters() == null ? null : request.parameters().selection();
         ActorActRequest.ExpectedContext context = request.expectedContext();
         ActionFingerprint fingerprint = new ActionFingerprint(request.expectedGeneration(), request.action(),
-                text == null ? null : textDigest(text), dialogueVersion, replyKind, selection, context);
+                text == null ? null : textDigest(text), dialogueVersion, replyKind, selection,
+                request.parameters() == null ? null : request.parameters().inventoryType(),
+                request.parameters() == null ? null : request.parameters().sourceSlot(),
+                request.parameters() == null ? null : request.parameters().targetSlot(), context);
         RequestKey key = new RequestKey("ACTION", owner, request.sessionId(), requestId);
         Operation prior;
         Session session;
@@ -302,6 +308,7 @@ public final class ActorControlService {
 
         try {
             validateNativeAction(handle, request.action(), text, dialogueVersion, replyKind, selection);
+            if ("inventory_move".equals(request.action())) backend.validateInventoryMove(handle, inventoryMove(request.parameters()));
             validateActionContext(handle, context);
         } catch (RuntimeException failure) {
             synchronized (monitor) { prior = duplicate(key, fingerprint); }
@@ -340,6 +347,12 @@ public final class ActorControlService {
                 actualWork.completion().whenComplete((fact, failure) -> actionCarrierCompleted(accepted, actualWork));
                 if ("chat".equals(accepted.action)) {
                     NativeActionService.SubmissionReceipt receipt = submitChat(acceptedSession, accepted, acceptedHandle, text, context);
+                    if (receipt != null && receipt.status() == NativeActionService.SubmissionStatus.REJECTED) {
+                        throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
+                    }
+                } else if ("inventory_move".equals(accepted.action)) {
+                    NativeActionService.SubmissionReceipt receipt = submitInventoryMove(acceptedSession, accepted, acceptedHandle,
+                            inventoryMove(request.parameters()), context);
                     if (receipt != null && receipt.status() == NativeActionService.SubmissionStatus.REJECTED) {
                         throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_queue_full");
                     }
@@ -501,7 +514,10 @@ public final class ActorControlService {
             if (sameRuntime && timingFailure != null) throw timingFailure;
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act"));
-            result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply"));
+            result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"));
+            result.put("inventory_move", Map.of("inventory_types", List.of("EQUIP", "USE", "SETUP", "ETC", "CASH"),
+                    "minimum_slot", 1, "maximum_slot", 127, "native_minimum_interval_ms", 300,
+                    "semantics", "native_whole_slot_move_swap_or_merge"));
             result.put("npc_dialogue", AcceptanceClient.nativeDialogueCapabilities());
             result.put("maximum_pending_actions_per_session", MAX_PENDING_ACTIONS);
             result.put("actor_executor_queue_capacity", EXECUTOR_QUEUE_CAPACITY);
@@ -612,7 +628,7 @@ public final class ActorControlService {
         ExecutionScope.WorkHandle actualWork = operation.work;
         try {
             NativeActionService.ActionHandle action = session.execution.prepareChat(actualWork, handle, text,
-                    () -> validateChatEntry(session, operation, handle, context));
+                    () -> validateActionEntry(session, operation, handle, context));
             synchronized (monitor) { operation.chatAction = action; }
             action.result().whenComplete((result, failure) -> chatCompleted(operation, action, result, failure));
             // Bind the captured native scene to the caller's opaque context before the one physical submission.
@@ -638,7 +654,106 @@ public final class ActorControlService {
         }
     }
 
-    private void validateChatEntry(Session session, Operation operation, NativeActorHandle handle,
+    private NativeActionService.SubmissionReceipt submitInventoryMove(Session session, Operation operation,
+                                                                     NativeActorHandle handle, NativeInventoryMoveAction request,
+                                                                     ActorActRequest.ExpectedContext context) {
+        ExecutionScope.WorkHandle actualWork = operation.work;
+        try {
+            NativeInventoryActions.MoveHandle action = session.execution.prepareInventoryMove(actualWork, handle, request,
+                    () -> validateActionEntry(session, operation, handle, context));
+            synchronized (monitor) { operation.inventoryAction = action; }
+            action.result().whenComplete((result, failure) -> inventoryCompleted(operation, action, result, failure));
+            validateActionContext(handle, context);
+            return session.execution.submitInventoryMove(action);
+        } catch (Throwable failure) {
+            ExecutionScope.WorkSnapshot fact = actualWork.snapshot();
+            synchronized (monitor) {
+                if (!terminal(operation.status)) {
+                    if (fact.carrierClaimed() && !fact.settled() && !fact.rejected()) {
+                        operation.step = "native_inventory_submission_confirmation_pending";
+                        event(operation, operation.step);
+                    } else if (actionCancelled(session, operation)) cancelledBeforeAction(operation);
+                    else inventoryFailedBeforeDispatch(operation, safeReason(failure, "native_inventory_validation_failed"));
+                }
+            }
+            if (!fact.carrierClaimed()) {
+                synchronized (monitor) { operation.inventoryAction = null; }
+                actualWork.reject();
+            }
+            return null;
+        }
+    }
+
+    private void inventoryCompleted(Operation operation, NativeInventoryActions.MoveHandle source,
+                                    InventoryMoveResult result, Throwable failure) {
+        CharacterRuntime.ModuleContext acceptedContext;
+        ExecutionScope.WorkHandle acceptedWork;
+        synchronized (monitor) {
+            if (operation.inventoryAction != source || terminal(operation.status)) return;
+            acceptedContext = operation.moduleContext;
+            acceptedWork = operation.work;
+        }
+        if (failure == null && result != null && acceptedContext != null && acceptedWork != null) {
+            try { acceptedContext.recordResult(acceptedWork, result); }
+            catch (RuntimeException diagnosticFailure) { /* A late fact does not restore module authority. */ }
+        }
+        synchronized (monitor) {
+            if (operation.inventoryAction != source || terminal(operation.status)) return;
+            if (failure == null && result != null) finishInventoryMove(operation, result);
+            else inventoryResultUnavailable(operation, source.dispatchStarted());
+        }
+    }
+
+    private void finishInventoryMove(Operation operation, InventoryMoveResult outcome) {
+        operation.dispatchStarted = outcome.dispatch() == NativeActionResult.Dispatch.STARTED;
+        if (outcome.outcome() == NativeActionResult.Outcome.CANCELLED) {
+            cancelledBeforeAction(operation);
+            return;
+        }
+        String reason = !operation.dispatchStarted && operation.actionEntryFailure != null
+                ? operation.actionEntryFailure : outcome.fixedReason();
+        if (outcome.outcome() == NativeActionResult.Outcome.FAILED && !operation.dispatchStarted) {
+            inventoryFailedBeforeDispatch(operation, reason == null ? "native_inventory_validation_failed" : reason);
+            return;
+        }
+        Map<String, Object> fields = new LinkedHashMap<>(AcceptanceInventoryResults.resultFields(outcome));
+        fields.put("cancel_too_late", operation.dispatchStarted && operation.cancelRequested);
+        operation.result = fields;
+        operation.error = outcome.outcome() == NativeActionResult.Outcome.SUCCEEDED ? null
+                : Map.of("reason", reason == null ? "native_inventory_outcome_unknown" : reason);
+        finish(operation, outcome.outcome().name(), outcome.outcome() == NativeActionResult.Outcome.SUCCEEDED
+                ? "native_inventory_move_observed" : reason == null ? "native_inventory_outcome_unknown" : reason);
+    }
+
+    private void inventoryFailedBeforeDispatch(Operation operation, String reason) {
+        operation.result = Map.of("observed_outcome", "inventory_move_not_dispatched", "native_dispatch_started", false,
+                "cancel_too_late", false);
+        operation.error = Map.of("reason", reason);
+        finish(operation, "FAILED", reason);
+    }
+
+    private void inventoryResultUnavailable(Operation operation, boolean started) {
+        operation.dispatchStarted = started;
+        if (!started && actionCancelled(operation.session, operation)) cancelledBeforeAction(operation);
+        else if (!started) inventoryFailedBeforeDispatch(operation, "native_inventory_result_unavailable");
+        else {
+            operation.result = Map.of("observed_outcome", "native_inventory_outcome_unknown", "native_dispatch_started", true,
+                    "cancel_too_late", operation.cancelRequested);
+            operation.error = Map.of("reason", "native_inventory_outcome_unknown");
+            finish(operation, "INDETERMINATE", "native_inventory_outcome_unknown");
+        }
+    }
+
+    private static NativeInventoryMoveAction inventoryMove(ActorActRequest.Parameters parameters) {
+        if (parameters == null || parameters.inventoryType() == null || parameters.sourceSlot() == null
+                || parameters.targetSlot() == null) throw error(HttpStatus.BAD_REQUEST, "invalid_inventory_move");
+        try { return new NativeInventoryMoveAction(parameters.inventoryType(), parameters.sourceSlot(), parameters.targetSlot()); }
+        catch (IllegalArgumentException | NativeActionService.Invalid invalid) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_inventory_move");
+        }
+    }
+
+    private void validateActionEntry(Session session, Operation operation, NativeActorHandle handle,
                                    ActorActRequest.ExpectedContext context) {
         try {
             synchronized (monitor) {
@@ -655,10 +770,11 @@ public final class ActorControlService {
                 requireActionSession(session, handle);
             }
         } catch (ObservationException failure) {
-            synchronized (monitor) { operation.chatEntryFailure = safeReason(failure, "native_chat_validation_failed"); }
+            synchronized (monitor) { operation.actionEntryFailure = safeReason(failure, "inventory_move".equals(operation.action)
+                        ? "native_inventory_validation_failed" : "native_chat_validation_failed"); }
             throw failure;
         } catch (RuntimeException unavailable) {
-            synchronized (monitor) { operation.chatEntryFailure = "actor_observation_unavailable"; }
+            synchronized (monitor) { operation.actionEntryFailure = "actor_observation_unavailable"; }
             throw error(HttpStatus.SERVICE_UNAVAILABLE, "actor_observation_unavailable");
         }
     }
@@ -771,8 +887,8 @@ public final class ActorControlService {
             cancelledBeforeAction(operation);
             return;
         }
-        String reason = outcome.dispatch() == NativeActionResult.Dispatch.NOT_STARTED && operation.chatEntryFailure != null
-                ? operation.chatEntryFailure : AcceptanceChatResults.errorReason(outcome);
+        String reason = outcome.dispatch() == NativeActionResult.Dispatch.NOT_STARTED && operation.actionEntryFailure != null
+                ? operation.actionEntryFailure : AcceptanceChatResults.errorReason(outcome);
         if (outcome.outcome() == NativeActionResult.Outcome.FAILED && !operation.dispatchStarted) {
             chatFailedBeforeDispatch(operation, reason == null ? "native_chat_validation_failed" : reason);
             return;
@@ -837,6 +953,7 @@ public final class ActorControlService {
                                       String replyKind, Integer selection) {
         switch (action) {
             case "chat" -> backend.validateChat(handle, text);
+            case "inventory_move" -> { /* The typed inventory parameters are validated separately. */ }
             case "npc_center_open" -> backend.validateNpcCenterOpen(handle);
             case "npc_cancel" -> backend.validateNpcCancel(handle, dialogueVersion);
             case "npc_reply" -> backend.validateNpcReply(handle, dialogueVersion, replyKind, selection);
@@ -845,10 +962,21 @@ public final class ActorControlService {
     }
 
     private static void validateActionParameters(String action, ActorActRequest.Parameters parameters) {
-        if (action == null || !List.of("chat", "npc_center_open", "npc_cancel", "npc_reply").contains(action)) {
+        if (action == null || !List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move").contains(action)) {
             throw error(HttpStatus.BAD_REQUEST, "unsupported_action");
         }
         if (parameters == null) throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+        if ("inventory_move".equals(action)) {
+            if (parameters.text() != null || parameters.dialogueVersion() != null
+                    || parameters.kind() != null || parameters.selection() != null) {
+                throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+            }
+            inventoryMove(parameters);
+            return;
+        }
+        if (parameters.inventoryType() != null || parameters.sourceSlot() != null || parameters.targetSlot() != null) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
+        }
         if (!"npc_reply".equals(action) && (parameters.kind() != null || parameters.selection() != null)) {
             throw error(HttpStatus.BAD_REQUEST, "invalid_action_parameters");
         }
@@ -1172,9 +1300,13 @@ public final class ActorControlService {
             if ("chat".equals(operation.action) && !terminal(operation.status)) {
                 chatResultUnavailable(operation, nativeDispatchStarted(operation));
             }
+            if ("inventory_move".equals(operation.action) && !terminal(operation.status)) {
+                inventoryResultUnavailable(operation, nativeDispatchStarted(operation));
+            }
             releaseActionSlot(operation);
             operation.work = null;
             operation.chatAction = null;
+            operation.inventoryAction = null;
             operation.moduleContext = null;
             monitor.notifyAll();
         }
@@ -1374,6 +1506,7 @@ public final class ActorControlService {
 
     private static boolean nativeDispatchStarted(Operation operation) {
         if (operation.chatAction != null && operation.chatAction.dispatchStarted()) operation.dispatchStarted = true;
+        if (operation.inventoryAction != null && operation.inventoryAction.dispatchStarted()) operation.dispatchStarted = true;
         return operation.dispatchStarted;
     }
 
@@ -1407,8 +1540,8 @@ public final class ActorControlService {
     private record RequestKey(String kind, String owner, String target, String requestId) { }
     private record RequestRecord(Object fingerprint, String operationId) { }
     private record ActionFingerprint(long generation, String action, String textHash, Long dialogueVersion,
-                                     String replyKind, Integer selection,
-                                     ActorActRequest.ExpectedContext context) { }
+                                     String replyKind, Integer selection, String inventoryType, Integer sourceSlot,
+                                     Integer targetSlot, ActorActRequest.ExpectedContext context) { }
     private static final class Session {
         final String id;
         final long generation;
@@ -1451,8 +1584,9 @@ public final class ActorControlService {
         boolean actionSlotHeld;
         ExecutionScope.WorkHandle work;
         NativeActionService.ActionHandle chatAction;
+        NativeInventoryActions.MoveHandle inventoryAction;
         CharacterRuntime.ModuleContext moduleContext;
-        String chatEntryFailure;
+        String actionEntryFailure;
         String action;
         long sequence;
         Map<String, Object> result = Map.of();

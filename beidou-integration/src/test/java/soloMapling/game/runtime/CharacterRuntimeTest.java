@@ -8,6 +8,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.game.action.NativeActionFact;
+import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -625,6 +627,40 @@ class CharacterRuntimeTest {
             assertEquals(CharacterRuntime.State.CLOSED, fixture.runtime.snapshot().state());
             assertEquals(1, fixture.role.releases.get());
         }
+    }
+
+    @Test
+    void actionFactsRemainNeutralAndBoundToTheOriginalRoleWorldAndModuleWork() {
+        Fixture fixture = opened();
+        var context = fixture.runtime.context(fixture.mount("inventory", Set.of("inventory")));
+        var other = fixture.runtime.context(fixture.mount("chat", Set.of("chat")));
+        var work = context.acceptWork();
+        NativeActionFact fact = actionFact(101, fixture.runtime.acceptedEpoch().value());
+        assertThrows(CharacterRuntime.Invalid.class, () -> other.recordResult(work, fact));
+        assertThrows(CharacterRuntime.Invalid.class, () -> context.recordResult(work,
+                actionFact(102, fixture.runtime.acceptedEpoch().value())));
+        assertThrows(CharacterRuntime.Invalid.class, () -> context.recordResult(work, actionFact(101, "other_world")));
+        context.reject(work);
+        fixture.runtime.stop(context.reference(), CharacterRuntime.StopMode.PAUSE);
+        // A late native fact is observable, but grants no authority to the stopped module.
+        context.recordResult(work, fact);
+        assertThrows(CharacterRuntime.Invalid.class, context::acceptWork);
+        var events = fixture.runtime.events(0, 128).events().stream()
+                .filter(event -> event.kind() == RuntimeEvents.Kind.ACTION_RESULT).toList();
+        assertEquals(1, events.size());
+        assertEquals("inventory", events.getFirst().moduleId());
+        assertEquals(work.snapshot().id(), events.getFirst().workId());
+        assertEquals("SUCCEEDED", events.getFirst().outcome());
+        assertNull(events.getFirst().reason());
+    }
+
+    private static NativeActionFact actionFact(int characterId, String epoch) {
+        return new NativeActionFact() {
+            public int senderCharacterId() { return characterId; }
+            public String epoch() { return epoch; }
+            public NativeActionResult.Outcome outcome() { return NativeActionResult.Outcome.SUCCEEDED; }
+            public String fixedReason() { return null; }
+        };
     }
 
     private Fixture manual() { return fixture(new ManualExecutor(8)); }

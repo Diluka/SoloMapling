@@ -118,3 +118,7 @@ Bot 门面 [BotNativeActions](../../beidou-integration/src/main/java/soloMapling
 完整 V2 组合、真实战斗 #127、按需事件 #120、NPC 会话 #121 及 PQ 通关仍在各自任务验收；本叶的公共动作或 Bot 薄适配通过不替代它们。保持北斗 submodule 原样，独立实验使用临时库或一致副本，实际部署验证沿既定授权与备份流程。
 
 本轮提炼以 `9c8cbd0e971ef4def11596e8d855cdcd52974893` 为基线，来源为 Solo 自有的 `NativeActorBackend` 普通聊天与派发环境、`ActorControlService` 的动作/结果映射，以及 `BotGameContexts`/`BotClient` 的身份差异；不从北斗子模块改写或移入补丁。公共入口为 `NativeActionService`，终态类型为 `NativeActionResult/ChatEvidence`；MCP/Bot 的具体适配与验收入口见本文对应说明。
+
+## 背包移位增量
+
+普通聊天的 `NativeActionResult` 继续保留专用 `ChatEvidence`；背包使用独立 `InventoryMoveResult`。二者只通过 `NativeActionFact` 向宿主投影安全结果摘要，详细证据留在各动作类型中。新增 `NativeInventoryActions` 复用原 lane 与提交回执，不增加执行器或通用原始封包入口。协议与验证见[背包移位](inventory-move.md)。本文前述四动作范围是 #119 当轮边界，后续实际能力以对应交付与 capabilities 为准。

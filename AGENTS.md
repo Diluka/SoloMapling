@@ -103,3 +103,9 @@ python3 beidou-integration/scripts/build.py --help
 - 代码定位优先 Serena/LSP；确认项目及语言服务后使用。服务不可用时说明情况，再用限定范围的 `rg`。
 - 不修改安装的软件内容或 `node_modules`，不把工具缓存、`.serena/` 和构建产物提交。
 - 整体继续按 AGPL-3.0 维护，保留原作者版权、LICENSE 和来源；复用插件代码时记录归属。不得将派生项目整体改标 MIT。
+
+## #200 基本动作的增量交付
+
+- #164 的候选背包移位能力位于中立 `soloMapling.game.action.NativeInventoryActions`，经运行体原模块 scope、Grant 与唯一 lane 执行；MCP 仅适配身份、请求、场景及结果，不实现第二份物品规则。实际部署以对应 Issue 和能力公告为准。
+- `inventory_move` 仅接受五类普通背包内不同的正槽位1..127；零/负槽位属于其他原生分流，必须拒绝，不提前开放丢弃或穿脱。原生整槽移动、交换、合堆与300ms限频保持原样。
+- 成功必须核同一原生背包锁内的两槽前后事实，派发后取消不撤回；原生事实与work真实结算分开。背包存档另核正常退出及同CID重开，既有 `persisted_state_verified` 不包含背包。详见 `docs/shared-game-foundation/inventory-move.md`。

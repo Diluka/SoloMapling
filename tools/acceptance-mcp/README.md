@@ -1,6 +1,6 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、中心及有限回复，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现七个工具，实际后端是否已开启角色控制、聊天、中心、有限回复及背包移位，以 `game_capabilities.enabled_tools` 及 `actions` 为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
@@ -10,9 +10,11 @@
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
 | `operation_get` | 查询操作、当前角色会话及有界事件 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
-| `game_act` | 在真实 actor 场景中排队 `chat`、`npc_center_open`、`npc_cancel` 或 `npc_reply` | 写操作；必须有 request_id 和实际 expected_context |
+| `game_act` | 在真实 actor 场景中排队 `chat`、`npc_center_open`、`npc_cancel`、`npc_reply` 或 `inventory_move` | 写操作；必须有 request_id 和实际 expected_context |
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]`、三种动作 `chat/npc_center_open/npc_cancel` 或增加 `npc_reply` 的四动作组合，顶层和 `actor_control` 公告必须一致。客户端 schema 存在不代表后端已开启。回复仅包含已审查路径的 `select/decline`；没有礼包 accept、任意 NPC、未审查选项、移动或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。七工具后端允许仅 `actions=["chat"]`、三种动作 `chat/npc_center_open/npc_cancel`、增加 `npc_reply` 的四动作组合，或再增加 `inventory_move` 的五动作组合，顶层和 `actor_control` 公告必须一致。客户端 schema 存在不代表后端已开启。回复仅包含已审查路径的 `select/decline`；没有礼包 accept、任意 NPC、未审查选项、移动或脚本工具，SocialBot 完整互动仍待后续验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+
+`inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；工具不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
 
 ## 安装与启动
 

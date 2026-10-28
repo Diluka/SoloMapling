@@ -12,6 +12,9 @@ import soloMapling.game.action.ChatEvidence;
 import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeChatAction;
+import soloMapling.game.action.NativeInventoryActions;
+import soloMapling.game.action.NativeInventoryMoveAction;
+import soloMapling.game.action.InventoryMoveResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -1315,7 +1318,7 @@ class ActorControlServiceTest {
         verify(chatDispatch, times(2)).execute(any(), any());
         assertEquals(7, service.publicCapabilities().get("maximum_pending_actions_per_session"));
         assertEquals(8, service.publicCapabilities().get("actor_executor_queue_capacity"));
-        assertEquals(List.of("chat", "npc_center_open", "npc_cancel", "npc_reply"), service.publicCapabilities().get("actions"));
+        assertEquals(List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"), service.publicCapabilities().get("actions"));
     }
 
     @Test
@@ -2497,6 +2500,123 @@ class ActorControlServiceTest {
 
     private static ActorActRequest npcRequest(Map<String, Object> opened, String action, Long version) {
         return new ActorActRequest(sessionId(opened), generation(opened), action, new ActorActRequest.Parameters(null, version),
+                new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
+    }
+
+    @Test
+    void inventoryMoveUsesOneHostAndItsFullParametersBindTheIdempotencyKey() throws Exception {
+        ActorControlService service = service(4, 32, 64);
+        prepareInventoryMove(service);
+        var opened = open(service, "open-inventory");
+        executors.getFirst().runNext();
+        var request = inventoryRequest(opened, "ETC", 1, 2);
+        var queued = service.act("admin", "inventory-one", request);
+        assertEquals("QUEUED", queued.get("status"));
+        assertEquals(id(queued), id(service.act("admin", "inventory-one", request)));
+        for (ActorActRequest changed : List.of(inventoryRequest(opened, "USE", 1, 2),
+                inventoryRequest(opened, "ETC", 3, 2), inventoryRequest(opened, "ETC", 1, 3))) {
+            assertEquals("request_id_conflict", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "inventory-one", changed)).reason());
+        }
+        assertSame(execution(service, opened).moduleScope(), operationWork(service, queued).scope());
+        assertEquals(runtimeView(opened).get("id"), runtimeView(queued).get("id"));
+        executors.getFirst().runNext();
+        var moved = service.get("admin", id(queued), 0, 100);
+        assertEquals("SUCCEEDED", moved.get("status"));
+        assertEquals("native_inventory_move_observed", result(moved).get("observed_outcome"));
+        assertEquals(true, result(moved).get("changed"));
+        assertNull(operationWork(service, moved));
+        verify(backend, times(1)).prepareInventoryMove(eq(handle), any(), any(), any(), any());
+        verify(backend, times(1)).submitInventoryMove(any());
+        verify(backend, never()).close(any(), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void cancelledInventoryWorkKeepsItsSlotUntilRealLaneSettlementAndReservesCloseCapacity() {
+        ActorControlService service = service(4, 40, 64);
+        prepareInventoryMove(service);
+        var opened = open(service, "open-inventory-cancel");
+        executors.getFirst().runNext();
+        List<Map<String, Object>> actions = new ArrayList<>();
+        for (int i = 0; i < 7; i++) actions.add(service.act("admin", "inventory-queued-" + i,
+                inventoryRequest(opened, "ETC", 1, 2)));
+        service.cancel("admin", "cancel-inventory", id(actions.getFirst()));
+        assertEquals("actor_action_capacity_exceeded", assertThrows(ObservationException.class,
+                () -> service.act("admin", "inventory-eighth", inventoryRequest(opened, "ETC", 1, 2))).reason());
+        executors.getFirst().runNext();
+        var cancelled = service.get("admin", id(actions.getFirst()), 0, 100);
+        assertEquals("CANCELLED", cancelled.get("status"));
+        assertEquals(false, result(cancelled).get("native_dispatch_started"));
+        service.act("admin", "inventory-after-settlement", inventoryRequest(opened, "ETC", 1, 2));
+        var closing = service.close("admin", "close-inventory-full", closeRequest(opened));
+        executors.getFirst().drain();
+        assertEquals("SUCCEEDED", service.get("admin", id(closing), 0, 100).get("status"));
+        verify(backend, times(1)).close(eq(handle), any(ScopeResources.DrainPermit.class));
+    }
+
+    @Test
+    void inventoryMoveRejectsNonMoveSemanticsBeforeTakingHistoryOrWork() {
+        ActorControlService service = service(4, 32, 64);
+        prepareInventoryMove(service);
+        var opened = open(service, "open-inventory-input");
+        executors.getFirst().runNext();
+        for (ActorActRequest request : List.of(inventoryRequest(opened, "EQUIPPED", 1, 2),
+                inventoryRequest(opened, "ETC", 0, 2), inventoryRequest(opened, "ETC", 1, -1),
+                inventoryRequest(opened, "ETC", 1, 128), inventoryRequest(opened, "ETC", 1, 1))) {
+            assertEquals("invalid_inventory_move", assertThrows(ObservationException.class,
+                    () -> service.act("admin", "invalid-inventory", request)).reason());
+        }
+        assertEquals(1, service.publicCapabilities().get("operation_history_size"));
+        verify(backend, never()).prepareInventoryMove(any(), any(), any(), any(), any());
+    }
+
+    private void prepareInventoryMove(ActorControlService service) {
+        AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
+        when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-current",
+                "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
+        service.setObservations(observations);
+        Map<NativeInventoryActions.MoveHandle, java.util.function.Supplier<NativeActionService.SubmissionReceipt>> prepared =
+                new IdentityHashMap<>();
+        doAnswer(invocation -> {
+            NativeActorHandle actor = invocation.getArgument(0);
+            CharacterCommandLane lane = invocation.getArgument(1);
+            CharacterCommandLane.ControlPermit permit = invocation.getArgument(2);
+            ExecutionScope.WorkHandle work = invocation.getArgument(3);
+            NativeInventoryMoveAction request = invocation.getArgument(4);
+            NativeInventoryActions.MoveHandle handle = mock(NativeInventoryActions.MoveHandle.class);
+            NativeActionService.SubmissionReceipt receipt = mock(NativeActionService.SubmissionReceipt.class);
+            CompletableFuture<InventoryMoveResult> result = new CompletableFuture<>();
+            AtomicBoolean dispatched = new AtomicBoolean();
+            when(handle.result()).thenReturn(result.minimalCompletionStage());
+            when(handle.dispatchStarted()).thenAnswer(ignored -> dispatched.get());
+            when(handle.receipt()).thenReturn(receipt);
+            when(receipt.status()).thenReturn(NativeActionService.SubmissionStatus.ENQUEUED);
+            prepared.put(handle, () -> {
+                lane.submit(work, permit, () -> {
+                    dispatched.set(true);
+                    var before = new InventoryMoveResult.Slots(new InventoryMoveResult.Slot(request.sourceSlot(), true, 4161001, 1),
+                            new InventoryMoveResult.Slot(request.targetSlot(), false, 0, 0));
+                    var after = new InventoryMoveResult.Slots(new InventoryMoveResult.Slot(request.sourceSlot(), false, 0, 0),
+                            new InventoryMoveResult.Slot(request.targetSlot(), true, 4161001, 1));
+                    result.complete(new InventoryMoveResult(NativeActionResult.Outcome.SUCCEEDED, NativeActionResult.Dispatch.STARTED,
+                            actor.characterRef().character().getId(), work.cancelRequested(), false, null,
+                            new InventoryMoveResult.Evidence(InventoryMoveResult.Source.NATIVE_INVENTORY_SLOTS,
+                                    work.acceptedEpoch().value(), request.inventoryType(), before, after, true, true)));
+                }, () -> {
+                    if (!result.isDone()) result.complete(new InventoryMoveResult(NativeActionResult.Outcome.CANCELLED,
+                            NativeActionResult.Dispatch.NOT_STARTED, actor.characterRef().character().getId(), true, false,
+                            "inventory_move_cancelled_before_dispatch", InventoryMoveResult.Evidence.none(work.acceptedEpoch().value())));
+                });
+                return receipt;
+            });
+            return handle;
+        }).when(backend).prepareInventoryMove(any(), any(), any(), any(), any());
+        doAnswer(invocation -> prepared.get(invocation.getArgument(0)).get()).when(backend).submitInventoryMove(any());
+    }
+
+    private static ActorActRequest inventoryRequest(Map<String, Object> opened, String inventoryType, int source, int target) {
+        return new ActorActRequest(sessionId(opened), generation(opened), "inventory_move",
+                new ActorActRequest.Parameters(inventoryType, source, target),
                 new ActorActRequest.ExpectedContext("scene-current", (String) opened.get("runtime_generation")));
     }
 

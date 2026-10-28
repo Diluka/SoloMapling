@@ -130,6 +130,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
             config = self.stub.write_config(Path(directory) / "private.json", timeout=timeout)
             params = StdioServerParameters(
                 command=sys.executable, args=["-m", "solo_acceptance_mcp", "--config", str(config)], cwd=root,
+                env={"PYTHONPATH": str(root / "src")},
             )
             async with Client(params, read_timeout_seconds=10) as client:
                 yield client
@@ -153,7 +154,7 @@ class ChatProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(self.args), set(tools["game_act"].input_schema["required"]))
         self.assertIs(False, tools["game_act"].input_schema.get("additionalProperties"))
         action_schema = tools["game_act"].input_schema["properties"]["action"]
-        self.assertEqual(["chat", "npc_center_open", "npc_cancel", "npc_reply"], action_schema["enum"])
+        self.assertEqual(["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"], action_schema["enum"])
         self.assertFalse(caps.is_error)
         self.assertEqual(capabilities(TOOLS), caps.structured_content)
         self.assertEqual(sorted(TOOLS), require_capabilities(caps.structured_content, sorted(tools), actors=True))

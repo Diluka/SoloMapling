@@ -36,12 +36,12 @@ public final class NativeActionService {
         private static final Decision SUBMITTING = new Decision(SubmissionStatus.SUBMITTING, SubmissionRejection.NONE);
         private final long workId;
         private final AtomicReference<Decision> decision = new AtomicReference<>(PREPARED);
-        private SubmissionReceipt(long workId) { this.workId = workId; }
+        SubmissionReceipt(long workId) { this.workId = workId; }
         public long workId() { return workId; }
         public SubmissionStatus status() { return decision.get().status(); }
         public SubmissionRejection rejection() { return decision.get().rejection(); }
-        private boolean begin() { return decision.compareAndSet(PREPARED, SUBMITTING); }
-        private void decide(SubmissionStatus status, SubmissionRejection rejection) { decision.set(new Decision(status, rejection)); }
+        boolean begin() { return decision.compareAndSet(PREPARED, SUBMITTING); }
+        void decide(SubmissionStatus status, SubmissionRejection rejection) { decision.set(new Decision(status, rejection)); }
     }
 
     public static final class ActionHandle {

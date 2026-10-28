@@ -110,3 +110,7 @@ MCP 观察要从同一个宿主和原生来源读取，不建立另一份角色�
 
 本轮测试分为宿主机制合同、MCP 同壳接入、隔离原生验证和实际部署证据；
 前一层通过不能代替后一层。已交付 #117/#118/#119 直接组合复用。
+
+## 背包基本动作
+
+[#200](https://github.com/Diluka/SoloMapling/issues/200) 的首片 #164 通过同一 `ModuleContext.prepareNative("inventory", ...)` 消费共享 `NativeInventoryActions`，只提交原 lane 一次。具体物品规则由北斗执行，宿主只负责控制权、工作和 `NativeActionFact` 安全摘要，不持有第二份库存。参数、结果与存档验收见[背包移位](../shared-game-foundation/inventory-move.md)，各层验收及实际部署以 Issue 记录为准。
