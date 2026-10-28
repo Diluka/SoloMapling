@@ -1,0 +1,510 @@
+schemaVersion: 1
+map:
+  id: beidou.operations
+  title: 北斗管理与运营
+  summary: 上游北斗1.12的正常管理鉴权、启停、在线查询及运营维护；源码能力与本地部署实态分别确认。
+nodes:
+- id: beidou.operations
+  kind: domain
+  name: 北斗：管理与运营
+  summary: 为运营人员提供正常管理鉴权、游戏服启停、在线查询、规则配置、账号与内容维护。
+  aliases:
+  - 管理后台
+  - 运营
+  - 配置
+  - 启停
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller
+    description: 管理后台业务API入口。
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-ui/src/views
+    description: 运营管理页面及功能入口。
+- id: beidou.operations.admin-api
+  kind: interface
+  name: 北斗正常管理 API
+  summary: 管理客户端沿 Authorization Bearer JWT 及当前管理员资料访问受保护API；auth与静态资源有显式例外，Swagger测试捷径不作为集成鉴权路径。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/config/SpringSecurityConfig.java
+    value: SpringSecurityConfig.filterChain
+    description: 建立无状态安全链及公开路径例外。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/aop/AuthTokenFilter.java
+    value: AuthTokenFilter.doFilterInternal
+    description: 正常JWT路径解析令牌并读取当前管理员身份；另存在需明确启用Swagger的测试分支。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-ui/src/api/interceptor.ts
+    description: 管理页面附加Bearer令牌、SubmitBody信封并处理统一业务响应及401。
+- id: beidou.operations.admin-authorized
+  kind: invariant
+  name: 正常管理身份需匹配当前管理员
+  summary: 正常JWT被验证后，用户加载只接受webadmin=1的账号并形成ROLE_ADMIN；单独取得JWT不代表已获管理功能资格。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AuthService.java
+    value: AuthService.getToken
+    description: 登录验证账号密码并签发JWT；此步骤本身不校验webadmin。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/UserDetailsServiceImpl.java
+    value: UserDetailsServiceImpl.loadUserByUsername
+    description: 仅为webadmin=1账号生成正常管理身份。
+- id: beidou.operations.request-gate
+  kind: invariant
+  name: 管理HTTP入口的封禁与限流
+  summary: 请求先受IP封禁和RateLimitUtil约束；通过后再按内容类型及公开路径决定是否包装请求体，非业务幂等保证。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/aop/ServerFilter.java
+    value: ServerFilter.doFilter
+    description: 按请求来源核封禁与限流，拒绝时停止过滤链。
+- id: beidou.operations.admin-session
+  kind: data
+  name: 管理身份与JWT
+  summary: 令牌以账号名称标识身份并受JWT配置有效期约束；当前管理员资格从账号资料读取，logout API只返回成功不建立撤销账本。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AuthService.java
+    value: AuthService.getToken
+    description: 签发账号名称的JWT。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AuthService.java
+    value: AuthService.refreshToken
+    description: 按Bearer令牌账号重新签发。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/AuthController.java
+    value: AuthController.logout
+    description: 当前登出接口仅返回成功，不执行服务端令牌注销。
+- id: beidou.operations.operating-config
+  kind: data
+  name: 运营规则配置
+  summary: game_config持久记录及内存规则树，含服务器开关与世界倍率；不同参数的即时生效范围由GameConfig决定。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/dao/entity/GameConfigDO.java
+    description: 运营参数的类型、子类型、代码与值。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/config/GameConfig.java
+    value: GameConfig.update
+    description: 刷新规则树，并对受支持的世界倍率更新在线World对象。
+- id: beidou.operations.admin-login
+  kind: scenario
+  name: 登录并使用正常管理后台
+  summary: 凭账号密码取得JWT，再由受保护请求校验当前webadmin资格；拒绝无效凭据、令牌或非管理员身份。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/AuthController.java
+    value: AuthController.login
+    description: 管理登录入口转交账号密码认证。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/aop/AuthTokenFilter.java
+    value: AuthTokenFilter.doFilterInternal
+    description: 使用正常JWT核当前管理员身份。
+- id: beidou.operations.bootstrap
+  kind: scenario
+  name: 初始化应用与游戏服务
+  summary: 入口按同一配置位置做建库前置，再启动Spring和Flyway，最后由ServerManager启动原生游戏服；前置异常直接退出main。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/ServerApplication.java
+    value: ServerApplication.main
+    description: 先建库前置，再启动Spring应用。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/ServerApplication.java
+    value: ServerApplication.initDb
+    description: 读取spring.config.location或内置YAML并检查数据库存在性。
+  - kind: document
+    value: upstream/BeiDou-Server/gms-server/src/main/resources/application.yml
+    description: Flyway与应用配置的上游默认声明，不代替本地有效部署配置。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/manager/ServerManager.java
+    value: ServerManager.run
+    description: Spring就绪后初始化原生游戏Server。
+- id: beidou.operations.start-game
+  kind: operation
+  name: 启动游戏服
+  summary: 管理入口或应用启动调用原生Server.init建立游戏服；HTTP调用完成不替代登录、频道和玩法就绪验证。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/ServerController.java
+    value: ServerController.startServer
+    description: 管理请求调用原生游戏服初始化。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/manager/ServerManager.java
+    value: ServerManager.run
+    description: 应用启动后启动游戏服。
+- id: beidou.operations.stop-game
+  kind: operation
+  name: 停止或重启游戏服
+  summary: 立即停服、带公告倒计时停服及重启请求委托原生Server；Spring销毁同样进入游戏服关闭。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/ServerController.java
+    value: ServerController.stopServer
+    description: 立即请求原生关闭游戏服。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/ServerController.java
+    value: ServerController.stopServerWithMsgAndInternal
+    description: 按公告与倒计时请求原生关闭。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/ServerController.java
+    value: ServerController.restartServer
+    description: 请求关闭并重启游戏服。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/manager/ServerManager.java
+    value: ServerManager.destroy
+    description: 应用销毁时关闭原生游戏服。
+- id: beidou.operations.update-config
+  kind: scenario
+  name: 维护并应用运营参数
+  summary: 新增、修改或移除数据库规则后同步内存配置；导入导出沿ConfigService维护，不能假定所有YAML参数均支持热变更。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/ConfigService.java
+    value: ConfigService.addConfig
+    description: 校验参数唯一性后持久化并加入内存配置。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/ConfigService.java
+    value: ConfigService.updateConfig
+    description: 更新配置记录及内存值。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/ConfigService.java
+    value: ConfigService.deleteConfig
+    description: 删除配置与相关文案，再移除内存规则。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/ConfigService.java
+    value: ConfigService.importYml
+    description: 校验导入文件类型并导入规则。
+- id: beidou.operations.inspect-online
+  kind: operation
+  name: 查询游戏服与在线角色
+  summary: 读取游戏服状态、世界频道拓扑和当前在线角色列表，供运营核实际入场结果；不以累计创建数代替在线列表。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/ServerController.java
+    value: ServerController.online
+    description: 读取原生Server在线状态。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/ServerService.java
+    value: ServerService.worldList
+    description: 投影当前世界与倍率。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/ServerService.java
+    value: ServerService.channelList
+    description: 读取指定世界频道。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CharacterService.java
+    value: CharacterService.getChrOnlineList
+    description: 从实际世界PlayerStorage筛选与分页当前角色。
+- id: beidou.operations.manage-accounts
+  kind: scenario
+  name: 管理账号和角色资料
+  summary: 管理入口委托身份域执行账号建立、资料修改、封禁解封、重置登录、角色删除及账号注销；不成为第二套身份状态所有者。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/AccountController.java
+    value: AccountController.updateByGm
+    description: 管理账号资料入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/AccountController.java
+    value: AccountController.banAccount
+    description: 管理封停入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/AccountController.java
+    value: AccountController.delete
+    description: 管理账号注销入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/controller/CharacterController.java
+    value: CharacterController.delete
+    description: 管理角色删除入口。
+- id: beidou.operations.manage-resources
+  kind: operation
+  name: 运营发放资源与调整角色倍率
+  summary: 向指定在线角色或在线全体发放已支持资源，并维护受支持的个人倍率；实际金币、道具、经验和点券语义归各业务域。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/GiveService.java
+    value: GiveService.give
+    description: 按目标角色或在线全体及资源类型路由发放。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CharacterService.java
+    value: CharacterService.updateRate
+    description: 按白名单倍率名更新角色扩展倍率。
+- id: beidou.operations.maintain-content
+  kind: operation
+  name: 维护运行内容与命令开放
+  summary: 管理文件树读写、规则命令状态以及事件/传送点/地图重载；当前重载入口复用GM命令，具体内容业务归原功能域。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/FileTreeService.java
+    value: FileTreeService.writeFile
+    description: 在文件树边界中写入运行内容。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CommandService.java
+    value: CommandService.updateCommand
+    description: 更新指令启用、权限等配置并刷新注册状态。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CommandService.java
+    value: CommandService.reloadEventsByGMCommand
+    description: 管理请求复用GM事件重载入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CommandService.java
+    value: CommandService.reloadMapsByGMCommand
+    description: 管理请求复用GM地图重载入口。
+relations:
+- from: beidou.operations.admin-api
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.admin-authorized
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.request-gate
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.admin-session
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.operating-config
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.admin-login
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.bootstrap
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.start-game
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.stop-game
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.update-config
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.inspect-online
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.manage-accounts
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.manage-resources
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.maintain-content
+  type: part_of
+  to: beidou.operations
+  summary: 管理与运营域拥有该概念及管理责任。
+- from: beidou.operations.admin-login
+  type: reads
+  to: beidou.identity.accounts
+  summary: 管理登录复用北斗账号凭据与webadmin资料。
+- from: beidou.operations.admin-login
+  type: writes
+  to: beidou.operations.admin-session
+  summary: 合法凭据签发JWT，但受保护请求还须核管理员资格。
+- from: beidou.operations.admin-login
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 后台功能使用沿正常JWT和当前管理员资格。
+- from: beidou.operations.admin-login
+  type: constrained_by
+  to: beidou.operations.request-gate
+  summary: 正常HTTP登录仍受来源IP封禁与限流约束。
+- from: beidou.operations.admin-login
+  type: publishes
+  to: beidou.operations.admin-api
+  summary: 对管理客户端提供正常登录及后续API使用入口。
+- from: beidou.operations.bootstrap
+  type: invokes
+  to: beidou.operations.start-game
+  summary: Spring就绪后启动原生游戏服。
+- from: beidou.operations.update-config
+  type: writes
+  to: beidou.operations.operating-config
+  summary: 维护数据库规则及对应内存配置。
+- from: beidou.operations.manage-accounts
+  type: invokes
+  to: beidou.identity.maintain-account
+  summary: 账号资料、封停与注销由身份域处理。
+- from: beidou.operations.manage-accounts
+  type: invokes
+  to: beidou.identity.remove-character
+  summary: 角色删除沿身份域原生清理规则。
+- from: beidou.operations.inspect-online
+  type: reads
+  to: beidou.identity.characters
+  summary: 实际在线角色投影带有原生角色身份。
+- from: beidou.operations.start-game
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.start-game
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.stop-game
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.stop-game
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.update-config
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.update-config
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.inspect-online
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.inspect-online
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.manage-accounts
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.manage-accounts
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.manage-resources
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.manage-resources
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.maintain-content
+  type: consumes
+  to: beidou.operations.admin-api
+  summary: 管理入口通过正常受保护API接受运营请求。
+- from: beidou.operations.maintain-content
+  type: constrained_by
+  to: beidou.operations.admin-authorized
+  summary: 正常管理请求要求当前管理员资格。
+- from: beidou.operations.start-game
+  type: invokes
+  to: beidou.world.open-world
+  summary: 原生Server初始化按配置建立世界和频道。
+- from: beidou.operations.stop-game
+  type: invokes
+  to: beidou.world.stop-world
+  summary: 停服进入世界及频道原生关闭。
+- from: beidou.operations.inspect-online
+  type: reads
+  to: beidou.world.topology
+  summary: 读取当前世界频道拓扑与倍率。
+- from: beidou.operations.update-config
+  type: writes
+  to: beidou.world.topology
+  summary: 受支持的世界倍率及公告参数同步更新当前World投影。
+- from: beidou.operations.manage-resources
+  type: writes
+  to: beidou.economy.inventory
+  summary: 运营道具与装备发放沿InventoryManipulator等原生入口改变在线角色背包。
+- from: beidou.operations.manage-resources
+  type: writes
+  to: beidou.economy.wallet
+  summary: 运营金币与点券发放先按GiveService上下界处理，再调用原生gainMeso或gainCash。
+- from: beidou.operations.manage-resources
+  type: writes
+  to: beidou.combat.growth
+  summary: 运营经验发放调用Character.gainExp，沿原生成长规则改变角色经验与可能的升级结果。
+- from: beidou.operations.maintain-content
+  type: consumes
+  to: beidou.world.events
+  summary: CommandService事件重载逐频道调用reloadEventScriptManager，取消旧脚本管理器并重建。
+flows:
+- id: beidou.operations.admin-login.flow
+  name: 取得令牌与取得管理资格
+  summary: 把账号密码正确、JWT有效和当前管理员资格分别核对；不采用Swagger测试分支。
+  scenario: beidou.operations.admin-login
+  startsAt: credentials
+  steps:
+  - id: credentials
+    kind: action
+    name: 提交账号密码
+    summary: 请求AuthController登录。
+    concept: beidou.operations.admin-login
+  - id: password
+    kind: decision
+    name: 账号密码是否正确
+    summary: AuthService读取账号并比较密码。
+  - id: token
+    kind: action
+    name: 签发JWT
+    summary: 正确凭据取得令牌。
+    concept: beidou.operations.admin-session
+  - id: request
+    kind: action
+    name: 请求受保护管理API
+    summary: 携带Bearer令牌访问正常管理接口。
+    concept: beidou.operations.admin-api
+  - id: authority
+    kind: decision
+    name: 令牌和当前管理员是否有效
+    summary: 正常路径同时核JWT及webadmin=1的用户加载。
+    concept: beidou.operations.admin-authorized
+  - id: allowed
+    kind: outcome
+    name: 允许正常管理请求
+    summary: 请求继续进入其管理业务，业务自身仍可能拒绝。
+  - id: refused
+    kind: outcome
+    name: 无法取得管理访问
+    summary: 凭据错误、无效令牌或当前非管理员时不进入正常管理业务。
+  transitions:
+  - from: credentials
+    to: password
+  - from: password
+    to: token
+    when: 账号存在且密码匹配
+  - from: password
+    to: refused
+    when: 账号不存在或密码不匹配
+  - from: token
+    to: request
+  - from: request
+    to: authority
+  - from: authority
+    to: allowed
+    when: JWT有效且当前webadmin=1
+  - from: authority
+    to: refused
+    when: JWT无效或无法加载当前管理员

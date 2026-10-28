@@ -1,0 +1,618 @@
+schemaVersion: 1
+map:
+  id: beidou.identity
+  title: 北斗账号与角色生命周期
+  summary: 上游北斗1.12的账号身份、角色建立、登录过渡与退出存档；源码地图，不宣称部署验收。
+nodes:
+- id: beidou.identity
+  kind: domain
+  name: 北斗：账号与角色生命周期
+  summary: 为玩家提供账号身份、角色建立、进入世界和退出存档；拥有原生账号与角色记录及登录状态规则。
+  aliases:
+  - 账号
+  - 角色
+  - 登录
+  - 存档
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login
+    description: 原生游戏账号登录、角色创建、选择和删除入口。
+- id: beidou.identity.accounts
+  kind: data
+  name: 北斗账号资料
+  summary: 账号凭据、语言、封停、角色名额和管理资格等资料；管理资格不等于游戏角色 GM 等级。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/dao/entity/AccountsDO.java
+    description: 账号持久记录与登录、语言及管理资格字段。
+- id: beidou.identity.characters
+  kind: data
+  name: 北斗持久角色
+  summary: 角色与账号、世界的归属及角色持久聚合；背包、任务、战斗和社交规则分别由相关功能域决定。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/dao/entity/CharactersDO.java
+    description: 角色身份、世界归属和持久状态声明。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.saveCharToDB
+    description: 当前角色 UPDATE 存档入口；不要误认 CharacterService 中的插入存档实现。
+- id: beidou.identity.login-state
+  kind: data
+  name: 原生登录与转服状态
+  summary: 记录账号未登录、服务端转移与已登录状态，并结合会话协调和角色过渡缓存限制重复登录。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    value: Client.updateLoginState
+    description: 写入账号登录状态并维护 Client 的登录与过渡标记。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    value: Client.getLoginState
+    description: 读取登录状态，并处理超时过渡记录。
+- id: beidou.identity.native-character
+  kind: interface
+  name: 北斗原生角色接入边界
+  summary: 向集成调用方提供原生角色加载、普通频道登录、退出与保存的入口；调用方仍须满足原生账号归属和过渡状态。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.loadCharFromDB
+    description: 按角色 ID、Client 与频道加载模式取得原生角色。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PlayerLoggedinHandler.java
+    value: PlayerLoggedinHandler.handlePacket
+    description: 沿普通频道登录规则将角色接入实际世界。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    value: Client.forceDisconnect
+    description: 同步进入原生断开流程，不把异步 disconnect 受理视为已经存档。
+- id: beidou.identity.account-access
+  kind: invariant
+  name: 原生账号与角色登录资格
+  summary: 游戏登录核凭据及封停；选角核账号角色归属、会话协调、世界容量和过渡资格，拒绝不满足条件的接入。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/LoginPasswordHandler.java
+    value: LoginPasswordHandler.handlePacket
+    description: 执行密码、IP/MAC、临时/永久封停与登录状态检查。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/CharSelectedHandler.java
+    value: CharSelectedHandler.handlePacket
+    description: 核账号角色归属、设备会话和目标世界容量。
+- id: beidou.identity.creation-policy
+  kind: invariant
+  name: 新角色名称、名额与初始模板约束
+  summary: 只允许原生开放的职业群与默认外观装备组合；角色工厂检查名额和名称，按职业配方建立初始角色。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/CreateCharHandler.java
+    value: CreateCharHandler.handlePacket
+    description: 拒绝非法初始参数或未开放的职业群。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/creator/CharacterFactory.java
+    value: CharacterFactory.createNewCharacter
+    description: 检查角色名额与名称，并按原生配方写入新角色。
+- id: beidou.identity.login
+  kind: scenario
+  name: 玩家登录并进入世界
+  summary: 玩家凭账号认证、选择所属角色并完成频道接入；失败保持拒绝结果，不把认证通过等同于角色已上线。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/LoginPasswordHandler.java
+    value: LoginPasswordHandler.handlePacket
+    description: 原生登录入口；可按运营配置自动注册不存在账号。
+- id: beidou.identity.create-character
+  kind: scenario
+  name: 建立新角色
+  summary: 按开放职业和原生初始配方创建角色、保存并登记登录目录；不接受任意初始外观或装备。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/CreateCharHandler.java
+    value: CreateCharHandler.handlePacket
+    description: 按职业配置选择原生创建器。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/creator/CharacterFactory.java
+    value: CharacterFactory.createNewCharacter
+    description: 建立并保存角色，注册账号角色目录。
+- id: beidou.identity.select-character
+  kind: operation
+  name: 选择所属角色并请求频道连接
+  summary: 完成设备会话协调、所属账号与目标世界校验后，设置角色过渡状态并返回频道连接地址。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/CharSelectedHandler.java
+    value: CharSelectedHandler.handlePacket
+    description: 拒绝非本账号角色、封禁设备、世界满员或频道地址不可用。
+- id: beidou.identity.enter-world
+  kind: operation
+  name: 完成普通频道角色登录
+  summary: 核实角色过渡状态，复用世界内角色或从持久记录加载角色，再建立原生频道与地图成员关系。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PlayerLoggedinHandler.java
+    value: PlayerLoggedinHandler.handlePacket
+    description: 核对 Client、World、Channel、HWID 与过渡身份后完成角色登录。
+- id: beidou.identity.load-character
+  kind: operation
+  name: 加载原生角色及关联状态
+  summary: 以明确的账号 Client 和频道模式读取角色聚合；非频道模板读取与普通玩家频道登录具有不同语义。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CharacterService.java
+    value: CharacterService.loadCharFromDB
+    description: 从角色及关联记录组装原生 Character，并按 channelServer 决定频道专属加载。
+- id: beidou.identity.save-character
+  kind: operation
+  name: 保存已登录角色
+  summary: 将已登录角色及关联状态保存到原生数据；自动保存可经世界保存服务调度，未登录角色会退出保存路径。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.saveCharToDB
+    description: 按 autosave 配置调度保存或直接执行，boolean 重载以事务更新 characters。
+- id: beidou.identity.close-character
+  kind: scenario
+  name: 退出角色并保存
+  summary: 原生关闭结束角色交互、通知世界离线并执行保存与会话清理；换频道过渡与最终登出走不同分支。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Client.java
+    value: Client.disconnectInternal
+    description: 区分普通登出、商城与换频道过渡，执行世界移除、保存及会话关闭。
+- id: beidou.identity.remove-character
+  kind: operation
+  name: 按入口规则删除角色
+  summary: 游戏入口校验 PIC、公会/家族及待转世界约束；管理入口先处理在线角色，再删除关联记录并清理登录缓存。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/handlers/login/DeleteCharHandler.java
+    value: DeleteCharHandler.handlePacket
+    description: 执行游戏角色删除的 PIC 与业务关系限制。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CharacterService.java
+    value: CharacterService.deleteCharacterWithOnlineCheck
+    description: 管理删除先准备离线，再通过事务代理删除角色及关联数据。
+- id: beidou.identity.maintain-account
+  kind: operation
+  name: 维护账号资料、准入与注销
+  summary: 建立账号、按入口校验修改资料和密码、封停/解封；管理注销级联处理所属角色和账号记录，不与角色 GM 身份混同。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AccountService.java
+    value: AccountService.addAccount
+    description: 建立具备语言与加密凭据的原生账号。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AccountService.java
+    value: AccountService.updateAccountByUser
+    description: 自助资料修改校验旧密码。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AccountService.java
+    value: AccountService.updateAccountByGM
+    description: 管理修改拒绝当前已登录账号并维护管理资格等资料。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/AccountService.java
+    value: AccountService.banAccount
+    description: 封停账号并关联封禁信息。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/CharacterService.java
+    value: CharacterService.deleteAccount
+    description: 管理注销先处理所属角色，再清理账号级关联记录与账号本身。
+- id: beidou.identity.rename-character
+  kind: operation
+  name: 登记、撤销和应用角色改名
+  summary: 改名申请受未完成申请及冷却限制，可撤销待处理申请，并在启动或启用即时改名的登出路径应用；应用还同步关联名称并处理改名卡。
+  aliases:
+  - 改名卡
+  - 昵称
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/NameChangeService.java
+    value: NameChangeService.registerNameChange
+    description: 拒绝未完成或仍在冷却的改名申请。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/NameChangeService.java
+    value: NameChangeService.cancelPendingNameChange
+    description: 撤销角色待生效申请。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/NameChangeService.java
+    value: NameChangeService.doNameChange
+    description: 更新角色名、戒指关联名称、完成时间并处理改名卡。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.doPendingNameChange
+    description: 登出时按pending标记尝试应用改名。
+- id: beidou.identity.transfer-world
+  kind: scenario
+  name: 登记、撤销和应用世界转移
+  summary: 转区请求先受未完成申请和冷却限制；启动应用时再核开关、账号、婚姻、名称及目标世界，合法申请改变世界归属并按原生规则处理金币与社交关系。
+  aliases:
+  - 转区
+  - 世界转移
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/WorldTransferService.java
+    value: WorldTransferService.registerWorldTransfer
+    description: 登记待处理世界转移并拒绝重复或冷却中的申请。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/WorldTransferService.java
+    value: WorldTransferService.cancelPendingWorldTransfer
+    description: 撤销待处理转区。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/WorldTransferService.java
+    value: WorldTransferService.applyAllWorldTransfer
+    description: 启动应用待转区申请，失败保留日志，不宣称每条申请成功。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/WorldTransferService.java
+    value: WorldTransferService.checkWorldTransferEligibility
+    description: 应用前重核配置、账号、角色、名称和目标世界资格。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/service/WorldTransferService.java
+    value: WorldTransferService.doWorldTransfer
+    description: 变更角色世界、限制随带金币、清公会和好友关联，并登记完成时间。
+relations:
+- from: beidou.identity.accounts
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.characters
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.login-state
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.native-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.account-access
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.creation-policy
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.login
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.create-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.select-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.enter-world
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.load-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.save-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.close-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.remove-character
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.maintain-account
+  type: part_of
+  to: beidou.identity
+  summary: 账号与角色生命周期拥有该概念及其规则。
+- from: beidou.identity.login
+  type: constrained_by
+  to: beidou.identity.account-access
+  summary: 登录流程受原生准入与角色归属检查约束。
+- from: beidou.identity.login
+  type: reads
+  to: beidou.identity.accounts
+  summary: 认证读取账号凭据、封停和注册配置关联资料。
+- from: beidou.identity.login
+  type: writes
+  to: beidou.identity.login-state
+  summary: 认证和接入推进原生登录状态。
+- from: beidou.identity.login
+  type: invokes
+  to: beidou.identity.select-character
+  summary: 账号认证后选择所属角色。
+- from: beidou.identity.login
+  type: invokes
+  to: beidou.identity.enter-world
+  summary: 连接频道后完成实际角色接入。
+- from: beidou.identity.create-character
+  type: constrained_by
+  to: beidou.identity.creation-policy
+  summary: 创建遵守原生名称、名额及初始配方。
+- from: beidou.identity.create-character
+  type: reads
+  to: beidou.identity.accounts
+  summary: 创建使用账号的世界与可用角色名额。
+- from: beidou.identity.create-character
+  type: writes
+  to: beidou.identity.characters
+  summary: 新建原生角色及初始持久资料。
+- from: beidou.identity.select-character
+  type: reads
+  to: beidou.identity.characters
+  summary: 从服务器角色目录验证账号角色归属与世界。
+- from: beidou.identity.select-character
+  type: writes
+  to: beidou.identity.login-state
+  summary: 合法选择设置频道过渡状态。
+- from: beidou.identity.select-character
+  type: constrained_by
+  to: beidou.identity.account-access
+  summary: 会话协调、容量和设备限制决定是否允许选角。
+- from: beidou.identity.enter-world
+  type: invokes
+  to: beidou.identity.load-character
+  summary: 世界内无现存角色时读取持久角色。
+- from: beidou.identity.enter-world
+  type: writes
+  to: beidou.identity.login-state
+  summary: 频道接入更新登录状态和角色在线资格。
+- from: beidou.identity.enter-world
+  type: publishes
+  to: beidou.identity.native-character
+  summary: 普通频道接入实现原生角色接入边界。
+- from: beidou.identity.load-character
+  type: reads
+  to: beidou.identity.characters
+  summary: 加载角色及其关联持久状态。
+- from: beidou.identity.load-character
+  type: publishes
+  to: beidou.identity.native-character
+  summary: 为普通登录及可信集成提供角色加载入口。
+- from: beidou.identity.save-character
+  type: writes
+  to: beidou.identity.characters
+  summary: 保存角色聚合的当前状态。
+- from: beidou.identity.save-character
+  type: publishes
+  to: beidou.identity.native-character
+  summary: 对外提供原生存档执行边界。
+- from: beidou.identity.close-character
+  type: invokes
+  to: beidou.identity.save-character
+  summary: 关闭正常已登录角色时执行原生存档。
+- from: beidou.identity.close-character
+  type: writes
+  to: beidou.identity.login-state
+  summary: 最终登出将账号恢复为未登录；过渡状态单独处理。
+- from: beidou.identity.close-character
+  type: publishes
+  to: beidou.identity.native-character
+  summary: 最终关闭沿原生退出与保存边界完成。
+- from: beidou.identity.remove-character
+  type: writes
+  to: beidou.identity.characters
+  summary: 按入口条件清理角色与关联记录。
+- from: beidou.identity.maintain-account
+  type: writes
+  to: beidou.identity.accounts
+  summary: 账号创建、资料修改、封停和注销维护账号资料。
+- from: beidou.identity.maintain-account
+  type: invokes
+  to: beidou.identity.remove-character
+  summary: 账号注销逐个处理所属角色和关联记录。
+- from: beidou.identity.rename-character
+  type: part_of
+  to: beidou.identity
+  summary: 角色名登记变更属于持久角色生命周期。
+- from: beidou.identity.transfer-world
+  type: part_of
+  to: beidou.identity
+  summary: 持久世界归属变更属于角色生命周期。
+- from: beidou.identity.rename-character
+  type: writes
+  to: beidou.identity.characters
+  summary: 改名应用更新原生持久角色名称。
+- from: beidou.identity.transfer-world
+  type: reads
+  to: beidou.identity.accounts
+  summary: 应用转区前核账号存在和封停状态。
+- from: beidou.identity.transfer-world
+  type: writes
+  to: beidou.identity.characters
+  summary: 转区应用改变持久世界归属和角色侧相关字段。
+- from: beidou.identity.transfer-world
+  type: reads
+  to: beidou.world.topology
+  summary: 转区申请应用前确认目标世界存在。
+- from: beidou.identity.enter-world
+  type: writes
+  to: beidou.world.scene
+  summary: 实际登录把角色加入原生地图成员。
+- from: beidou.identity.close-character
+  type: writes
+  to: beidou.world.scene
+  summary: 角色关闭从旧地图和世界中移除角色。
+- from: beidou.identity.rename-character
+  type: writes
+  to: beidou.economy.inventory
+  summary: 应用改名时按角色ID清理其背包内改名卡。
+- from: beidou.identity.rename-character
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 应用改名还按账号ID清理商城保管的改名卡。
+- from: beidou.identity.rename-character
+  type: writes
+  to: beidou.social.marriage-state
+  summary: 应用改名同步戒指关联的partnername；不推定重建其他婚姻记录。
+- from: beidou.identity.transfer-world
+  type: reads
+  to: beidou.economy.wallet
+  summary: 应用转区读取原角色金币以决定随带金币。
+- from: beidou.identity.transfer-world
+  type: writes
+  to: beidou.economy.wallet
+  summary: 应用转区将角色金币设为原值与1000000的较小值。
+- from: beidou.identity.transfer-world
+  type: writes
+  to: beidou.social.friend-list
+  summary: 应用转区删除该角色作为characterid或buddyid的持久好友关系。
+- from: beidou.identity.transfer-world
+  type: writes
+  to: beidou.social.guild-state
+  summary: 应用转区清角色侧guildid与guildrank，不据此宣称重建所有公会对象或缓存。
+- from: beidou.identity.transfer-world
+  type: reads
+  to: beidou.social.marriage-state
+  summary: 应用资格检查读取持久角色partnerId，非null即拒绝该转区申请。
+flows:
+- id: beidou.identity.login.flow
+  name: 从账号认证到实际入场
+  summary: 分别观察账号认证、角色归属与频道接入结果，保留原生拒绝路径。
+  scenario: beidou.identity.login
+  startsAt: authenticate
+  steps:
+  - id: authenticate
+    kind: action
+    name: 提交账号认证
+    summary: 读取账号凭据并执行原生密码登录。
+    concept: beidou.identity.login
+  - id: authenticated
+    kind: decision
+    name: 账号是否获准登录
+    summary: 凭据、封停和登录状态检查决定是否继续。
+    concept: beidou.identity.account-access
+  - id: select
+    kind: action
+    name: 选择角色
+    summary: 请求本账号的角色及目标世界频道。
+    concept: beidou.identity.select-character
+  - id: selected
+    kind: decision
+    name: 选角是否获准
+    summary: 所属账号、设备会话、世界容量和频道地址必须满足原生条件。
+    concept: beidou.identity.account-access
+  - id: enter
+    kind: action
+    name: 连接频道并接入角色
+    summary: 核原生过渡状态，加载或复用角色。
+    concept: beidou.identity.enter-world
+  - id: entered
+    kind: decision
+    name: 频道是否完成接入
+    summary: 世界、频道、角色加载和过渡状态失败会关闭或拒绝。
+    concept: beidou.identity.enter-world
+  - id: online
+    kind: outcome
+    name: 角色进入世界
+    summary: 实际角色已接入频道与原生地图。
+  - id: refused
+    kind: outcome
+    name: 登录或接入被拒绝
+    summary: 保留对应原生失败，不宣称角色已上线。
+  transitions:
+  - from: authenticate
+    to: authenticated
+  - from: authenticated
+    to: select
+    when: 认证及账号资格通过
+  - from: authenticated
+    to: refused
+    when: 凭据、封停或登录状态拒绝
+  - from: select
+    to: selected
+  - from: selected
+    to: enter
+    when: 账号归属和目标连接可用
+  - from: selected
+    to: refused
+    when: 角色归属、设备或目标连接拒绝
+  - from: enter
+    to: entered
+  - from: entered
+    to: online
+    when: 过渡与角色接入完成
+  - from: entered
+    to: refused
+    when: 世界、频道或过渡接入失败
+- id: beidou.identity.close-character.flow
+  name: 原生角色退出与过渡
+  summary: 区分最终登出与换频道过渡；源码执行保存不等于本地图已证明数据落库。
+  scenario: beidou.identity.close-character
+  startsAt: close
+  steps:
+  - id: close
+    kind: action
+    name: 开始原生关闭
+    summary: 按当前 Client 进入一次断开处理。
+    concept: beidou.identity.close-character
+  - id: active
+    kind: decision
+    name: 是否为已登录角色
+    summary: 未登录或缺失角色不走正常角色存档分支。
+  - id: transition
+    kind: decision
+    name: 是否正在转移频道
+    summary: 普通登出与 serverTransition 使用不同的世界移除和保存路径。
+  - id: save-exit
+    kind: action
+    name: 最终移除并存档
+    summary: 移出世界、保存冷却和角色，再关闭登录状态。
+    concept: beidou.identity.save-character
+  - id: save-transition
+    kind: action
+    name: 保存频道过渡状态
+    summary: 从旧频道移除，保留转移所需角色与账号过渡语义。
+    concept: beidou.identity.save-character
+  - id: offline
+    kind: outcome
+    name: 最终登出路径结束
+    summary: 完成原生会话清理；持久结果仍应另作实际验证。
+  - id: transferring
+    kind: outcome
+    name: 继续频道过渡
+    summary: 过渡保留供新频道接续，不声明最终登出。
+  - id: session-only
+    kind: outcome
+    name: 只清理会话
+    summary: 没有符合普通角色存档条件的在线角色。
+  transitions:
+  - from: close
+    to: active
+  - from: active
+    to: transition
+    when: 存在已登录且有Client的角色
+  - from: active
+    to: session-only
+    when: 不具备普通在线角色条件
+  - from: transition
+    to: save-exit
+    when: 最终退出世界
+  - from: transition
+    to: save-transition
+    when: serverTransition为真
+  - from: save-exit
+    to: offline
+  - from: save-transition
+    to: transferring

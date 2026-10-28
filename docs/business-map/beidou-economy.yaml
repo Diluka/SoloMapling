@@ -1,0 +1,800 @@
+schemaVersion: 1
+map:
+  id: beidou-economy
+  title: 北斗 1.12：物品与经济
+  summary: 固定上游源码的物品、余额、交易、商店、商城与寄存责任。
+nodes:
+- id: beidou.economy
+  kind: domain
+  name: 北斗·物品与经济
+  summary: 负责物品归属、金币与点券使用、交易流转、商店经营和资产寄存；依据固定北斗 1.12 源码，功能存在不等于已在本地启用或完成玩法验收。
+  aliases:
+  - 背包
+  - 市场
+  - 商城
+  - 交易
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server
+    description: 商店、交易、商城与仓储的原生规则实现。
+- id: beidou.economy.inventory
+  kind: data
+  name: 角色背包与装备
+  summary: 按角色、栏位和物品实例记录装备、可堆叠数量、期限、绑定标记及容量；商城和仓储中的物品另有保管位置。
+  aliases:
+  - 道具
+  - 装备栏
+  - inventory
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Inventory.java
+    description: 栏位、堆叠、容量与物品集合的权威结构。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Item.java
+    description: 物品实例、数量、持有标记和期限。
+- id: beidou.economy.wallet
+  kind: data
+  name: 金币与点券余额
+  summary: 角色金币与账号商城的不同点券类型分别记录；金币增减会钳制到可表示范围，不能据此推导任意付费行为都校验足额。
+  aliases:
+  - meso
+  - NX
+  - 抵用券
+  - 余额
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.gainMeso
+    description: 变更角色金币并钳制上下界。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/CashShop.java
+    value: CashShop.getCash
+    description: 按点券类型读取商城余额。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/CashShop.java
+    value: CashShop.gainCash
+    description: 变更指定点券类型余额。
+- id: beidou.economy.assets-in-custody
+  kind: data
+  name: 寄存与经营资产
+  summary: 保留账号仓库、商城现金仓库、MTS挂售与转移物品、快递包裹、雇佣商人未售物品及待领收益；这些保管位置与角色背包分别管理。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Storage.java
+    description: 账号及世界范围的仓库资产和存取费用。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/HiredMerchant.java
+    value: HiredMerchant.saveItems
+    description: 保存雇佣商人的在售或待领取物品。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/CashShop.java
+    value: CashShop.save
+    description: 保存现金仓库、余额及相关商城状态。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/DueyPackage.java
+    description: 快递的收件角色、物品、金币、寄送时间和送达状态。
+- id: beidou.economy.trade-offer
+  kind: data
+  name: 双方待交换报价
+  summary: 交易会话分别暂存双方交出的物品和金币，并记录伙伴与确认锁定状态；完成和取消沿不同路径清除报价。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    description: 双方报价、伙伴、锁定和交换结果。
+- id: beidou.economy.inventory-change
+  kind: scenario
+  name: 整理、穿脱与丢弃物品
+  summary: 根据原生包中的来源栏位与目标位置选择移动、穿戴、卸下或丢弃，具体物品与职业要求由背包操作校验。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ItemMoveHandler.java
+    value: ItemMoveHandler.handlePacket
+    description: 将物品位置操作分派到原生背包规则。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/manipulator/InventoryManipulator.java
+    value: InventoryManipulator.equip
+    description: 核对并执行装备穿戴。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/manipulator/InventoryManipulator.java
+    value: InventoryManipulator.drop
+    description: 执行物品丢弃与受限物品处理。
+- id: beidou.economy.pickup
+  kind: scenario
+  name: 拾取地图掉落
+  summary: 按当前地图对象和距离进入原生拾取规则，继续核对掉落归属、已拾状态、特殊物品与背包容量，并分配金币或物品。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ItemPickupHandler.java
+    value: ItemPickupHandler.handlePacket
+    description: 核对掉落对象与拾取距离。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.pickupItem
+    description: 核对掉落领取资格并将金币或物品发给领取者。
+- id: beidou.economy.consume-item
+  kind: scenario
+  name: 使用消耗品与效果道具
+  summary: 生存状态、物品槽位和数量符合要求时应用恢复、解异常或回城等原生效果，并按各分支消耗物品。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/UseItemHandler.java
+    value: UseItemHandler.handlePacket
+    description: 匹配真实背包物品，应用效果并按分支扣除。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/UseCashItemHandler.java
+    value: UseCashItemHandler.handlePacket
+    description: 处理商城道具的原生使用规则。
+- id: beidou.economy.enhance-equipment
+  kind: scenario
+  name: 使用卷轴强化装备
+  summary: 核对装备、卷轴类别、使用要求和升级次数，产生成功、失败或诅咒损毁等原生结果，并更新消耗品与装备。
+  aliases:
+  - 砸卷
+  - 升级装备
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ScrollHandler.java
+    value: ScrollHandler.handlePacket
+    description: 应用卷轴限制并写回强化结果及消耗。
+- id: beidou.economy.npc-shop
+  kind: scenario
+  name: 向 NPC 买卖与补充道具
+  summary: 以服务端商品栏位和商品标识确认商品，依价格、支付物品和背包空间处理购买，并支持出售与补充飞镖弹药。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Shop.java
+    value: Shop.buy
+    description: 按商品、余额及背包空间处理购买。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Shop.java
+    value: Shop.sell
+    description: 核对可出售物品和数量并结算金币。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Shop.java
+    value: Shop.recharge
+    description: 按补充规则结算可充值道具。
+- id: beidou.economy.direct-trade
+  kind: scenario
+  name: 玩家确认并结算直接交易
+  summary: 通过邀请和访问建立双方报价，双方确认后检查金币上限、背包空间、唯一物品及配置中的低等级交易限额；通过时互换物品并对金币收取交易费。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.inviteTrade
+    description: 核对并发起双方交易邀请。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.completeTrade
+    description: 双方确认后核对接收条件和限额，再完成交换。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.getFee
+    description: 计算按金额分段的交易费用。
+- id: beidou.economy.cancel-trade
+  kind: operation
+  name: 取消交易并处理暂存资产
+  summary: 取消沿双方握手清理报价；正常未完成交换的分支返还暂存物品及金币，双方均锁定的异常取消另有拒绝返还和日志路径。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.cancelTrade
+    description: 进入双方一致的交易取消路径。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.cancel
+    description: 根据锁定状态处理资产返还并清除报价。
+- id: beidou.economy.player-shop
+  kind: scenario
+  name: 经营玩家个人店铺
+  summary: 店主上架物品、开放店铺并接待访客，访客按库存、金币和接收容量购买，店主收到扣费后收益；售罄或关闭结束店铺。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PlayerInteractionHandler.java
+    value: PlayerInteractionHandler.handlePacket
+    description: 受理开店、上架、访问、购买和退出等交互。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/PlayerShop.java
+    value: PlayerShop.buy
+    description: 核对访客、库存、双方金币及背包容量并结算。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/PlayerShop.java
+    value: PlayerShop.closeShop
+    description: 结束个人店铺并移除访客。
+- id: beidou.economy.hired-merchant
+  kind: scenario
+  name: 经营和领取雇佣商人资产
+  summary: 雇佣商人维护在售物品与访客，购买更新库存并累积店主收益；店主可领取收益、取回物品，超时或强制关闭按原生流程保存剩余资产。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/HiredMerchant.java
+    value: HiredMerchant.buy
+    description: 扣除买方金币并记录销售、库存和店主收益。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/HiredMerchant.java
+    value: HiredMerchant.withdrawMesos
+    description: 领取雇佣商人累计收益。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/HiredMerchant.java
+    value: HiredMerchant.forceClose
+    description: 强制结束营业并处理遗留物品。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/HiredMerchant.java
+    value: HiredMerchant.takeItemBack
+    description: 核对接收条件后取回在售物品。
+- id: beidou.economy.storage
+  kind: scenario
+  name: 在账号仓库存取资产
+  summary: 以原生仓库会话处理物品与金币存取、整理和关闭；核对等级、GM限制、手续费、容量与唯一物品条件后才迁移资产。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/npc/StorageProcessor.java
+    value: StorageProcessor.storageAction
+    description: 解释仓库动作并核对资格、费用和空间。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Storage.java
+    value: Storage.saveToDB
+    description: 保存仓库金币、容量和物品。
+- id: beidou.economy.cash-shop
+  kind: scenario
+  name: 消费点券、赠送与领取商城物品
+  summary: 在已打开的商城内核对商品、点券、购买资格和现金仓库容量，处理单品、礼包、赠送以及现金仓库和角色背包之间的转移。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CashOperationHandler.java
+    value: CashOperationHandler.handlePacket
+    description: 处理商城购买、礼包、赠送及现金仓库取放。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/CashShop.java
+    value: CashShop.gift
+    description: 登记赠送给接收者的商城物品。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/CashShop.java
+    value: CashShop.addToInventory
+    description: 按容量边界接收现金仓库物品。
+- id: beidou.economy.mts
+  kind: scenario
+  name: 在 MTS 挂售、购买与取回物品
+  summary: 源码支持固定价格挂售、检索、购物车、撤售和转移仓库领取；受 use_mts 开关及原生入场规则控制。竞拍和求购部分分支为空，不据此声明已支持竞价拍卖。
+  aliases:
+  - 交易所
+  - 固定价格市场
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/EnterMTSHandler.java
+    value: EnterMTSHandler.handlePacket
+    description: 按 use_mts 和角色场景资格选择 MTS 或脚本中心入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MTSHandler.java
+    value: MTSHandler.handlePacket
+    description: 管理挂售、购买、撤售和转移物品的既有分支。
+- id: beidou.economy.exchange-rules
+  kind: invariant
+  name: 每条资产流转遵守对应原生条件
+  summary: 直接交易、店铺、仓储和商城分别核对容量、余额、物品限制与费用；这些检查属于具体业务路径，不表示所有入口共用同一事务或已证明所有异常可恢复。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.completeTrade
+    description: 直接交易的双方接收和限额检查。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/PlayerShop.java
+    value: PlayerShop.buy
+    description: 店铺购买的库存、容量和金币检查。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CashOperationHandler.java
+    value: CashOperationHandler.ensureCashInventoryCapacity
+    description: 购买前核对现金仓库剩余容量。
+- id: beidou.economy.trade-entry
+  kind: interface
+  name: 原生交易与店铺交互边界
+  summary: 游戏客户端及集成适配沿北斗玩家交互、交易和商店实现进入经济规则；拥有调用入口不等于获得绕过身份、物品和余额检查的权限。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PlayerInteractionHandler.java
+    value: PlayerInteractionHandler.handlePacket
+    description: 处理原生玩家交易、商店创建、访问与购买动作。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Trade.java
+    value: Trade.completeTrade
+    description: 提供北斗交易结算边界。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Shop.java
+    value: Shop.buy
+    description: 提供北斗 NPC 商品购买边界。
+- id: beidou.economy.craft
+  kind: scenario
+  name: 制造、结晶转换与装备分解
+  summary: 按有效配方、角色与制造技能等级、材料、金币及背包空间决定能否制造；符合时消耗材料与费用并生成产物，使用催化剂和强化宝石的装备制造保留失败结果。
+  aliases:
+  - Maker
+  - 锻造
+  - 分解
+  - 炼制
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/action/MakerProcessor.java
+    value: MakerProcessor.makerAction
+    description: 处理制造、怪物结晶转换和装备分解并结算材料与产物。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/action/MakerProcessor.java
+    value: MakerProcessor.getCreateStatus
+    description: 按配方、材料、金币、等级、技能和容量判断制造资格。
+- id: beidou.economy.delivery
+  kind: scenario
+  name: 寄送、领取与清理快递包裹
+  summary: 寄件核对收件角色、非同账号、物品金币及费用或快速快递券；到期后按领取归属及具体包裹分支核对接收条件，含物品包裹会检查金币上限与背包容量，纯金币包裹沿 gainMeso 钳制。包裹也可移除并按定时规则清理过期记录。
+  aliases:
+  - Duey
+  - 快递
+  - 包裹
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/npc/DueyProcessor.java
+    value: DueyProcessor.dueySendItem
+    description: 校验收件方、费用和物品后建立寄送包裹。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/npc/DueyProcessor.java
+    value: DueyProcessor.dueyClaimPackage
+    description: 核对包裹收件人、送达和接收条件后领取。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/npc/DueyProcessor.java
+    value: DueyProcessor.runDueyExpireSchedule
+    description: 按保留期限清理未领取的旧包裹。
+- id: beidou.economy.redeem-code
+  kind: scenario
+  name: 使用兑换码领取奖励
+  summary: 核对兑换频率、代码是否存在、领取记录和期限，检查奖品背包与现金仓库容量，并发放代码关联的物品、金币或点券；领取记录与发奖的具体顺序以当前原生实现为准。
+  aliases:
+  - 礼品码
+  - 兑换券
+  - coupon
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CouponCodeHandler.java
+    value: CouponCodeHandler.getNXCodeResult
+    description: 校验代码、领取记录和期限并登记领取者。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CouponCodeHandler.java
+    value: CouponCodeHandler.handlePacket
+    description: 解释兑换结果，检查现金仓库容量并发放奖励。
+- id: beidou.economy.coupon-codes
+  kind: data
+  name: 兑换码、关联奖品与领取记录
+  summary: nxcode记录唯一代码、期限与retriever领取者，nxcode_items记录代码对应的物品或点券奖项。签发与核销均改变这份经济权威状态，不由机器人重复拥有。
+  aliases:
+  - NX兑换码
+  - 核销
+  - nxcode
+  - nxcode_items
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/resources/db/migration/V1.0.28__create_nx.sql
+    description: 声明兑换码、唯一代码、有效期、领取者和对应奖品数据。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CouponCodeHandler.java
+    value: CouponCodeHandler.getNXCodeResult
+    description: 核对代码及有效期，读取领取记录并登记本次领取者。
+relations:
+- from: beidou.economy.inventory
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.wallet
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.assets-in-custody
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.trade-offer
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.inventory-change
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.pickup
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.consume-item
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.enhance-equipment
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.npc-shop
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.direct-trade
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.cancel-trade
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.player-shop
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.hired-merchant
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.storage
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.cash-shop
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.mts
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.exchange-rules
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.trade-entry
+  type: part_of
+  to: beidou.economy
+  summary: 此责任由北斗物品与经济域拥有。
+- from: beidou.economy.inventory-change
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.pickup
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.consume-item
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.enhance-equipment
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.npc-shop
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.direct-trade
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.cancel-trade
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.player-shop
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.hired-merchant
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.storage
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.cash-shop
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.mts
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此资产操作按自己的原生分支改变角色持有物品。
+- from: beidou.economy.pickup
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.npc-shop
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.direct-trade
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.cancel-trade
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.player-shop
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.hired-merchant
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.storage
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.cash-shop
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.mts
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此资产操作按对应支付或收益规则变更金币或点券。
+- from: beidou.economy.hired-merchant
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 此场景维护对应保管位置中的物品或收益。
+- from: beidou.economy.storage
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 此场景维护对应保管位置中的物品或收益。
+- from: beidou.economy.cash-shop
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 此场景维护对应保管位置中的物品或收益。
+- from: beidou.economy.mts
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 此场景维护对应保管位置中的物品或收益。
+- from: beidou.economy.direct-trade
+  type: writes
+  to: beidou.economy.trade-offer
+  summary: 报价、交换完成或取消都会改变暂存交易状态。
+- from: beidou.economy.cancel-trade
+  type: writes
+  to: beidou.economy.trade-offer
+  summary: 报价、交换完成或取消都会改变暂存交易状态。
+- from: beidou.economy.direct-trade
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 通过北斗原生交易或商店边界执行。
+- from: beidou.economy.player-shop
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 通过北斗原生交易或商店边界执行。
+- from: beidou.economy.hired-merchant
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 通过北斗原生交易或商店边界执行。
+- from: beidou.economy.npc-shop
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 通过北斗原生交易或商店边界执行。
+- from: beidou.economy.direct-trade
+  type: constrained_by
+  to: beidou.economy.exchange-rules
+  summary: 资产流转使用此场景对应的原生限制。
+- from: beidou.economy.player-shop
+  type: constrained_by
+  to: beidou.economy.exchange-rules
+  summary: 资产流转使用此场景对应的原生限制。
+- from: beidou.economy.hired-merchant
+  type: constrained_by
+  to: beidou.economy.exchange-rules
+  summary: 资产流转使用此场景对应的原生限制。
+- from: beidou.economy.storage
+  type: constrained_by
+  to: beidou.economy.exchange-rules
+  summary: 资产流转使用此场景对应的原生限制。
+- from: beidou.economy.cash-shop
+  type: constrained_by
+  to: beidou.economy.exchange-rules
+  summary: 资产流转使用此场景对应的原生限制。
+- from: beidou.economy.direct-trade
+  type: invokes
+  to: beidou.economy.cancel-trade
+  summary: 双方接收条件或交易限额不符合时解锁并进入取消返还路径。
+- from: beidou.economy.pickup
+  type: reads
+  to: beidou.world.scene
+  summary: 拾取对象必须来自角色当前地图，地图距离也决定能否领取。
+- from: beidou.economy.inventory-change
+  type: reads
+  to: beidou.identity.characters
+  summary: 穿戴操作读取角色职业、等级、能力和当前装备等条件。
+- from: beidou.economy.pickup
+  type: reads
+  to: beidou.social.party
+  summary: 金币掉落按同地图队伍成员集合分配，成员资格仍由社交域维护。
+- from: beidou.economy.craft
+  type: part_of
+  to: beidou.economy
+  summary: 此资产取得或流转责任由经济域拥有。
+- from: beidou.economy.craft
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此场景按其材料、寄送或发奖分支改变角色物品。
+- from: beidou.economy.craft
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此场景按其费用、寄送或发奖分支变更金币或点券。
+- from: beidou.economy.delivery
+  type: part_of
+  to: beidou.economy
+  summary: 此资产取得或流转责任由经济域拥有。
+- from: beidou.economy.delivery
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此场景按其材料、寄送或发奖分支改变角色物品。
+- from: beidou.economy.delivery
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此场景按其费用、寄送或发奖分支变更金币或点券。
+- from: beidou.economy.redeem-code
+  type: part_of
+  to: beidou.economy
+  summary: 此资产取得或流转责任由经济域拥有。
+- from: beidou.economy.redeem-code
+  type: writes
+  to: beidou.economy.inventory
+  summary: 此场景按其材料、寄送或发奖分支改变角色物品。
+- from: beidou.economy.redeem-code
+  type: writes
+  to: beidou.economy.wallet
+  summary: 此场景按其费用、寄送或发奖分支变更金币或点券。
+- from: beidou.economy.delivery
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 寄送包裹或发放现金奖品改变对应保管资产。
+- from: beidou.economy.redeem-code
+  type: writes
+  to: beidou.economy.assets-in-custody
+  summary: 寄送包裹或发放现金奖品改变对应保管资产。
+- from: beidou.economy.craft
+  type: reads
+  to: beidou.identity.characters
+  summary: 制造读取角色等级和制造技能等级以核对配方资格。
+- from: beidou.economy.delivery
+  type: reads
+  to: beidou.identity.characters
+  summary: 寄送通过角色名取得收件角色及账号，并排除同账号寄送。
+- from: beidou.economy.coupon-codes
+  type: part_of
+  to: beidou.economy
+  summary: 兑换码和奖品的签发/核销状态由经济域拥有。
+- from: beidou.economy.redeem-code
+  type: reads
+  to: beidou.economy.coupon-codes
+  summary: 核对代码是否存在、已领取与否、期限及关联奖品。
+- from: beidou.economy.redeem-code
+  type: writes
+  to: beidou.economy.coupon-codes
+  summary: 登记领取者消耗本次兑换资格；当前实现该登记早于后续现金仓库容量核对。
+- from: beidou.economy.pickup
+  type: invokes
+  to: beidou.combat.monster-book
+  summary: 拾取立即消耗类怪物卡时，Character.applyConsumeOnPickup 调用原生图鉴收集规则。
+flows:
+- id: beidou.economy.direct-trade.flow
+  name: 直接交易的确认、拒绝与结算
+  summary: 从交易建立到双方确认，保留等待、主动取消、校验失败返还和成功结算的不同结果。
+  scenario: beidou.economy.direct-trade
+  startsAt: offer
+  steps:
+  - id: offer
+    kind: action
+    name: 建立交易并提交报价
+    summary: 邀请被接受后暂存双方交出的物品及金币。
+    concept: beidou.economy.direct-trade
+  - id: confirm
+    kind: decision
+    name: 双方是否继续并完成确认
+    summary: 确认之前可继续等待或由一方取消；只有双方握手完成才进入接收条件检查。
+  - id: waiting
+    kind: outcome
+    name: 保持交易待确认
+    summary: 尚未完成双方确认，不进行资产交换。
+  - id: check
+    kind: decision
+    name: 双方接收条件和限额是否通过
+    summary: 检查金币接收上限、背包和唯一物品限制、低等级交易限额。
+    concept: beidou.economy.exchange-rules
+  - id: cancel
+    kind: action
+    name: 取消并处理暂存报价
+    summary: 校验失败先解锁，沿取消握手返还正常待交换资产并清除交易。
+    concept: beidou.economy.cancel-trade
+  - id: returned
+    kind: outcome
+    name: 正常未交换报价被返还
+    summary: 取消结束双方交易，既有报价不进入成功交换路径。
+  - id: settle
+    kind: action
+    name: 互换物品并结算金币费用
+    summary: 双方取得对方报价中的物品和扣除交易费的金币，并清除交易状态。
+    concept: beidou.economy.direct-trade
+  - id: done
+    kind: outcome
+    name: 双方交换完成
+    summary: 本次原生交易完成；不据此宣称数据库跨角色事务已验收。
+  transitions:
+  - from: offer
+    to: confirm
+  - from: confirm
+    to: check
+    when: 双方完成确认
+  - from: confirm
+    to: cancel
+    when: 一方取消
+  - from: confirm
+    to: waiting
+    when: 尚有一方未确认
+  - from: check
+    to: settle
+    when: 双方条件通过
+  - from: check
+    to: cancel
+    when: 接收条件或限额失败
+  - from: cancel
+    to: returned
+  - from: settle
+    to: done
+- id: beidou.economy.cash-shop.flow
+  name: 商城购买的余额与容量分支
+  summary: 购买单品或礼包前先核对资格与余额，再核对现金仓库容量，满足才扣点入库。
+  scenario: beidou.economy.cash-shop
+  startsAt: eligible
+  steps:
+  - id: eligible
+    kind: decision
+    name: 商城已打开且商品与购买资格有效
+    summary: 核对商城状态、商品及余额，并处理品类、等级和配置限制。
+    concept: beidou.economy.cash-shop
+  - id: capacity
+    kind: decision
+    name: 现金仓库能否容纳本次商品
+    summary: 单品检查一个名额，礼包检查整包物品数量。
+    concept: beidou.economy.assets-in-custody
+  - id: refused
+    kind: outcome
+    name: 购买未被执行
+    summary: 该购买路径未扣点或加入本次物品，返回对应拒绝或容量提示。
+  - id: buy
+    kind: action
+    name: 扣点并加入现金仓库
+    summary: 按指定点券类型扣款，将商品或礼包物品加入现金仓库。
+    concept: beidou.economy.cash-shop
+  - id: owned
+    kind: outcome
+    name: 商品位于现金仓库
+    summary: 购买回执发出，角色背包领取是后续独立操作。
+  transitions:
+  - from: eligible
+    to: capacity
+    when: 商品、资格与余额通过
+  - from: eligible
+    to: refused
+    when: 商城、商品或购买条件不符
+  - from: capacity
+    to: buy
+    when: 容量足够
+  - from: capacity
+    to: refused
+    when: 容量不足
+  - from: buy
+    to: owned

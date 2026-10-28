@@ -1,0 +1,620 @@
+schemaVersion: 1
+map:
+  id: beidou-combat
+  title: 北斗上游：战斗与角色成长
+  summary: 按北斗1.12原生源码建立的战斗、技能、击杀收益和成长业务地图。
+nodes:
+- id: beidou.combat
+  kind: domain
+  name: 北斗：战斗与角色成长
+  summary: 固定北斗 1.12 的原生战斗、怪物击杀收益、属性技能成长和死亡复活规则。描述源码责任，不代表所有职业和玩法已经实测。
+  aliases:
+  - 战斗
+  - 练级
+  - Combat
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers
+    description: 定位原生攻击、施法、受伤和属性分配入口。
+- id: beidou.combat.attack
+  kind: scenario
+  name: 进行原生攻击
+  summary: 近战、远程、魔法和召唤攻击经各自原生处理器读取攻击报告，应用技能效果、目标与伤害规则，并扣减当前地图怪物生命。
+  aliases:
+  - 近战
+  - 远程攻击
+  - 魔法攻击
+  - 召唤物攻击
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CloseRangeDamageHandler.java
+    value: CloseRangeDamageHandler.handlePacket
+    description: 核对近战技能冷却、连击资源与攻击派发。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/AbstractDealDamageHandler.java
+    value: AbstractDealDamageHandler.applyAttack
+    description: 核对地图归属、存活、技能效果、目标数量及怪物伤害结算。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/RangedAttackHandler.java
+    value: RangedAttackHandler.handlePacket
+    description: 核对远程弹药搜索/消耗、影网术类金币攻击与特殊免弹药分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MagicDamageHandler.java
+    value: MagicDamageHandler.handlePacket
+    description: 定位魔法攻击入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/SummonDamageHandler.java
+    value: SummonDamageHandler.handlePacket
+    description: 定位召唤物攻击入口。
+- id: beidou.combat.cast-skill
+  kind: scenario
+  name: 施放技能与增益
+  summary: 按角色实际技能等级、冷却和原生资源规则施放技能，向自己及适用的同伴应用效果。不同技能保留各自例外与拒绝条件。
+  aliases:
+  - 主动技能
+  - Buff
+  - 辅助技能
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/SpecialMoveHandler.java
+    value: SpecialMoveHandler.handlePacket
+    description: 核对技能等级不符、冷却、存活及特殊技能分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/StatEffect.java
+    value: StatEffect.applyTo
+    description: 核对道具、HP/MP变化、增益及地图效果。
+- id: beidou.combat.settle-kill
+  kind: operation
+  name: 结算怪物击杀与收益
+  summary: 地图移除已击杀怪物后，分发死亡事件并按参与伤害、同图队伍和等级配置计算经验；掉落生成另受怪物掉落与物品规则约束。
+  aliases:
+  - 经验结算
+  - 击杀收益
+  - 掉落
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/maps/MapleMap.java
+    value: MapleMap.killMonster
+    description: 确认怪物移除、死亡广播、特殊首领与掉落分支。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/life/Monster.java
+    value: Monster.killBy
+    description: 触发经验分配、怪物复活及死亡相关处理。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/life/Monster.java
+    value: Monster.giveExpToCharacter
+    description: 对存活的获益角色发经验并推进击杀任务。
+- id: beidou.combat.gain-level
+  kind: scenario
+  name: 获得经验并升级
+  summary: 经验受诅咒、经验开关、等级上限与升级保护等规则影响；达到门槛时更新等级、AP/SP和生命魔法等成长属性。
+  aliases:
+  - 升级
+  - 等级
+  - 经验
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.gainExp
+    description: 组合个人、装备与队伍经验后进入成长结算。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.gainExpInternal
+    description: 核对经验开关、等级上限、累计经验与升级门槛。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.levelUp
+    description: 应用不同职业的升级属性与点数奖励。
+- id: beidou.combat.allocate-growth
+  kind: scenario
+  name: 分配属性点与技能点
+  summary: 按剩余AP/SP、职业技能树和技能上限分配成长点数；自动加点与重置采用各自原生配置和限制。
+  aliases:
+  - AP
+  - SP
+  - 加点
+  - 自动加点
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/stat/AssignSPProcessor.java
+    value: AssignSPProcessor.SPAssignAction
+    description: 核对技能树、可用SP和技能/掌握等级上限。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/stat/AssignAPProcessor.java
+    value: AssignAPProcessor.APAutoAssignAction
+    description: 核对剩余AP、职业与装备需求的自动分配。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/stat/AssignAPProcessor.java
+    value: AssignAPProcessor.APAssignAction
+    description: 定位手动AP分配的属性及额度限制。
+- id: beidou.combat.change-job
+  kind: operation
+  name: 执行转职成长
+  summary: 转职操作改变职业，并依据新职业和配置发放SP/AP、扩展背包及调整HP/MP；任务或NPC脚本决定何时允许调用。
+  aliases:
+  - 转职
+  - 职业成长
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.changeJob
+    description: 核对职业变更及各职业转职奖励；此方法不独占转职准入。
+- id: beidou.combat.take-damage
+  kind: operation
+  name: 承受伤害与死亡处理
+  summary: 受伤入口核对地图攻击来源并按防护和状态规则改变角色生命；生命转为零后清理相应状态，通知事件并按护符、职业和地图规则处理损失。
+  aliases:
+  - 受伤
+  - 死亡
+  - 安全护符
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/TakeDamageHandler.java
+    value: TakeDamageHandler.handlePacket
+    description: 核对攻击来源、减伤、异常状态与生命变化。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.hpChangeAction
+    description: 生命变化后安排死亡或狂战士状态更新。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.playerDead
+    description: 核对嘉年华CP、事件死亡回调、安全护符及经验损失。
+- id: beidou.combat.recover-life
+  kind: scenario
+  name: 复活并继续游戏
+  summary: 死亡角色可按原生规则消耗命运之轮、由当前事件处理复活，或返回地图复活点；活角色的任意目标地图请求不属于复活授权。
+  aliases:
+  - 复活
+  - 命运之轮
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/ChangeMapHandler.java
+    value: ChangeMapHandler.handlePacket
+    description: 核对死亡分支中的命运之轮消耗、事件revivePlayer和返回地图复活。
+- id: beidou.combat.manage-status
+  kind: operation
+  name: 维护战斗状态与持续效果
+  summary: 角色和怪物持有增益、异常、冷却及持续伤害；应用、覆盖、取消和解除各沿原生状态生命周期。
+  aliases:
+  - 异常状态
+  - 持续伤害
+  - 冷却
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.registerEffect
+    description: 登记角色增益及持续时间。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.cancelEffect
+    description: 撤销已登记效果与相关状态。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.giveDebuff
+    description: 对角色应用怪物异常状态。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/life/Monster.java
+    value: Monster.applyStatus
+    description: 对怪物应用并安排异常或持续伤害。
+- id: beidou.combat.monster-skills
+  kind: operation
+  name: 约束怪物技能和仇恨
+  summary: 怪物根据封技、重复技能、MP和冷却资格施法，伤害与控制者变化进入原生仇恨管理。
+  aliases:
+  - 怪物技能
+  - 仇恨
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/life/Monster.java
+    value: Monster.canUseSkill
+    description: 核对封技、反射互斥、技能占用和MP资格。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/life/Monster.java
+    value: Monster.aggroMonsterDamage
+    description: 把实际伤害交给当前地图仇恨协调器。
+- id: beidou.combat.monsters
+  kind: data
+  name: 怪物生命与战斗参与记录
+  summary: 当前地图中怪物的HP/MP、状态、伤害贡献、控制与仇恨数据，决定存活和击杀结算。
+  aliases:
+  - 怪物HP
+  - 伤害贡献
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/life/Monster.java
+    description: 查看怪物战斗状态、伤害贡献及生命周期声明。
+- id: beidou.combat.growth
+  kind: data
+  name: 角色成长与战斗属性
+  summary: 角色等级、经验、职业、AP/SP、技能与HP/MP等战斗成长视图；其持久化仍由角色原生存档负责。
+  aliases:
+  - 角色属性
+  - 技能等级
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    description: 定位角色成长和当前战斗属性。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/model/pojo/SkillEntry.java
+    description: 定位技能等级、掌握等级和失效时间。
+- id: beidou.combat.native-rules
+  kind: invariant
+  name: 沿原生技能和战斗资格结算
+  summary: 攻击、施法、加点及死亡处理必须各自遵守当前地图、角色存活、技能等级/冷却和资源规则。各入口存在例外，不能从处理器返回推定命中、击杀或原子回滚。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/AbstractDealDamageHandler.java
+    value: AbstractDealDamageHandler.applyAttack
+    description: 检查地图归属、存活与目标数量等原生条件。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/SpecialMoveHandler.java
+    value: SpecialMoveHandler.handlePacket
+    description: 检查实际技能等级与冷却。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/stat/AssignSPProcessor.java
+    value: AssignSPProcessor.canSPAssign
+    description: 检查加点的职业技能资格。
+- id: beidou.combat.combat-entry
+  kind: interface
+  name: 原生战斗与技能动作入口
+  summary: 北斗包处理器提供近战、远程、魔法、召唤、施法和受伤协议；此处记录上游边界，不表示MCP或Solo已开放这些动作。
+  aliases:
+  - 原生攻击接口
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/CloseRangeDamageHandler.java
+    value: CloseRangeDamageHandler.handlePacket
+    description: 原生近战协议入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/SpecialMoveHandler.java
+    value: SpecialMoveHandler.handlePacket
+    description: 原生施法协议入口。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/TakeDamageHandler.java
+    value: TakeDamageHandler.handlePacket
+    description: 原生受伤协议入口。
+- id: beidou.combat.monster-book
+  kind: scenario
+  name: 收集怪物图鉴卡片
+  summary: 拾取即用的怪物卡进入角色图鉴，单卡数量最多累计到5张；新增独特卡片推动图鉴等级，普通卡与特殊卡分别计数。
+  aliases:
+  - 怪物图鉴
+  - 怪物卡
+  - MonsterBook
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/MonsterBook.java
+    value: MonsterBook.addCard
+    description: 核对单卡5张上限、独特卡数量与图鉴等级计算。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.applyConsumeOnPickup
+    description: 拾取即用怪物卡调用图鉴收集；道具拾取资格仍由物品路径决定。
+relations:
+- from: beidou.combat.attack
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.cast-skill
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.settle-kill
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.gain-level
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.allocate-growth
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.change-job
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.take-damage
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.recover-life
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.manage-status
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.monster-skills
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.monsters
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.growth
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.native-rules
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.combat-entry
+  type: part_of
+  to: beidou.combat
+  summary: 该责任由北斗战斗与成长域维护。
+- from: beidou.combat.attack
+  type: constrained_by
+  to: beidou.combat.native-rules
+  summary: 保留该动作所属的原生资格与资源限制。
+- from: beidou.combat.cast-skill
+  type: constrained_by
+  to: beidou.combat.native-rules
+  summary: 保留该动作所属的原生资格与资源限制。
+- from: beidou.combat.allocate-growth
+  type: constrained_by
+  to: beidou.combat.native-rules
+  summary: 保留该动作所属的原生资格与资源限制。
+- from: beidou.combat.monster-skills
+  type: constrained_by
+  to: beidou.combat.native-rules
+  summary: 保留该动作所属的原生资格与资源限制。
+- from: beidou.combat.attack
+  type: consumes
+  to: beidou.combat.combat-entry
+  summary: 经相应原生战斗协议执行。
+- from: beidou.combat.cast-skill
+  type: consumes
+  to: beidou.combat.combat-entry
+  summary: 经相应原生战斗协议执行。
+- from: beidou.combat.take-damage
+  type: consumes
+  to: beidou.combat.combat-entry
+  summary: 经相应原生战斗协议执行。
+- from: beidou.combat.attack
+  type: reads
+  to: beidou.world.scene
+  summary: 在角色当前地图定位怪物与地图限制。
+- from: beidou.combat.attack
+  type: writes
+  to: beidou.combat.monsters
+  summary: 应用伤害、状态与怪物仇恨。
+- from: beidou.combat.attack
+  type: invokes
+  to: beidou.combat.settle-kill
+  summary: 伤害造成死亡时由地图进入击杀结算。
+- from: beidou.combat.settle-kill
+  type: reads
+  to: beidou.combat.monsters
+  summary: 按伤害贡献和死亡怪物计算获益。
+- from: beidou.combat.settle-kill
+  type: invokes
+  to: beidou.combat.gain-level
+  summary: 将获益角色的经验交给角色成长规则。
+- from: beidou.combat.gain-level
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.allocate-growth
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.change-job
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.take-damage
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.recover-life
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.manage-status
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.cast-skill
+  type: writes
+  to: beidou.combat.growth
+  summary: 更新本操作所属的成长、生命或战斗状态。
+- from: beidou.combat.monster-skills
+  type: writes
+  to: beidou.combat.monsters
+  summary: 更新怪物技能占用和仇恨状态。
+- from: beidou.combat.gain-level
+  type: writes
+  to: beidou.identity.characters
+  summary: 成长变化由原生角色对象承载并随角色存档持久化。
+- from: beidou.combat.recover-life
+  type: reads
+  to: beidou.world.scene
+  summary: 按当前地图返回点或事件复活规则选择位置。
+- from: beidou.combat.settle-kill
+  type: writes
+  to: beidou.quests.progress
+  summary: 获益角色的原生经验分配同时推进已接任务的击杀计数与相关勋章进度。
+- from: beidou.combat.take-damage
+  type: reads
+  to: beidou.world.scene
+  summary: 受伤入口在当前地图核攻击怪物和地图战斗规则。
+- from: beidou.combat.monster-book
+  type: part_of
+  to: beidou.combat
+  summary: 怪物图鉴收集属于原生角色成长的一部分。
+- from: beidou.combat.monster-book
+  type: writes
+  to: beidou.identity.characters
+  summary: 图鉴卡片由角色拥有，并沿原生角色图鉴存档保存。
+- from: beidou.combat.attack
+  type: reads
+  to: beidou.economy.inventory
+  summary: 远程攻击按原生规则查找并消耗弹药，保留无形箭/暗器等特殊例外。
+- from: beidou.combat.attack
+  type: reads
+  to: beidou.economy.wallet
+  summary: 金币攻击技能4111004按原生moneyCon、随机量和现有金币决定实际金币消耗。
+- from: beidou.combat.cast-skill
+  type: reads
+  to: beidou.economy.inventory
+  summary: 技能效果配置道具消耗时核持有数量并沿原生背包扣除。
+- from: beidou.combat.take-damage
+  type: reads
+  to: beidou.economy.inventory
+  summary: 死亡处理核安全护符并在符合原生分支时消耗一个以保护经验。
+- from: beidou.combat.recover-life
+  type: reads
+  to: beidou.economy.inventory
+  summary: 命运之轮复活核持有道具并沿原生背包消耗一个。
+- from: beidou.combat.attack
+  type: writes
+  to: beidou.economy.inventory
+  summary: 远程攻击按原生规则查找并消耗弹药，保留无形箭/暗器等特殊例外。
+- from: beidou.combat.attack
+  type: writes
+  to: beidou.economy.wallet
+  summary: 金币攻击技能4111004按原生moneyCon、随机量和现有金币决定实际金币消耗。
+- from: beidou.combat.cast-skill
+  type: writes
+  to: beidou.economy.inventory
+  summary: 技能效果配置道具消耗时核持有数量并沿原生背包扣除。
+- from: beidou.combat.take-damage
+  type: writes
+  to: beidou.economy.inventory
+  summary: 死亡处理核安全护符并在符合原生分支时消耗一个以保护经验。
+- from: beidou.combat.recover-life
+  type: writes
+  to: beidou.economy.inventory
+  summary: 命运之轮复活核持有道具并沿原生背包消耗一个。
+flows:
+- id: beidou.combat.attack.flow
+  name: 攻击到击杀成长
+  summary: 展示原生攻击的拒绝、未击杀与击杀收益分支；攻击广播与最终命中并非同一事实。
+  scenario: beidou.combat.attack
+  startsAt: attack
+  steps:
+  - id: attack
+    kind: action
+    name: 提交原生攻击
+    summary: 读取攻击报告，取得当前地图与技能上下文。
+    concept: beidou.combat.attack
+  - id: eligibility
+    kind: decision
+    name: 原生条件是否允许结算
+    summary: 地图归属、存活、技能效果及目标数量等条件可拒绝结算。
+    concept: beidou.combat.native-rules
+  - id: refused
+    kind: outcome
+    name: 攻击未进入伤害结算
+    summary: 按对应原生拒绝规则结束；不得推定命中。
+  - id: damage
+    kind: action
+    name: 扣减怪物生命
+    summary: 按怪物状态和技能规则应用本次伤害。
+    concept: beidou.combat.attack
+  - id: death
+    kind: decision
+    name: 怪物是否因此死亡
+    summary: 地图依怪物真实生命值判断击杀。
+  - id: alive
+    kind: outcome
+    name: 怪物仍存活
+    summary: 保留当前伤害贡献和战斗状态。
+  - id: settle
+    kind: action
+    name: 结算击杀与参与收益
+    summary: 移除怪物，按贡献和队伍规则发经验并处理掉落。
+    concept: beidou.combat.settle-kill
+  - id: growth
+    kind: action
+    name: 按角色成长规则记经验
+    summary: 依据经验开关、等级上限和升级门槛更新获益角色。
+    concept: beidou.combat.gain-level
+  - id: done
+    kind: outcome
+    name: 击杀收益已按规则处理
+    summary: 达到升级条件时成长；并非每次击杀都升级或保证掉落。
+  transitions:
+  - from: attack
+    to: eligibility
+  - from: eligibility
+    to: refused
+    when: 地图或角色、技能、目标条件拒绝
+  - from: eligibility
+    to: damage
+    when: 本次结算条件满足
+  - from: damage
+    to: death
+  - from: death
+    to: alive
+    when: 怪物仍有生命
+  - from: death
+    to: settle
+    when: 本次伤害触发死亡
+  - from: settle
+    to: growth
+  - from: growth
+    to: done
+- id: beidou.combat.recover-life.flow
+  name: 死亡后的原生复活选择
+  summary: 死亡损失和事件死亡回调在死亡处理发生；之后复活请求按道具、事件和返回地图分路。
+  scenario: beidou.combat.recover-life
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 死亡角色请求复活
+    summary: 进入原生切图处理器中的死亡分支。
+    concept: beidou.combat.recover-life
+  - id: wheel
+    kind: decision
+    name: 请求并持有命运之轮
+    summary: 只有请求使用且确有对应道具时走道具复活。
+  - id: consume
+    kind: action
+    name: 消耗道具并在当前地图复活
+    summary: 移除一个命运之轮，恢复指定生命并选择近处出生点。
+    concept: beidou.combat.recover-life
+  - id: event
+    kind: decision
+    name: 事件是否接管复活
+    summary: 存在事件时调用revivePlayer，由其返回值决定是否执行标准路径。
+  - id: handled
+    kind: outcome
+    name: 由事件处理后续
+    summary: 事件不授权标准返回路径，结果由该事件规则决定。
+  - id: return
+    kind: action
+    name: 按地图返回点复活
+    summary: 没有事件或事件允许标准路径时调用原生respawn。
+    concept: beidou.combat.recover-life
+  - id: restored
+    kind: outcome
+    name: 按原生路径完成复活
+    summary: 角色在对应地图继续；不恢复死亡时已结算的正常损失。
+  transitions:
+  - from: request
+    to: wheel
+  - from: wheel
+    to: consume
+    when: 请求使用且持有道具
+  - from: wheel
+    to: event
+    when: 未请求使用或没有道具
+  - from: consume
+    to: restored
+  - from: event
+    to: handled
+    when: 当前事件接管且不走标准复活
+  - from: event
+    to: return
+    when: 无事件或事件允许标准复活
+  - from: return
+    to: restored

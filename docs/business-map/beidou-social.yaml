@@ -1,0 +1,644 @@
+schemaVersion: 1
+map:
+  id: beidou-social
+  title: 北斗：社交与组织
+  summary: 固定上游北斗1.12的玩家聊天、好友、队伍、公会联盟、家族及婚姻业务。
+nodes:
+- id: beidou.social
+  kind: domain
+  name: 北斗社交与组织
+  summary: 上游北斗拥有玩家沟通、好友、队伍、公会联盟、家族与婚姻关系的规则和状态；此图依据固定1.12源码，不表示已完成实际玩法验收。
+  aliases:
+  - 聊天
+  - 组队
+  - 好友
+  - 公会
+  - 家族
+  - 婚姻
+  anchors:
+  - kind: directory
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server
+    description: 世界级社交成员、组织与邀请协调的实现入口。
+- id: beidou.social.chat
+  kind: interface
+  name: 原生聊天派发与广播
+  summary: 游戏客户端及Solo适配沿原生聊天处理器派发；普通聊天、私聊和组织聊天各自决定接收者与限制。
+  aliases:
+  - GeneralChatHandler
+  - CHATTEXT
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/GeneralChatHandler.java
+    value: GeneralChatHandler.handlePacket
+    description: 普通发言经原生频率、命令和地图禁言检查后广播。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MultiChatHandler.java
+    value: MultiChatHandler.handlePacket
+    description: 好友、队伍、公会与联盟聊天沿组织路由发送。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/WhisperHandler.java
+    value: WhisperHandler.handlePacket
+    description: 按目标在线状态处理私聊与查找。
+- id: beidou.social.general-chat
+  kind: scenario
+  name: 在当前地图发言
+  summary: 普通发言先受200毫秒原生缓存时钟限频、长度、命令入口、斜杠与地图禁言规则约束；隐身角色只向GM广播。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/GeneralChatHandler.java
+    value: GeneralChatHandler.handlePacket
+    description: 区分命令与普通发言，并向地图或GM广播真实聊天包。
+- id: beidou.social.direct-chat
+  kind: operation
+  name: 私聊与查找在线玩家
+  summary: 按世界在线角色查找目标；位置查找受GM级别限制，私聊受频率和长度限制，目标离线返回未找到。
+  aliases:
+  - 密语
+  - whisper
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/WhisperHandler.java
+    value: WhisperHandler.handlePacket
+    description: 分派位置查找与私聊请求。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/WhisperHandler.java
+    value: WhisperHandler.handleWhisper
+    description: 按200毫秒频率与长度检查发送私聊。
+- id: beidou.social.group-chat
+  kind: operation
+  name: 向好友或所属组织发言
+  summary: 好友消息使用收件人列表；队伍、公会与联盟消息需要实际所属关系，并经对应世界或服务器广播入口发送。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MultiChatHandler.java
+    value: MultiChatHandler.handlePacket
+    description: 选择好友、队伍、公会和联盟的聊天接收范围。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/SpouseChatHandler.java
+    value: SpouseChatHandler.handlePacket
+    description: 依据伴侣ID向在线配偶发送消息，离线明确提示。
+- id: beidou.social.messenger
+  kind: scenario
+  name: 建立邀请式聊天会话
+  summary: 玩家创建、邀请加入、发言和退出Maple Messenger；加入需有效邀请，房间最多三人。
+  aliases:
+  - Maple Messenger
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MessengerHandler.java
+    value: MessengerHandler.handlePacket
+    description: 处理三人聊天会话创建、受邀加入、邀请、退出和聊天。
+- id: beidou.social.friends
+  kind: scenario
+  name: 维护好友关系
+  summary: 申请好友、接受、分组与删除各有原生路径；名单容量、目标存在和待确认状态决定结果，接受会持久化双方正式关系。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/BuddylistModifyHandler.java
+    value: BuddylistModifyHandler.handlePacket
+    description: 处理好友申请、接受、分组变更及删除。
+- id: beidou.social.friend-list
+  kind: data
+  name: 好友名单与待确认关系
+  summary: 好友ID、分组、可见/待确认状态、容量与在线频道信息由原生好友系统维护。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/BuddyList.java
+    description: 内存好友名单与容量。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/BuddylistEntry.java
+    description: 单项好友关系与分组、频道、可见状态。
+- id: beidou.social.party-membership
+  kind: scenario
+  name: 创建、加入及结束队伍关系
+  summary: 创建、邀请、接受、离队、队长解散、踢人与转移队长沿原生队伍路径更新；离队和解散还通知正在参与的事件实例。
+  aliases:
+  - 组队
+  - 入队
+  - 退队
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PartyOperationHandler.java
+    value: PartyOperationHandler.handlePacket
+    description: 处理组队协议操作和邀请答案。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/Party.java
+    value: Party.joinParty
+    description: 加入时复核已有队伍、目标队伍存在和六人容量。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/Party.java
+    value: Party.leaveParty
+    description: 区分成员离队与队长解散，并通知事件实例。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/DenyPartyRequestHandler.java
+    value: DenyPartyRequestHandler.handlePacket
+    description: 拒绝真实组队邀请并通知邀请者，不建立队伍成员关系。
+- id: beidou.social.party
+  kind: data
+  name: 队伍成员与队长关系
+  summary: 世界级队伍持有队伍ID、成员、队长、历史成员和相关门；社交域拥有成员关系，任务域据此决定实例资格。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/Party.java
+    description: 队伍、成员与队长的原生状态声明。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/PartyCharacter.java
+    description: 队伍成员的角色投影。
+- id: beidou.social.party-search
+  kind: operation
+  name: 按等级职业招募队员
+  summary: 队长提交包含自身等级且跨度不超过30级的招募条件；协调器按邻近地图、职业和等级寻找候选并发送邀请；满员结束当前搜索，重试达到阈值的在线队长可转长期等待队列后再进入搜索。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PartySearchStartHandler.java
+    value: PartySearchStartHandler.handlePacket
+    description: 核验等级区间及队长身份后登记招募。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/coordinator/partysearch/PartySearchCoordinator.java
+    value: PartySearchCoordinator.runPartySearch
+    description: 寻找候选、发送邀请，满员收束并将适用的超限搜索转长期等待。
+- id: beidou.social.guild
+  kind: scenario
+  name: 创建与维护公会
+  summary: 创建需名称、金币和合格伙伴确认；邀请加入、退出、踢人、职级、徽章与公告由成员身份和权限控制，解散清理持久公会并协调联盟归属。
+  aliases:
+  - 行会
+  - guild
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/GuildOperationHandler.java
+    value: GuildOperationHandler.handlePacket
+    description: 处理公会创建资格、成员邀请/退出及管理权限。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/guild/Guild.java
+    value: Guild.disbandGuild
+    description: 移除联盟关系、删除持久公会并广播解散。
+- id: beidou.social.guild-state
+  kind: data
+  name: 公会成员与管理状态
+  summary: 公会名称、成员职级、容量、徽章、公告、联盟归属和积分由原生公会对象及持久化维护。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/guild/Guild.java
+    description: 公会信息、成员与管理状态。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/dao/entity/GuildsDO.java
+    description: 公会持久化记录。
+- id: beidou.social.alliance
+  kind: operation
+  name: 维护公会联盟
+  summary: 公会邀请加入或退出联盟，联盟管理员管理公会、成员职级和公告；成员身份、权限、有效邀请与联盟容量决定是否受理。
+  aliases:
+  - 联盟
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/AllianceOperationHandler.java
+    value: AllianceOperationHandler.handlePacket
+    description: 检查公会、联盟成员关系与职级，处理邀请和联盟变更。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/guild/Alliance.java
+    value: Alliance.disbandAlliance
+    description: 解除联盟中各公会的归属并删除联盟记录。
+- id: beidou.social.family
+  kind: scenario
+  name: 加入、合并与脱离家族
+  summary: 家族开关启用后，玩家依同图、等级差、代数和邀请规则建立上下级关系或合并家族；分离需真实关系且支付按等级差计算的金币，并扣减上级声望。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/FamilyAddHandler.java
+    value: FamilyAddHandler.handlePacket
+    description: 检查同图、等级与代数后发出家族邀请。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/AcceptFamilyHandler.java
+    value: AcceptFamilyHandler.handlePacket
+    description: 消费邀请并创建、加入或合并家族，保存新关系。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/FamilySeparateHandler.java
+    value: FamilySeparateHandler.handlePacket
+    description: 核实上下级关系与金币后分离分支并扣减声望。
+- id: beidou.social.family-tree
+  kind: data
+  name: 家族谱系与声望权益
+  summary: 家族的领导者、上下级、代数、声望与权益使用记录由家族及家族成员对象维护。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Family.java
+    description: 家族组织与谱系生命周期。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/FamilyEntry.java
+    description: 上下级、声望和权益使用状态。
+- id: beidou.social.family-benefits
+  kind: operation
+  name: 使用家族声望权益
+  summary: 权益检查家族开关、剩余声望及已使用状态；重聚/召集继续核家族和地图限制，个人或组队增益按对应路径发放并记录权益消耗。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/FamilyUseHandler.java
+    value: FamilyUseHandler.handlePacket
+    description: 检查声望、权益和地图限制，执行家族出行或增益。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/FamilyUseHandler.java
+    value: FamilyUseHandler.useEntitlement
+    description: 权益登记成功时扣除声望并刷新家族信息。
+- id: beidou.social.marriage
+  kind: scenario
+  name: 订婚、婚姻与礼物互动
+  summary: 求婚核双方关系、等级、同图、性别、戒指与背包资格；答复、取消和解除关系走原生戒指动作，婚礼礼物沿婚礼实例检查赠送/领取资格和容量。
+  aliases:
+  - 订婚
+  - 结婚
+  - 婚礼
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/RingActionHandler.java
+    value: RingActionHandler.sendEngageProposal
+    description: 核实双方关系和道具资格后发起求婚。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/RingActionHandler.java
+    value: RingActionHandler.handlePacket
+    description: 处理求婚答复、取消、解除、婚礼邀请与愿望单。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/WeddingHandler.java
+    value: WeddingHandler.handlePacket
+    description: 在婚礼实例中赠送或领取礼物，并处理未领礼物。
+- id: beidou.social.marriage-state
+  kind: data
+  name: 伴侣关系与婚礼礼物状态
+  summary: 角色伴侣及戒指字段、婚姻记录、婚礼实例的愿望单和礼物共同承载婚姻业务；物品本体仍归经济域。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/dao/entity/MarriagesDO.java
+    description: 持久化婚姻记录。
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/server/Marriage.java
+    description: 婚礼事件实例、愿望单、赠礼与未领取礼物。
+- id: beidou.social.chat-rules
+  kind: invariant
+  name: 保留各聊天路径原生限制
+  summary: 普通聊天、私聊与组织聊天分别执行源码规定的长度、频率、收件范围及隐藏身份规则；不能由某一路径通过推断其他路径也具备相同检查。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/GeneralChatHandler.java
+    value: GeneralChatHandler.handlePacket
+    description: 普通聊天使用原生时钟限频、命令分流和地图禁言。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/WhisperHandler.java
+    value: WhisperHandler.handleWhisper
+    description: 私聊使用自身限频与长度规则。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MultiChatHandler.java
+    value: MultiChatHandler.handlePacket
+    description: 组织聊天按实际成员关系路由。
+relations:
+- from: beidou.social.chat
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.general-chat
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.direct-chat
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.group-chat
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.messenger
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.friends
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.friend-list
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.party-membership
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.party
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.party-search
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.guild
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.guild-state
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.alliance
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.family
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.family-tree
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.family-benefits
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.marriage
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.marriage-state
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.chat-rules
+  type: part_of
+  to: beidou.social
+  summary: 该概念由北斗社交与组织域拥有。
+- from: beidou.social.general-chat
+  type: publishes
+  to: beidou.social.chat
+  summary: 该聊天路径产生原生可观察聊天结果。
+- from: beidou.social.general-chat
+  type: constrained_by
+  to: beidou.social.chat-rules
+  summary: 保留该路径自身原生聊天规则。
+- from: beidou.social.direct-chat
+  type: publishes
+  to: beidou.social.chat
+  summary: 该聊天路径产生原生可观察聊天结果。
+- from: beidou.social.direct-chat
+  type: constrained_by
+  to: beidou.social.chat-rules
+  summary: 保留该路径自身原生聊天规则。
+- from: beidou.social.group-chat
+  type: publishes
+  to: beidou.social.chat
+  summary: 该聊天路径产生原生可观察聊天结果。
+- from: beidou.social.group-chat
+  type: constrained_by
+  to: beidou.social.chat-rules
+  summary: 保留该路径自身原生聊天规则。
+- from: beidou.social.general-chat
+  type: reads
+  to: beidou.world.scene
+  summary: 当前地图禁言、角色隐身和地图成员决定广播范围。
+- from: beidou.social.direct-chat
+  type: reads
+  to: beidou.identity.characters
+  summary: 读取世界在线角色与GM等级确定目标及位置可见性。
+- from: beidou.social.friends
+  type: reads
+  to: beidou.identity.characters
+  summary: 查找目标角色及其好友容量和在线频道。
+- from: beidou.social.friends
+  type: writes
+  to: beidou.social.friend-list
+  summary: 申请、接受、分组和删除改变好友关系。
+- from: beidou.social.group-chat
+  type: reads
+  to: beidou.social.friend-list
+  summary: 好友群聊沿好友收件人路由。
+- from: beidou.social.group-chat
+  type: reads
+  to: beidou.social.party
+  summary: 队伍聊天仅在当前实际队伍内广播。
+- from: beidou.social.group-chat
+  type: reads
+  to: beidou.social.guild-state
+  summary: 公会和联盟聊天依据当前公会/联盟归属。
+- from: beidou.social.group-chat
+  type: reads
+  to: beidou.social.marriage-state
+  summary: 配偶聊天按当前伴侣ID确定收件人。
+- from: beidou.social.party-membership
+  type: writes
+  to: beidou.social.party
+  summary: 创建、加入、离开、解散和队长变更更新队伍状态。
+- from: beidou.social.party-membership
+  type: consumes
+  to: beidou.world.events
+  summary: 离队、解散与踢人通知正在参与的事件实例。
+- from: beidou.social.party-search
+  type: reads
+  to: beidou.social.party
+  summary: 只有现任队长招募，满员结束搜索。
+- from: beidou.social.party-search
+  type: reads
+  to: beidou.world.scene
+  summary: 候选匹配使用邻近地图范围。
+- from: beidou.social.guild
+  type: writes
+  to: beidou.social.guild-state
+  summary: 成员管理与公会管理改变组织状态。
+- from: beidou.social.guild
+  type: reads
+  to: beidou.economy.wallet
+  summary: 创建与换徽章检查原生金币余额。
+- from: beidou.social.guild
+  type: writes
+  to: beidou.economy.wallet
+  summary: 换徽章沿原生金币操作支付配置费用。
+- from: beidou.social.guild
+  type: invokes
+  to: beidou.social.party-membership
+  summary: 公会创建先建立静默队伍并组织合格伙伴确认。
+- from: beidou.social.alliance
+  type: writes
+  to: beidou.social.guild-state
+  summary: 加入、退出与管理联盟改变公会联盟归属及成员职级。
+- from: beidou.social.family
+  type: writes
+  to: beidou.social.family-tree
+  summary: 建立、合并和分离谱系，调整声望。
+- from: beidou.social.family
+  type: writes
+  to: beidou.economy.wallet
+  summary: 家族分离按等级差计算并扣除金币。
+- from: beidou.social.family-benefits
+  type: writes
+  to: beidou.social.family-tree
+  summary: 权益执行会记录使用并扣减相应声望。
+- from: beidou.social.family-benefits
+  type: reads
+  to: beidou.world.scene
+  summary: 重聚和召集使用地图迁移、回程与实例限制。
+- from: beidou.social.family-benefits
+  type: writes
+  to: beidou.world.scene
+  summary: 获准的家族重聚沿原生changeMap改变玩家地图。
+- from: beidou.social.marriage
+  type: writes
+  to: beidou.social.marriage-state
+  summary: 原生戒指动作和婚礼交互建立、解除或修改伴侣与礼物状态。
+- from: beidou.social.marriage
+  type: reads
+  to: beidou.economy.inventory
+  summary: 求婚与礼物互动检查戒指、道具、可交易性和背包容量。
+- from: beidou.social.marriage
+  type: writes
+  to: beidou.economy.inventory
+  summary: 赠送和领取礼物沿原生背包操作转移物品。
+- from: beidou.social.marriage
+  type: consumes
+  to: beidou.world.events
+  summary: 婚礼互动消费当前Marriage事件实例。
+flows:
+- id: beidou.social.party-membership.flow
+  name: 受邀加入原生队伍
+  summary: 邀请时检查资格与容量，接受时消费有效邀请，再次复核实际队伍状态，保留拒绝和失效结果。
+  scenario: beidou.social.party-membership
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 申请邀请玩家
+    summary: 邀请者按名字选择世界在线目标。
+    concept: beidou.social.party-membership
+  - id: eligible
+    kind: decision
+    name: 是否允许发出邀请
+    summary: 检查目标在线、等级、已有队伍、创建资格及队伍六人容量。
+    concept: beidou.social.party-membership
+  - id: refused
+    kind: outcome
+    name: 未发出邀请
+    summary: 离线、不符合资格、已有队伍、满员或邀请冲突均不能建立成员关系。
+  - id: invited
+    kind: action
+    name: 发出原生邀请
+    summary: 必要时先创建队伍，登记邀请并通知目标。
+    concept: beidou.social.party-membership
+  - id: answer
+    kind: decision
+    name: 邀请答案是否有效且接受
+    summary: 拒绝或邀请失效不允许入队；接受仍需有效邀请。
+    concept: beidou.social.party-membership
+  - id: unjoined
+    kind: outcome
+    name: 邀请未转为成员
+    summary: 拒绝、超时或邀请失效不建立成员关系。
+  - id: joinable
+    kind: decision
+    name: 受邀队伍现在能否加入
+    summary: 再次检查目标未入其他队、队伍仍存在且未满员。
+    concept: beidou.social.party-membership
+  - id: joined
+    kind: outcome
+    name: 成员关系建立
+    summary: 更新队伍成员、地图成员和组队状态。
+    concept: beidou.social.party
+  - id: join-refused
+    kind: outcome
+    name: 接受后仍无法加入
+    summary: 已有队伍、队伍已解散或已满员时保留原成员状态。
+  transitions:
+  - from: request
+    to: eligible
+  - from: eligible
+    to: refused
+    when: 目标、等级、队伍容量或邀请状态不允许
+  - from: eligible
+    to: invited
+    when: 满足原生邀请条件
+  - from: invited
+    to: answer
+  - from: answer
+    to: unjoined
+    when: 拒绝或邀请已失效
+  - from: answer
+    to: joinable
+    when: 接受且邀请有效
+  - from: joinable
+    to: joined
+    when: 角色未入队且目标队伍存在并未满员
+  - from: joinable
+    to: join-refused
+    when: 角色已入队或目标队伍消失或满员
+- id: beidou.social.general-chat.flow
+  name: 普通地图发言
+  summary: 普通发言保留原生频率、长度、命令及禁言分支，广播只代表该处理器已向选定范围发送包。
+  scenario: beidou.social.general-chat
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 提交聊天正文
+    summary: 读取原生聊天正文与当前角色。
+    concept: beidou.social.general-chat
+  - id: basic
+    kind: decision
+    name: 原生频率与长度是否通过
+    summary: 先检查200毫秒原生缓存时钟间隔，再按普通玩家长度限制处理。
+    concept: beidou.social.chat-rules
+  - id: blocked
+    kind: outcome
+    name: 不广播本次正文
+    summary: 频率不足会拒绝；非法过长普通玩家文本会触发告警并断开。
+  - id: route
+    kind: decision
+    name: 正文属于哪类入口
+    summary: 命令交给命令执行器，普通非斜杠正文进入地图聊天。
+    concept: beidou.social.general-chat
+  - id: other
+    kind: outcome
+    name: 命令或斜杠入口结束
+    summary: 命令按自己的规则执行，非命令斜杠正文不作为普通地图广播。
+  - id: muted
+    kind: decision
+    name: 地图是否允许该角色发言
+    summary: 非GM受地图禁言限制。
+    concept: beidou.social.general-chat
+  - id: forbidden
+    kind: outcome
+    name: 地图禁言拒绝
+    summary: 返回禁言提示，本次正文不广播。
+  - id: broadcast
+    kind: outcome
+    name: 按身份范围广播
+    summary: 可见角色向地图广播，隐身角色只向GM广播，并记录本次频率。
+    concept: beidou.social.chat
+  transitions:
+  - from: request
+    to: basic
+  - from: basic
+    to: blocked
+    when: 原生频率不足或普通玩家正文过长
+  - from: basic
+    to: route
+    when: 频率与长度通过
+  - from: route
+    to: other
+    when: 命令或非命令斜杠正文
+  - from: route
+    to: muted
+    when: 普通非斜杠正文
+  - from: muted
+    to: forbidden
+    when: 地图禁言且角色不是GM
+  - from: muted
+    to: broadcast
+    when: 地图未禁言或角色是GM

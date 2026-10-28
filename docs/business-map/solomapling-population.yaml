@@ -1,0 +1,356 @@
+schemaVersion: 1
+map:
+  id: solo.population
+  title: SoloMapling · 环境人口
+  summary: 人口计划、模板与运行身份、地图布置和世界退出。
+nodes:
+- id: solo.population
+  kind: domain
+  name: SoloMapling 环境人口
+  summary: 为游戏世界配置和生成运行期环境机器人，管理身份、城镇分布与退出；不拥有普通玩家或 MCP 原生角色。
+  aliases:
+  - 环境机器人
+  - 人口配置
+  - V1机器人
+  anchors:
+  - kind: directory
+    value: src/main/java/soloMapling/Environment
+    description: 人口计划、批次生成与城镇布置入口。
+- id: solo.population.plan
+  kind: data
+  name: 机器人人口计划
+  summary: 记录配置来源、缩放比例、九类批次开关、人数和城镇/训练群组；实际人数取运行后状态。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/Environment/EnvironmentPopulationConfig.java
+    description: PopulationPlan 及各批次数据定义。
+- id: solo.population.load-plan
+  kind: operation
+  name: 读取人口计划
+  summary: 显式路径优先；显式文件缺失、空或无法解析时报错；未指定路径时才按工作目录、资源包和内置默认值回退。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/EnvironmentPopulationConfig.java
+    value: EnvironmentPopulationConfig.load
+    description: 解析人口计划并区分显式配置错误与默认回退。
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/EnvironmentPopulationConfig.java
+    value: EnvironmentPopulationConfig.openReader
+    description: 确定实际配置来源。
+- id: solo.population.initialize
+  kind: scenario
+  name: 启动环境人口
+  summary: 世界就绪且开启启动生成后，按批次和缩放计划生成市场、城镇、特色玩法与训练人口；生成累计数不代表当前在线数。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/EnvironmentManager.java
+    value: EnvironmentManager.environmentLoadStartup
+    description: 读取计划并执行各批次与启动装饰检查。
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/beidou/BeiDouRuntime.java
+    value: BeiDouRuntime.onServerReady
+    description: 在世界就绪时读取启动开关与配置后启动生成。
+- id: solo.population.create-bot
+  kind: operation
+  name: 从既有模板生成环境角色
+  summary: 读取既有 fmbot 模板，在内存中分配独立运行 ID、注册角色并进入目标地图，再设置等级职业外观和到场表现。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGeneration.java
+    value: BotGeneration.createBot
+    description: 加载模板、分配 ID、登记世界并发布到地图。
+- id: solo.population.remove-bot
+  kind: operation
+  name: 移除环境角色
+  summary: 从地图、频道、世界和机器人状态索引移除同一运行角色并撤销登记，不作为玩家角色保存退出。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGeneration.java
+    value: BotGeneration.removeBotFromServer
+    description: 清除地图、世界、运行状态与 BotRegistry 登记。
+- id: solo.population.bots
+  kind: data
+  name: 环境角色登记
+  summary: 以精确角色对象和 BotClient 身份登记运行期机器人；分配 ID 时避让登记、在线和数据库已有角色。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/beidou/BotRegistry.java
+    value: BotRegistry.register
+    description: 仅登记 BotClient 对应的精确角色对象。
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/beidou/BotRegistry.java
+    value: BotRegistry.allocateId
+    description: 避开在线、持久与已分配的角色 ID。
+- id: solo.population.identity-rule
+  kind: invariant
+  name: 环境身份与当前行动资格分别复核
+  summary: isBot 以 BotClient 或精确登记对象识别环境身份；isCurrent 另外要求精确登记且频道存储仍为同一对象。身份识别不等于当前可行动，不能仅凭
+    ID 范围判断。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/beidou/BotRegistry.java
+    value: BotRegistry.isBot
+    description: 以 BotClient 或精确登记对象识别环境身份，不表示当前行动资格。
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/beidou/BotRegistry.java
+    value: BotRegistry.isCurrent
+    description: 复核精确登记对象与当前世界/频道存储。
+- id: solo.population.template-rule
+  kind: invariant
+  name: 模板唯一且只读加载
+  summary: 只接受 world=0 中唯一既有 fmbot 模板；缺失或重复拒绝，不用固定 CID 覆盖真人，也不代表空库自动初始化。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGeneration.java
+    value: BotGeneration.templateCharacterId
+    description: 按名字和世界只读查找并要求唯一模板。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGeneration.java
+    value: BotGeneration.loadTemplate
+    description: 以 BotClient 非频道登录方式加载模板。
+- id: solo.population.town-presence
+  kind: capability
+  name: 城镇与地图人口布置
+  summary: 按城镇配置生成社交者、闲逛者和训练群组，使用平台和锚点布置，具体行为由对应机器人类型决定。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/EnvironmentManager.java
+    value: EnvironmentManager.spawnTown
+    description: 分别生成城镇训练、社交与闲逛人口。
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/EnvironmentManager.java
+    value: EnvironmentManager.spawnTownCohort
+    description: 选择城镇位置并赋予指定类型。
+- id: solo.population.appearance
+  kind: capability
+  name: 等级职业与外观装饰
+  summary: 生成时按职业和等级设置运行期角色，并在世界运行期间启动装饰和装备检查；不声称持久成长已完成。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotDecoratorSystem/BotDecorate.java
+    value: BotDecorate.setBotVariables
+    description: 按等级职业参数装饰新机器人。
+- id: solo.population.stop-world
+  kind: scenario
+  name: 停止本轮环境人口
+  summary: 世界停止时停止调度和社交/移动任务，等待宏回调退出后移除登记角色；回调未排空会记录错误并继续原生停服，不能据此声称所有工作已安全结束。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/beidou/BeiDouRuntime.java
+    value: BeiDouRuntime.onServerStopping
+    description: 停止后台系统、等待宏回调并移除环境角色。
+  - kind: symbol
+    file: src/main/java/soloMapling/Environment/EnvironmentManager.java
+    value: EnvironmentManager.stop
+    description: 取消当前世界的延迟任务并停止环境子系统。
+- id: solo.population.bot-source
+  kind: interface
+  name: 环境机器人来源接口
+  summary: 以 BotClient、模板加载和 BotRegistry 提供环境角色，区别于验收桥的普通原生账号角色来源。
+  aliases: []
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/org/gms/client/BotClient.java
+    description: 不连接游戏客户端、默认不保留收包的环境机器人 Client。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGeneration.java
+    value: BotGeneration.createBot
+    description: 提供运行期环境角色。
+relations:
+- from: solo.population.plan
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.load-plan
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.initialize
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.create-bot
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.remove-bot
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.bots
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.identity-rule
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.template-rule
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.town-presence
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.appearance
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.stop-world
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.bot-source
+  type: part_of
+  to: solo.population
+  summary: 属于环境人口责任。
+- from: solo.population.load-plan
+  type: reads
+  to: solo.population.plan
+  summary: 按人口文件解析各批次配置。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.population.load-plan
+  summary: 启动批次先读取已解析的来源与计划。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.population.create-bot
+  summary: 各批次创建运行期环境角色。
+- from: solo.population.create-bot
+  type: writes
+  to: solo.population.bots
+  summary: 登记新角色并分配不冲突的运行 ID。
+- from: solo.population.remove-bot
+  type: writes
+  to: solo.population.bots
+  summary: 移除精确对象的登记。
+- from: solo.population.create-bot
+  type: constrained_by
+  to: solo.population.identity-rule
+  summary: 发布角色前复核登记和当前性。
+- from: solo.population.create-bot
+  type: constrained_by
+  to: solo.population.template-rule
+  summary: 生成依赖唯一既有模板。
+- from: solo.population.create-bot
+  type: consumes
+  to: beidou.identity.native-character
+  summary: 通过北斗 Character.loadCharFromDB 读取模板原生数据。
+- from: solo.population.create-bot
+  type: reads
+  to: beidou.identity.characters
+  summary: 只读加载模板及检测持久角色 ID 冲突。
+- from: solo.population.create-bot
+  type: writes
+  to: beidou.world.scene
+  summary: 使用原生地图 addPlayer 发布运行期环境角色。
+- from: solo.population.remove-bot
+  type: writes
+  to: beidou.world.scene
+  summary: 从原生地图和在线存储移除该环境角色。
+- from: solo.population.create-bot
+  type: publishes
+  to: solo.population.bot-source
+  summary: 向 Solo 行为提供已登记环境角色。
+- from: solo.population.stop-world
+  type: invokes
+  to: solo.population.remove-bot
+  summary: 停止回调后清除当前登记角色。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.market.populate
+  summary: 启用相应批次时安排人工自由市场铺店。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.companions.train
+  summary: 训练群组生成后按 TRAINING_BOT 类型启动旧 V1 训练行为。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.social.ambient-chat
+  summary: 按 startSocialSystems 开关启动环境群聊系统；实际群聊仍核真人在场与冷却。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.recreation.blackjack
+  summary: 特色批次生成牌桌与庄家并启动旧 V1 牌局行为；不保证真人结算已可用。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.recreation.drop-game
+  summary: 按批次生成掉落游戏主持者，付费和回合仍由游戏域裁决。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.recreation.gacha-display
+  summary: 相应批次生成并启动扭蛋表演机器人。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.recreation.hospitality
+  summary: 按 gameZoneHosts 设置生成迎宾游戏主持者。
+- from: solo.population.initialize
+  type: invokes
+  to: solo.onboarding.tutorial
+  summary: 仅在对应essentials批次及tutorial开关启用时生成TutorialBot并启动其教程状态机，不泛化为所有部署默认开启。
+flows:
+- id: solo.population.initialize.flow
+  name: 按配置建立环境人口
+  summary: 显式配置错误会阻止正常初始化；模板或生成失败按现有调用路径传播，不用默认人口掩盖显式配置问题。
+  scenario: solo.population.initialize
+  startsAt: read-plan
+  steps:
+  - id: read-plan
+    kind: action
+    name: 读取人口计划
+    summary: 解析来源、比例和批次。
+    concept: solo.population.load-plan
+  - id: plan-valid
+    kind: decision
+    name: 计划能否读取
+    summary: 显式文件错误不能静默采用默认值。
+  - id: failed
+    kind: outcome
+    name: 初始化失败
+    summary: 保留错误，启动入口执行已有清理。
+  - id: create
+    kind: action
+    name: 执行启用批次
+    summary: 按计划加载模板并创建环境角色。
+    concept: solo.population.create-bot
+  - id: creation-result
+    kind: decision
+    name: 角色是否建立成功
+    summary: 模板须唯一可加载，创建过程中错误会沿现有调用路径传播；未确认成功不计作在线角色。
+  - id: created
+    kind: outcome
+    name: 人口已按批次安排生成
+    summary: 后续异步到场和店铺行为仍需实际在线观察，不能以累计数认定完成。
+  - id: creation-failed
+    kind: outcome
+    name: 该生成未成功建立角色
+    summary: 记录实际异常与残留后态，不能用批次安排或累计计数代替已进入世界。
+  transitions:
+  - from: read-plan
+    to: plan-valid
+  - from: plan-valid
+    to: failed
+    when: 显式计划读取失败
+  - from: plan-valid
+    to: create
+    when: 成功读取或合法默认回退
+  - from: create
+    to: creation-result
+  - from: creation-result
+    to: created
+    when: 模板和角色创建成功
+  - from: creation-result
+    to: creation-failed
+    when: 模板读取或角色创建失败

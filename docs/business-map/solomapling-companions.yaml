@@ -1,0 +1,592 @@
+schemaVersion: 1
+map:
+  id: solo.companions
+  title: Solo 伙伴协作与训练
+  summary: V1 环境角色招募、组队、跟随、驻点与训练，以及明确未完成的 OPQ 原型边界。
+nodes:
+- id: solo.companions
+  kind: domain
+  name: Solo 伙伴协作与训练
+  summary: 管理 V1 环境角色从招募、组队、跟随、驻点训练到结束协作的运行期行为；原生角色成长规则仍归北斗，当前不承诺持久伙伴或 V2 自治模块。
+  aliases:
+  - FollowerBot
+  - TrainingBot
+  - 伙伴
+  - 练级
+  anchors:
+  - kind: document
+    value: README.md
+    description: 区分既有机器人代码、持久伙伴待验范围和未完成的通用 PQ。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FollowerBot.java
+    value: FollowerBot.updateState
+    description: 监督跟随状态、队伍关系与交易暂停。
+- id: solo.companions.recruit
+  kind: scenario
+  name: 招募环境机器人协作
+  summary: 玩家经对话提出组队意愿，机器人按资格、容量和概率决定是否同意，再等待匹配玩家的原生邀请；口头同意不等于已入队。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotRecruitManager.java
+    value: BotRecruitManager.rollPartyAsk
+    description: 决定招募答复并记录邀请者与拒绝冷却。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.optPartyAsk
+    description: 把训练机器人菜单选择交给招募规则。
+- id: solo.companions.assess-recruit
+  kind: operation
+  name: 决定招募意愿
+  summary: 低于 10 级、拒绝冷却中或需转跟随且数量达上限时拒绝；其余按调用方传入的概率答复，并保留同意邀请者。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotRecruitManager.java
+    value: BotRecruitManager.rollPartyAsk
+    description: 核对等级、冷却、跟随容量并作概率答复。
+- id: solo.companions.join-party
+  kind: operation
+  name: 答复匹配的队伍邀请
+  summary: 仅对已同意邀请者的邀请尝试正常答复和加入北斗队伍；过期、解散、已满或已在队伍时可失败，其他邀请被拒绝。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotRecruitManager.java
+    value: BotRecruitManager.pollInvites
+    description: 将实际邀请者与已同意对象匹配。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotPartyCommands.java
+    value: BotPartyCommands.botAcceptPartyInvite
+    description: 先答复 InviteCoordinator，再由 Party.joinParty 决定是否真正加入。
+- id: solo.companions.recruitment-state
+  kind: data
+  name: 运行期招募与交接意图
+  summary: 保存已同意邀请者、逐玩家拒绝冷却、待接管领队及驻点标记；这是进程内协调状态，不是持久伙伴存档。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotRecruitManager.java
+    description: ARMED、DECLINED_UNTIL、PENDING_LEADER 与 PENDING_STATION 的唯一声明。
+- id: solo.companions.recruitment-rules
+  kind: invariant
+  name: 招募承诺与实际入队分开
+  summary: 普通招募必须遵守等级门槛、拒绝冷却和适用的跟随数量限制，并由原生队伍结果确认加入。isArmed 的时间窗口主要用于行为节奏；pollInvites 按已同意邀请者匹配，实际过期由原生协调器裁决。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotRecruitManager.java
+    value: BotRecruitManager.pollInvites
+    description: 确认邀请匹配与原生过期边界，不把同意窗口当唯一加入判断。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotPartySystem/BotPartyCommands.java
+    value: BotPartyCommands.botAcceptPartyInvite
+    description: 原生队伍加入失败仍返回失败。
+- id: solo.companions.follow
+  kind: operation
+  name: 持续跟随指定真人
+  summary: 以领队 ID 重新解析在线对象；同图追随、跨图规划追赶；交易时停止移动，领队短暂离线时等待重连。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FollowerBot.java
+    value: FollowerBot.doFollow
+    description: 重新解析领队、检测退队并重新启动跟随。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/GCMoveSystem/GCFollow.java
+    value: GCFollow.tick
+    description: 同图跟随或跨图行进，并在目标换图时改道。
+- id: solo.companions.station
+  kind: scenario
+  name: 领队要求在当前地图训练
+  summary: 只有当前领队可将跟随者转换为驻点训练，当前地图必须存在怪物索引；其他玩家或无怪地图的请求被拒绝。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FollowerBot.java
+    value: FollowerBot.onMenuSelect
+    description: 校验请求者与地图后交接为 TrainingBot。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.doDecide
+    description: 消费驻点交接标记并优先保留当前训练地图。
+- id: solo.companions.end-follow
+  kind: operation
+  name: 结束跟随并回归环境活动
+  summary: 退队、解散或领队失联超过宽限期时结束跟随；有怪地图转训练，城镇转社交，停止旧跟随并清除招募状态。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FollowerBot.java
+    value: FollowerBot.doLeaderLost
+    description: 等待重连，宽限结束或退队后回退。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FollowerBot.java
+    value: FollowerBot.fallbackConvert
+    description: 停止跟随并按地图转换训练或社交类型。
+- id: solo.companions.train
+  kind: scenario
+  name: 按地图条件推进训练
+  summary: V1 训练机器人选择地点、行进、练级和休息；与真人组队时优先其地图。可见地图使用实际攻击路径，无人观察时采用抽象经验增长，不能据此声称完成客户端玩法验收。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.updateState
+    description: 驱动城镇、行进、训练与休息阶段。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.doGrind
+    description: 区分可见战斗与无人观察的经验推进。
+- id: solo.companions.choose-training-map
+  kind: operation
+  name: 选择并预约训练地图
+  summary: 优先驻点与真人队伍目标，否则按等级、可达性、地图容量及拥挤冷却加权选图并预约；无合格地点时回城等待。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.doDecide
+    description: 决定驻点、组队目标或自主选图。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/TrainingMapChooser.java
+    value: TrainingMapChooser.choose
+    description: 筛选可达地图、按等级和容量选择并记录预约。
+- id: solo.companions.training-state
+  kind: data
+  name: 训练阶段与地图预约
+  summary: 记录训练阶段、当前训练目标、地图占用预约、休息与行进状态；离开训练、转换类型或停用时应释放相应运行期占用。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    description: 训练阶段、目标、计时与休息状态。
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/TrainingMapChooser.java
+    description: 训练地图预约与容量记录。
+- id: solo.companions.navigate
+  kind: operation
+  name: 沿地图路径前往目标
+  summary: 跟随及训练使用 GC 移动与跨图路径；行进完成或失败通过回调确认，无进展超时时取消并重新决策；旧 V1 代码不能据此视为已接入统一 V2 运行体。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.doTravel
+    description: 按真实行进结果与进展超时切换训练阶段。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/GCMoveSystem/GCMovement.java
+    value: GCMovement.travel
+    description: 启动既有 V1 跨图行进。
+- id: solo.companions.attack
+  kind: operation
+  name: 执行 V1 可见战斗
+  summary: 按职业和武器配置选取可达目标与攻击，遵守普通冷却；广播攻击后直接应用怪物伤害与机器人掉落适配，未走玩家完整 applyAttack 路径。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotAttackSystem/BotAttackDriver.java
+    value: BotAttackDriver.botAttack
+    description: 使用普通冷却控制的自动攻击。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotAttackSystem/BotAttackEffects.java
+    value: BotAttackEffects.broadcastAndApply
+    description: 广播攻击表现，再应用伤害和专用掉落路径。
+- id: solo.companions.abstract-growth
+  kind: operation
+  name: 推进无人观察时的抽象经验
+  summary: 仅在训练地图无人观察时，按经过时间和地图怪物等级直接更新机器人对象的经验及等级，并发布升级事件；这不同于一次真实击杀或持久伙伴成长验收。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.accrueAbstractExp
+    description: 计算时间经验并修改本角色对象的等级和经验。
+- id: solo.companions.remove-loot
+  kind: operation
+  name: 移除训练范围内可收集掉落
+  summary: V1 训练按脚边距离或行走范围挑选归自己或已开放的掉落，然后从地图移除；当前 botLootSingleDrop 不向机器人背包入账，不能当作原生拾取获益或 PQ 交付。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/GrindLoot.java
+    value: GrindLoot.grabLootAtFeet
+    description: 按距离与节奏选择脚边掉落。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotCommandsPack/DropCommands.java
+    value: DropCommands.botLootSingleDrop
+    description: 调用地图移除掉落，不执行背包获得。
+- id: solo.companions.stop-training
+  kind: operation
+  name: 释放旧训练行为
+  summary: 转换类型或停用时停止训练、取消桑拿延时回调、释放地图及站位预约、清除攻击与增益状态并停用移动，防止旧回调继续迁移角色。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBot.java
+    value: TrainingBot.stopScheduledTask
+    description: 清理旧训练的行为、预约、回调与移动状态。
+  - kind: file
+    value: beidou-integration/src/test/java/soloMapling/ArtificialPlayer/BotTypes/TrainingBotSaunaLifecycleTest.java
+    description: 验证停用后迟到的桑拿回调不再发起换图或行进。
+- id: solo.companions.opq-prototype
+  kind: capability
+  name: 旧 OPQ 两段协作原型
+  summary: 保留云与唱片两段的目标分配、导航和局部计数原型；全局协调器、机关与物品语义存在已记录差异，不表示北斗完整女神之塔或通用 PQ 已实现。
+  aliases:
+  - 女神之塔原型
+  - OrbisPQ prototype
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/OPQ/OPQOrchestrator.java
+    value: OPQOrchestrator.assignCloudReactor
+    description: 为旧原型分配未认领云目标。
+  - kind: document
+    value: docs/party-quests/OPQ-AUDIT.md
+    description: 记录原型与北斗完整任务的规则、实例和物品契约差异。
+  - kind: document
+    value: docs/party-quests/README.md
+    description: 区分现有原型与后续通用协作 PQ 设计。
+relations:
+- from: solo.companions.recruit
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.assess-recruit
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.join-party
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.recruitment-state
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.recruitment-rules
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.follow
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.station
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.end-follow
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.train
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.choose-training-map
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.training-state
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.navigate
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.attack
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.abstract-growth
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.remove-loot
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.stop-training
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.opq-prototype
+  type: part_of
+  to: solo.companions
+  summary: 属于环境角色的伙伴协作与训练责任。
+- from: solo.companions.recruit
+  type: invokes
+  to: solo.companions.assess-recruit
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.recruit
+  type: invokes
+  to: solo.companions.join-party
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.follow
+  type: invokes
+  to: solo.companions.navigate
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.train
+  type: invokes
+  to: solo.companions.choose-training-map
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.train
+  type: invokes
+  to: solo.companions.navigate
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.train
+  type: invokes
+  to: solo.companions.attack
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.train
+  type: invokes
+  to: solo.companions.abstract-growth
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.train
+  type: invokes
+  to: solo.companions.remove-loot
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.train
+  type: invokes
+  to: solo.companions.stop-training
+  summary: 由该场景或操作调用对应业务动作。
+- from: solo.companions.assess-recruit
+  type: reads
+  to: solo.companions.recruitment-state
+  summary: 读取本次招募、领队或驻点交接意图。
+- from: solo.companions.join-party
+  type: reads
+  to: solo.companions.recruitment-state
+  summary: 读取本次招募、领队或驻点交接意图。
+- from: solo.companions.follow
+  type: reads
+  to: solo.companions.recruitment-state
+  summary: 读取本次招募、领队或驻点交接意图。
+- from: solo.companions.station
+  type: reads
+  to: solo.companions.recruitment-state
+  summary: 读取本次招募、领队或驻点交接意图。
+- from: solo.companions.assess-recruit
+  type: writes
+  to: solo.companions.recruitment-state
+  summary: 更新或消费招募与角色类型交接意图。
+- from: solo.companions.join-party
+  type: writes
+  to: solo.companions.recruitment-state
+  summary: 更新或消费招募与角色类型交接意图。
+- from: solo.companions.station
+  type: writes
+  to: solo.companions.recruitment-state
+  summary: 更新或消费招募与角色类型交接意图。
+- from: solo.companions.end-follow
+  type: writes
+  to: solo.companions.recruitment-state
+  summary: 更新或消费招募与角色类型交接意图。
+- from: solo.companions.recruit
+  type: constrained_by
+  to: solo.companions.recruitment-rules
+  summary: 招募意愿不能越过资格和原生队伍答复结果。
+- from: solo.companions.assess-recruit
+  type: constrained_by
+  to: solo.companions.recruitment-rules
+  summary: 招募意愿不能越过资格和原生队伍答复结果。
+- from: solo.companions.join-party
+  type: constrained_by
+  to: solo.companions.recruitment-rules
+  summary: 招募意愿不能越过资格和原生队伍答复结果。
+- from: solo.companions.train
+  type: writes
+  to: solo.companions.training-state
+  summary: 建立、更新或释放训练阶段及目标预约。
+- from: solo.companions.choose-training-map
+  type: writes
+  to: solo.companions.training-state
+  summary: 建立、更新或释放训练阶段及目标预约。
+- from: solo.companions.stop-training
+  type: writes
+  to: solo.companions.training-state
+  summary: 建立、更新或释放训练阶段及目标预约。
+- from: solo.companions.join-party
+  type: writes
+  to: beidou.social.party
+  summary: 通过北斗 Party.joinParty 正常更改队伍成员，Solo 不另建队伍数据。
+- from: solo.companions.follow
+  type: reads
+  to: beidou.social.party
+  summary: 根据是否仍在原队伍决定继续跟随或结束协作。
+- from: solo.companions.follow
+  type: reads
+  to: beidou.world.scene
+  summary: 读取领队当前地图以决定同图跟随或跨图追赶。
+- from: solo.companions.choose-training-map
+  type: reads
+  to: beidou.world.scene
+  summary: 根据当前地图、可达路径和怪物索引寻找训练地点。
+- from: solo.companions.abstract-growth
+  type: writes
+  to: beidou.identity.characters
+  summary: 直接更新当前机器人 Character 对象的等级和经验；不声称已经完成数据库持久化。
+- from: solo.companions.station
+  type: invokes
+  to: solo.companions.train
+  summary: 领队的合法驻点请求通过类型交接进入训练生命周期。
+flows:
+- id: solo.companions.recruit.flow
+  name: 普通招募从同意到实际入队
+  summary: 区分机器人答复、真实邀请匹配和原生入队成功。
+  scenario: solo.companions.recruit
+  startsAt: ask
+  steps:
+  - id: ask
+    kind: action
+    name: 玩家提出协作请求
+    summary: 通过社交或训练菜单请求协作。
+    concept: solo.companions.recruit
+  - id: assess
+    kind: decision
+    name: 机器人是否同意
+    summary: 核等级、拒绝冷却、适用容量并进行概率判断。
+    concept: solo.companions.assess-recruit
+  - id: declined
+    kind: outcome
+    name: 本次未同意
+    summary: 资格、容量、冷却或概率导致本次拒绝，不加入队伍。
+  - id: invite
+    kind: decision
+    name: 收到的邀请是否匹配
+    summary: 未到达邀请时仍等待；到达后只接受已同意的邀请者。
+    concept: solo.companions.join-party
+  - id: mismatch
+    kind: outcome
+    name: 邀请被拒绝
+    summary: 其他玩家的邀请被正常拒绝。
+  - id: join
+    kind: action
+    name: 答复并尝试加入原生队伍
+    summary: 消费实际邀请，再调用北斗队伍加入规则。
+    concept: solo.companions.join-party
+  - id: joined-check
+    kind: decision
+    name: 实际加入是否成功
+    summary: 原生邀请可能过期，队伍可能已满、解散或角色已入队。
+    concept: solo.companions.join-party
+  - id: joined
+    kind: outcome
+    name: 实际加入队伍
+    summary: 原生加入成功，后续社交转跟随或训练继续由各类型决定。
+  - id: not-joined
+    kind: outcome
+    name: 仍未加入队伍
+    summary: 邀请无效或原生入队失败，保留失败结果，不能以同意答复冒充成功。
+  transitions:
+  - from: ask
+    to: assess
+  - from: assess
+    to: declined
+    when: 拒绝或不满足条件
+  - from: assess
+    to: invite
+    when: 同意并记录邀请者
+  - from: invite
+    to: mismatch
+    when: 到达其他玩家的邀请
+  - from: invite
+    to: join
+    when: 到达匹配玩家的邀请
+  - from: join
+    to: joined-check
+  - from: joined-check
+    to: joined
+    when: 实际加入成功
+  - from: joined-check
+    to: not-joined
+    when: 邀请或加入失败
+- id: solo.companions.train.flow
+  name: 推进一个 V1 训练周期
+  summary: 在地点、行进和地图可见条件下区分真实战斗与抽象经验，不推导整场训练或持久化已完成。
+  scenario: solo.companions.train
+  startsAt: choose
+  steps:
+  - id: choose
+    kind: action
+    name: 决定训练目标
+    summary: 优先驻点和真人队伍，否则筛选可达地图并预约。
+    concept: solo.companions.choose-training-map
+  - id: target
+    kind: decision
+    name: 是否找到训练目标
+    summary: 自主筛选可能没有合格地点。
+    concept: solo.companions.choose-training-map
+  - id: idle
+    kind: outcome
+    name: 留在城镇等待
+    summary: 没有合格训练地图，本轮不训练。
+  - id: travel
+    kind: action
+    name: 行进或确认已经到达
+    summary: 同图直接进入训练，跨图等待真实行进结果。
+    concept: solo.companions.navigate
+  - id: arrival
+    kind: decision
+    name: 是否到达训练地图
+    summary: 行进可失败或在长期无进展时被取消。
+    concept: solo.companions.navigate
+  - id: replan
+    kind: outcome
+    name: 结束行进并重新决策
+    summary: 不把行进失败视为已经训练。
+  - id: observed
+    kind: decision
+    name: 当前地图是否有人观察
+    summary: 可见性决定本轮经验推进与表现路径。
+    concept: solo.companions.train
+  - id: attack
+    kind: action
+    name: 执行可见战斗
+    summary: 调用 V1 战斗；无合格目标或普通冷却时可以不出手。
+    concept: solo.companions.attack
+  - id: abstract
+    kind: action
+    name: 按时间推进经验
+    summary: 无人观察时直接更新机器人对象的抽象等级经验。
+    concept: solo.companions.abstract-growth
+  - id: loot
+    kind: action
+    name: 按范围尝试清理掉落
+    summary: 既有训练行为按距离与归属移除可收集掉落，不代表物品已进入背包。
+    concept: solo.companions.remove-loot
+  - id: progress
+    kind: outcome
+    name: 本轮训练已推进
+    summary: 角色继续训练、休息或回城由后续阶段判断；不保证每轮必定击杀。
+  transitions:
+  - from: choose
+    to: target
+  - from: target
+    to: idle
+    when: 没有可用地图
+  - from: target
+    to: travel
+    when: 有目标地图
+  - from: travel
+    to: arrival
+  - from: arrival
+    to: replan
+    when: 失败或无进展超时
+  - from: arrival
+    to: observed
+    when: 到达或已在目标地图
+  - from: observed
+    to: attack
+    when: 地图被观察
+  - from: observed
+    to: abstract
+    when: 地图无人观察
+  - from: attack
+    to: loot
+  - from: abstract
+    to: progress
+  - from: loot
+    to: progress

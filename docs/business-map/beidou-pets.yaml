@@ -1,0 +1,391 @@
+schemaVersion: 1
+map:
+  id: beidou-pets
+  title: 北斗：原生宠物
+  summary: 固定上游北斗1.12的宠物生命周期、成长、拾取辅助和补药入口。
+nodes:
+- id: beidou.pets
+  kind: domain
+  name: 北斗原生宠物
+  summary: 上游北斗拥有宠物召唤、饥饿、亲密成长、指令和宠物辅助动作规则；宠物物品及食物药品的背包归属仍属经济域。
+  aliases:
+  - 宠物
+  - pet
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    description: 原生宠物状态、成长规则与持久化入口。
+- id: beidou.pets.records
+  kind: data
+  name: 宠物记录与在场状态
+  summary: 宠物唯一ID、名称、等级、亲密度、饱食度、召唤标志与属性持久化到pets；地图位置、姿态与角色宠物槽描述当前在场状态。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    description: 宠物记录、地图状态和属性定义。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    value: Pet.createPet
+    description: 创建宠物初始记录。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    value: Pet.loadFromDb
+    description: 按宠物ID加载受上限约束的状态。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    value: Pet.saveToDb
+    description: 保存名称、等级、亲密、饱食度、召唤和属性。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    value: Pet.deleteFromDb
+    description: 删除宠物关联数据并清理过滤缓存。
+- id: beidou.pets.summon
+  kind: scenario
+  name: 孵化、召唤与收回宠物
+  summary: 从CASH背包物品取得宠物；龙蛋/机器人蛋按已有幼体限制孵化，普通宠物按当前召唤状态切换；召唤加载过滤列表并登记饥饿，收回保存状态并取消饥饿登记。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/action/SpawnPetProcessor.java
+    value: SpawnPetProcessor.processSpawnPet
+    description: 按背包槽、蛋种、已有召唤和多宠技能决定孵化或召唤/收回。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.unEquipPet
+    description: 保存非召唤状态、移除角色宠物槽并取消饥饿登记。
+- id: beidou.pets.feed
+  kind: scenario
+  name: 喂食并更新亲密成长
+  summary: 500毫秒原生限频后选择饱食度最低的在场宠物，核验真实食物槽和数量；饱食度不超过75时普通食物增加亲密，满饱再喂会降低亲密并可能降级。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetFoodHandler.java
+    value: PetFoodHandler.handlePacket
+    description: 核验限频、在场宠物和212类食物后更新宠物并扣食物。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/inventory/Pet.java
+    value: Pet.gainTamenessFullness
+    description: 统一钳制饱食度和亲密，按阈值升级或因满饱喂食降低亲密并持久化。
+- id: beidou.pets.hunger
+  kind: operation
+  name: 随在线时间消耗饱食度
+  summary: 世界按配置调度已登记宠物；饱食下降至不超过5时将其饱食重置为15并收回，否则保存新饱食度；全局或GM不饿配置可跳过登记。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/World.java
+    value: World.registerPetHunger
+    description: 根据全局与GM配置决定是否登记宠物饥饿。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/world/World.java
+    value: World.runPetSchedule
+    description: 对已在线角色按配置节拍触发宠物饱食更新。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.runFullnessSchedule
+    description: 按物种饥饿值扣饱食，并保存或收回过饿宠物。
+- id: beidou.pets.command
+  kind: operation
+  name: 向自己的在场宠物下达指令
+  summary: 指令必须对应角色当前宠物和该物种已定义命令；按命令概率产生成功或失败响应，成功按命令值更新亲密成长。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetCommandHandler.java
+    value: PetCommandHandler.handlePacket
+    description: 确认宠物索引和命令定义，随机判定指令结果。
+- id: beidou.pets.movement
+  kind: operation
+  name: 更新宠物移动与展示
+  summary: 原生移动包解析后只更新角色已有宠物的位置，并向地图其他成员广播；不存在的宠物槽或空移动不执行。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/MovePetHandler.java
+    value: MovePetHandler.handlePacket
+    description: 核对宠物索引后更新位置并广播移动。
+- id: beidou.pets.loot
+  kind: operation
+  name: 让宠物拾取附近物品或金币
+  summary: 拾取需角色已召唤宠物，金币磁铁或物品袋资格、启用的排除列表及原生距离检查；通过后交给角色原生pickupItem处理物品归属与结算。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetLootHandler.java
+    value: PetLootHandler.handlePacket
+    description: 校验召唤、拾取装备、过滤和距离后调用原生拾取。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetLootHandler.java
+    value: PetLootHandler.checkPetPickupDistance
+    description: 按玩家位置、传送前位置、宠物位置初始化与距离判定是否放行。
+- id: beidou.pets.exclusions
+  kind: data
+  name: 宠物拾取排除列表
+  summary: 过滤列表按宠物唯一ID保存，并在召唤与提交时加载到角色缓存；Integer.MAX_VALUE用于金币过滤。
+  aliases: []
+  anchors:
+  - kind: file
+    value: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/dao/entity/PetignoresDO.java
+    description: 宠物与被排除物品ID的持久记录。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.loadPetExcludedItems
+    description: 按宠物ID加载过滤配置。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/Character.java
+    value: Character.updatePetExcludedItems
+    description: 按完整提交列表差异更新过滤记录与缓存。
+- id: beidou.pets.configure-exclusions
+  kind: operation
+  name: 修改宠物拾取过滤
+  summary: 只有角色自己的有效宠物索引可提交完整过滤列表；负数物品ID拒绝，合法列表经加载旧值、差异更新与缓存提交生效。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetExcludeItemsHandler.java
+    value: PetExcludeItemsHandler.handlePacket
+    description: 确认宠物归属，拒绝负数物品ID，保存并提交排除列表。
+- id: beidou.pets.autopot
+  kind: operation
+  name: 通过宠物补药入口使用药品
+  summary: 原生入口委托补药处理器；处理器核角色存活、当前HP/MP、背包槽和药品ID，并依警戒线/强制配置或单次模式计算消耗，再沿StatEffect应用恢复。
+  aliases:
+  - 自动补药
+  - 自动吃药
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetAutoPotHandler.java
+    value: PetAutoPotHandler.handlePacket
+    description: 读取药品槽和物品ID并进入原生补药处理器。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/client/processor/action/PetAutopotProcessor.java
+    value: PetAutopotProcessor.runAutopotAction
+    description: 创建并执行补药动作，复用背包消耗和药品效果。
+- id: beidou.pets.native-rules
+  kind: invariant
+  name: 宠物动作保留各自原生资格
+  summary: 召唤、食物、指令、移动、拾取和补药各自检查自己的原生条件；不能从某个处理器存在归属检查推断所有宠物入口均完成相同授权或装备验证。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetLootHandler.java
+    value: PetLootHandler.handlePacket
+    description: 拾取使用自身召唤、装备、过滤和距离条件。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetFoodHandler.java
+    value: PetFoodHandler.handlePacket
+    description: 喂食使用自身限频、食物和在场宠物条件。
+  - kind: symbol
+    file: upstream/BeiDou-Server/gms-server/src/main/java/org/gms/net/server/channel/handlers/PetAutoPotHandler.java
+    value: PetAutoPotHandler.handlePacket
+    description: 补药入口只委托现有处理器，不据此额外承诺活跃宠物验证。
+relations:
+- from: beidou.pets.records
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.summon
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.feed
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.hunger
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.command
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.movement
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.loot
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.exclusions
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.configure-exclusions
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.autopot
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.native-rules
+  type: part_of
+  to: beidou.pets
+  summary: 该概念归北斗原生宠物业务所有。
+- from: beidou.pets.summon
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.feed
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.hunger
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.command
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.movement
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.loot
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.configure-exclusions
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.autopot
+  type: constrained_by
+  to: beidou.pets.native-rules
+  summary: 执行该入口源码规定的原生条件。
+- from: beidou.pets.summon
+  type: writes
+  to: beidou.pets.records
+  summary: 该动作更新宠物自身状态。
+- from: beidou.pets.feed
+  type: writes
+  to: beidou.pets.records
+  summary: 该动作更新宠物自身状态。
+- from: beidou.pets.hunger
+  type: writes
+  to: beidou.pets.records
+  summary: 该动作更新宠物自身状态。
+- from: beidou.pets.command
+  type: writes
+  to: beidou.pets.records
+  summary: 该动作更新宠物自身状态。
+- from: beidou.pets.movement
+  type: writes
+  to: beidou.pets.records
+  summary: 该动作更新宠物自身状态。
+- from: beidou.pets.summon
+  type: reads
+  to: beidou.economy.inventory
+  summary: 从角色CASH背包取得宠物物品，并检查是否已有对应幼体。
+- from: beidou.pets.summon
+  type: writes
+  to: beidou.economy.inventory
+  summary: 蛋孵化时移除原蛋并加入幼体宠物物品。
+- from: beidou.pets.summon
+  type: reads
+  to: beidou.pets.exclusions
+  summary: 召唤时加载该宠物拾取过滤。
+- from: beidou.pets.hunger
+  type: invokes
+  to: beidou.pets.summon
+  summary: 饥饿阈值触发同一原生宠物收回路径。
+- from: beidou.pets.feed
+  type: writes
+  to: beidou.economy.inventory
+  summary: 合法喂食消耗真实USE背包食物。
+- from: beidou.pets.loot
+  type: reads
+  to: beidou.pets.records
+  summary: 核对宠物归属、召唤标志和地图位置。
+- from: beidou.pets.loot
+  type: reads
+  to: beidou.pets.exclusions
+  summary: 启用排除装备时尊重物品/金币过滤。
+- from: beidou.pets.loot
+  type: reads
+  to: beidou.world.scene
+  summary: 读取当前地图掉落对象与相关位置。
+- from: beidou.pets.loot
+  type: writes
+  to: beidou.economy.inventory
+  summary: 原生拾取将符合条件的物品加入角色背包。
+- from: beidou.pets.loot
+  type: writes
+  to: beidou.economy.wallet
+  summary: 原生拾取沿角色规则结算金币。
+- from: beidou.pets.configure-exclusions
+  type: writes
+  to: beidou.pets.exclusions
+  summary: 更新该宠物持久化过滤与内存聚合列表。
+- from: beidou.pets.autopot
+  type: writes
+  to: beidou.economy.inventory
+  summary: 从真实药品槽与同ID后继槽扣除实际使用数量。
+- from: beidou.pets.autopot
+  type: writes
+  to: beidou.identity.characters
+  summary: 药品效果更新实际角色HP和MP。
+flows:
+- id: beidou.pets.feed.flow
+  name: 普通食物喂养宠物
+  summary: 合法喂食消耗食物，但亲密收益取决于原先饱食度，满饱再喂反而降低亲密。
+  scenario: beidou.pets.feed
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 提交食物槽和物品ID
+    summary: 请求沿PetFoodHandler进入。
+    concept: beidou.pets.feed
+  - id: eligible
+    kind: decision
+    name: 原生喂食条件是否通过
+    summary: 检查500毫秒原生限频、在场宠物、真实食物槽、212类ID和数量。
+    concept: beidou.pets.feed
+  - id: refused
+    kind: outcome
+    name: 拒绝本次喂食
+    summary: 不满足条件时不更新宠物或消耗本次食物。
+  - id: fullness
+    kind: decision
+    name: 当前宠物处于哪种饱食状态
+    summary: 选取原生算法判定的最低饱食度宠物，按喂食前状态决定效果。
+    concept: beidou.pets.records
+  - id: hungry
+    kind: outcome
+    name: 补饱并增加亲密
+    summary: 饱食度不超过75时加1亲密并补30饱食，按上限和等级阈值保存；扣一份食物。
+    concept: beidou.pets.feed
+  - id: partly-full
+    kind: outcome
+    name: 补饱但不增加亲密
+    summary: 饱食度76到99时补30饱食并钳至100；不增亲密，扣一份食物。
+    concept: beidou.pets.feed
+  - id: overfed
+    kind: outcome
+    name: 满饱再喂降低亲密
+    summary: 原生满饱分支扣1亲密，必要时降级，食物仍扣一份。
+    concept: beidou.pets.feed
+  transitions:
+  - from: request
+    to: eligible
+  - from: eligible
+    to: refused
+    when: 频率、宠物或食物条件不满足
+  - from: eligible
+    to: fullness
+    when: 喂食条件通过
+  - from: fullness
+    to: hungry
+    when: 饱食度不超过75
+  - from: fullness
+    to: partly-full
+    when: 饱食度76到99
+  - from: fullness
+    to: overfed
+    when: 饱食度为100

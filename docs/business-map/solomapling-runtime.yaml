@@ -1,0 +1,500 @@
+schemaVersion: 1
+map:
+  id: solo.runtime
+  title: SoloMapling：统一角色运行与执行
+  summary: 原生角色来源、模块控制、动作事实与可核验关闭的共享协议；自主玩法模块及实际验收范围分别核对。
+nodes:
+- id: solo.runtime
+  kind: domain
+  name: 统一角色运行与执行
+  summary: 为可信角色来源和控制模块提供同一角色宿主、可核验执行与最终资源关闭；具体接线与验收范围由对应交付记录说明。
+  aliases:
+  - CharacterRuntime
+  - 共享游戏基建
+  anchors:
+  - kind: file
+    value: docs/robot-runtime/README.md
+    description: 统一角色宿主、模块控制和精确资源关闭协议及对应交付范围。
+- id: solo.runtime.bind-role
+  kind: scenario
+  name: 接纳并绑定原生角色
+  summary: OPEN 前建立根作用域和唯一执行通道，登记原生创建结果，再由来源证明身份当前且世界来源一致后绑定。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.bindAdoptedOrigin
+    description: 在来源身份和捕获世界代次有效时将已接纳角色从 OPENING 转为 BOUND。
+- id: solo.runtime.modules
+  kind: scenario
+  name: 挂载与停止控制模块
+  summary: 为已绑定角色挂载有限控制资源的模块，停止时撤销授权并等待工作、资源和生命周期回调真实退出。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.stop
+    description: 按 PAUSE 或 UNLOAD 停止指定模块，撤销其 Grant 并开始本模块排空。
+- id: solo.runtime.resume-module
+  kind: operation
+  name: 以新代次恢复模块
+  summary: 只在许可有效且旧模块作用域已经排空后重新激活；控制资源冲突时保留未激活状态，不复活旧上下文。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.activate
+    description: 为可激活模块建立新的 ModuleRef、ExecutionScope 和 Grant，检查控制资源占用。
+- id: solo.runtime.close-role
+  kind: scenario
+  name: 关闭整个角色宿主
+  summary: 停止并卸载全部模块，由根来源核验原生退出和释放证明，最后确认工作、资源与物理通道全部排空。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.beginClose
+    description: 先停止模块再排空根作用域，角色释放和 CLOSED 分别由后续核验完成。
+- id: solo.runtime.release-origin
+  kind: operation
+  name: 释放精确登记的角色资源
+  summary: 仅在全部模块结束后、精确根清理执行体内调用原来源释放；未证实释放的资源继续保留债务。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.releaseOrigin
+    description: 校验根作用域、CleanupAttempt、原角色 identity 与实际执行许可，再接收来源释放证明。
+- id: solo.runtime.observe-role
+  kind: operation
+  name: 读取同一来源的角色事实
+  summary: 每次从根 RoleBinding 读取当前原生事实并复核绑定，不维护第二份等级、背包或队伍档案。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.observeOrigin
+    description: 经根来源读取角色快照并在返回前核验来源和宿主状态。
+- id: solo.runtime.dispatch-chat
+  kind: operation
+  name: 执行共享原生普通聊天
+  summary: 可信适配器准备动作后只向已有角色通道提交一次，沿原生聊天处理器派发，以真实包证据区分成功、失败与未知。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/action/NativeActionService.java
+    value: NativeActionService.submitChat
+    description: 唯一提交已准备的聊天动作，保留受理结果与实际派发结果的区别。
+- id: solo.runtime.world-stop
+  kind: scenario
+  name: 在原世界停止窗口清理
+  summary: 原子取得准确来源世界的停止票据，允许旧作用域清理原登记资源；新世界启动后不再借旧窗口进入原生对象。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/execution/ExecutionScope.java
+    value: ExecutionScope.tryBeginWorldStop
+    description: 取得或复用同一次世界停止票据；未知 inactive 状态不生成清理授权。
+- id: solo.runtime.epoch
+  kind: data
+  name: 世界与场景引用
+  summary: 固定捕获世界代次和精确 Character、Client、World、Channel 对象，场景引用再固定实际地图与事件实例。
+  aliases:
+  - WorldEpoch
+  - CharacterRef
+  - SceneRef
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/soloMapling/game/context/GameContext.java
+    description: 固定捕获世界代次和精确 Character、Client、World、Channel 对象，场景引用再固定实际地图与事件实例。
+- id: solo.runtime.role-binding
+  kind: data
+  name: 角色来源登记
+  summary: 保存原生来源的精确身份、角色引用和释放握手；角色权威存档及来源自己的账号规则由来源提供。
+  aliases:
+  - RoleBinding
+  - 根角色资源
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/soloMapling/game/runtime/RoleBinding.java
+    description: 保存原生来源的精确身份、角色引用和释放握手；角色权威存档及来源自己的账号规则由来源提供。
+- id: solo.runtime.module-state
+  kind: data
+  name: 模块执行代次与控制资源
+  summary: 宿主记录模块配置许可、实例、执行代次、授权资源和停止结果；世界代次与模块代次分别核对。
+  aliases:
+  - ModuleRef
+  - ModuleContext
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    description: 宿主记录模块配置许可、实例、执行代次、授权资源和停止结果；世界代次与模块代次分别核对。
+- id: solo.runtime.work
+  kind: data
+  name: 工作与排空账本
+  summary: 作用域记录取消请求、实际 body、carrier、发布结果与资源债务，普通工作和清理工作分别有界。
+  aliases:
+  - ExecutionScope
+  - WorkHandle
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/soloMapling/game/execution/ExecutionScope.java
+    description: 作用域记录取消请求、实际 body、carrier、发布结果与资源债务，普通工作和清理工作分别有界。
+- id: solo.runtime.resources
+  kind: data
+  name: 精确资源与清理许可
+  summary: 资源登记按实际对象和来源工作跟踪创建、接纳与释放，未知结果不据猜测抹除登记。
+  aliases:
+  - DrainPermit
+  - CleanupAttempt
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/soloMapling/game/execution/ScopeResources.java
+    description: 资源登记按实际对象和来源工作跟踪创建、接纳与释放，未知结果不据猜测抹除登记。
+- id: solo.runtime.action-result
+  kind: data
+  name: 原生动作事实
+  summary: 分别记录是否真正派发、是否取消、观察来源与完整性及成功或未知结果；事实完成不代表物理工作已结算。
+  aliases:
+  - NativeActionResult
+  - ChatEvidence
+  anchors:
+  - kind: file
+    value: beidou-integration/src/main/java/soloMapling/game/action/NativeActionResult.java
+    description: 分别记录是否真正派发、是否取消、观察来源与完整性及成功或未知结果；事实完成不代表物理工作已结算。
+- id: solo.runtime.command-api
+  kind: interface
+  name: 角色宿主控制接口
+  summary: 可信 Java 模块以宿主当前上下文接纳工作、准备原生动作和提交有限控制命令；不向外开放任意 handler、包或脚本。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.ModuleContext.prepareNative
+    description: 为已有原生动作提供同一 lane、permit 与 work，只准备而不再建立排队。
+- id: solo.runtime.events
+  kind: interface
+  name: 安全运行事实窗口
+  summary: 按独立运行体事件游标查询宿主、模块和工作事实；不保存聊天正文、异常正文或原生对象。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/RuntimeEvents.java
+    value: RuntimeEvents.read
+    description: 读取有界、非消费的运行体事实窗口并显式报告截断和游标过期。
+- id: solo.runtime.current-context
+  kind: invariant
+  name: 精确对象与代次必须当前
+  summary: 普通动作同时核验捕获世界来源和精确角色/场景对象，不按相同 ID 替换对象或刷新旧 epoch 续权。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/context/NativeContextChecks.java
+    value: NativeContextChecks.requireSceneCurrent
+    description: 复核角色当前性、实际地图和事件实例，普通跨图与角色失效分别判定。
+- id: solo.runtime.true-settlement
+  kind: invariant
+  name: 真实结算后才完成排空
+  summary: Future、动作结果或取消请求先完成均不能代替 body 和 carrier 真实退出；自身回调内等待返回 SELF_WAIT。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/execution/ExecutionScope.java
+    value: ExecutionScope.awaitDrained
+    description: 等待作用域全部真实工作与资源排空，并明确区分超时、中断和未核验。
+- id: solo.runtime.exact-release
+  kind: invariant
+  name: 清理只属于原根与原资源
+  summary: 清理许可必须绑定原根作用域、原 CleanupAttempt 和原角色 identity；迟到创建结果仍记原宿主债务，不取得新世界行动权。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime.releaseOrigin
+    description: 拒绝外来根、外来清理尝试及未结束模块，只有来源释放正证据才能确认登记释放。
+- id: solo.runtime.unique-lane
+  kind: invariant
+  name: 同一角色只有一个执行通道
+  summary: 根宿主拥有唯一 lane，模块借用授权；停止局部模块不登出角色、不关闭角色通道，调用已有动作不再嵌套排队。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: beidou-integration/src/main/java/soloMapling/game/runtime/CharacterRuntime.java
+    value: CharacterRuntime
+    description: 在原生 OPEN 前建立唯一 lane 和 root scope，并持有角色的最终关闭责任。
+relations:
+- from: solo.runtime.bind-role
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.modules
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.resume-module
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.close-role
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.release-origin
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.observe-role
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.dispatch-chat
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.world-stop
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.epoch
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.role-binding
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.module-state
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.work
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.resources
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.action-result
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.command-api
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.events
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.current-context
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.true-settlement
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.exact-release
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.unique-lane
+  type: part_of
+  to: solo.runtime
+  summary: 该责任属于统一角色运行与执行。
+- from: solo.runtime.bind-role
+  type: writes
+  to: solo.runtime.role-binding
+  summary: 接纳精确原生创建结果并登记根资源。
+- from: solo.runtime.bind-role
+  type: reads
+  to: solo.runtime.epoch
+  summary: 绑定只使用原接纳世界来源。
+- from: solo.runtime.bind-role
+  type: constrained_by
+  to: solo.runtime.current-context
+  summary: 绑定需来源与世界当前性。
+- from: solo.runtime.bind-role
+  type: constrained_by
+  to: solo.runtime.unique-lane
+  summary: 原生 OPEN 前已经拥有唯一通道。
+- from: solo.runtime.modules
+  type: writes
+  to: solo.runtime.module-state
+  summary: 挂载、停止、卸载改变模块执行状态与有限控制资源。
+- from: solo.runtime.modules
+  type: writes
+  to: solo.runtime.work
+  summary: 停止请求取消并排空本模块实际工作。
+- from: solo.runtime.modules
+  type: constrained_by
+  to: solo.runtime.true-settlement
+  summary: 工作、授权和生命周期回调真实退出才可停止完成。
+- from: solo.runtime.resume-module
+  type: reads
+  to: solo.runtime.module-state
+  summary: 检查配置许可、资源占用和旧作用域排空。
+- from: solo.runtime.resume-module
+  type: writes
+  to: solo.runtime.module-state
+  summary: 每次恢复建立新代次，旧上下文不复活。
+- from: solo.runtime.close-role
+  type: invokes
+  to: solo.runtime.modules
+  summary: 根关闭首先卸载所有控制模块。
+- from: solo.runtime.close-role
+  type: invokes
+  to: solo.runtime.release-origin
+  summary: 模块结束后调用来源的最终原生释放。
+- from: solo.runtime.close-role
+  type: constrained_by
+  to: solo.runtime.true-settlement
+  summary: 根资源、模块、工作和通道均排空才 CLOSED。
+- from: solo.runtime.release-origin
+  type: writes
+  to: solo.runtime.resources
+  summary: 仅凭精确来源释放证明结束登记债务。
+- from: solo.runtime.release-origin
+  type: constrained_by
+  to: solo.runtime.exact-release
+  summary: 不能借其他作用域或新世界的许可清理旧资源。
+- from: solo.runtime.observe-role
+  type: reads
+  to: solo.runtime.role-binding
+  summary: 观察委托同一原生来源而不维护副本。
+- from: solo.runtime.dispatch-chat
+  type: consumes
+  to: solo.runtime.command-api
+  summary: 复用模块已获授的同一 lane、permit 和 work。
+- from: solo.runtime.dispatch-chat
+  type: writes
+  to: solo.runtime.action-result
+  summary: 以新匹配原生包证据确认广播事实。
+- from: solo.runtime.dispatch-chat
+  type: constrained_by
+  to: solo.runtime.current-context
+  summary: 派发前重验场景、角色与世界来源。
+- from: solo.runtime.dispatch-chat
+  type: constrained_by
+  to: solo.runtime.unique-lane
+  summary: 动作句柄只提交一次，不在通道内排队等待自身。
+- from: solo.runtime.modules
+  type: publishes
+  to: solo.runtime.events
+  summary: 发布模块与工作安全生命周期事实。
+- from: solo.runtime.world-stop
+  type: reads
+  to: solo.runtime.epoch
+  summary: 停止票据绑定准确来源世界。
+- from: solo.runtime.world-stop
+  type: writes
+  to: solo.runtime.work
+  summary: 旧作用域进入专用停止清理窗口并排空。
+- from: solo.runtime.world-stop
+  type: constrained_by
+  to: solo.runtime.exact-release
+  summary: 只能清理原来源资源，未知 inactive 不生成权力。
+- from: solo.runtime.dispatch-chat
+  type: consumes
+  to: beidou.social.chat
+  summary: 共享动作沿北斗原生 GeneralChatHandler 发送普通地图聊天，禁言和限频归原生规则。
+flows:
+- id: solo.runtime.modules.flow
+  name: 停止模块并按排空结果结束
+  summary: 暂停和卸载只影响本模块，未排空时保留停止状态，不宣称完成。
+  scenario: solo.runtime.modules
+  startsAt: request
+  steps:
+  - id: request
+    kind: action
+    name: 撤销本模块控制
+    summary: 停止输入、撤 Grant，并开始本模块 scope 排空。
+    concept: solo.runtime.modules
+  - id: drained
+    kind: decision
+    name: 本模块是否真实退出
+    summary: 核对 work、相关 Grant、资源与生命周期 hook。
+    concept: solo.runtime.true-settlement
+  - id: waiting
+    kind: outcome
+    name: 继续等待或报告失败
+    summary: 超时、自等待或资源未知时不确认卸载，不关闭角色。
+  - id: mode
+    kind: decision
+    name: 请求暂停还是卸载
+    summary: 两种模式在排空后保留不同模块状态。
+  - id: paused
+    kind: outcome
+    name: 模块暂停且角色保留
+    summary: 保留模块配置与原生角色，恢复需新执行代次。
+  - id: unloaded
+    kind: outcome
+    name: 模块卸载且角色保留
+    summary: 完成卸载回调并移除模块，不关闭宿主 lane。
+  transitions:
+  - from: request
+    to: drained
+  - from: drained
+    to: waiting
+    when: 尚未真实排空或存在未核验债务
+  - from: drained
+    to: mode
+    when: 工作、资源、授权和回调全部结束
+  - from: mode
+    to: paused
+    when: PAUSE
+  - from: mode
+    to: unloaded
+    when: UNLOAD
+- id: solo.runtime.close-role.flow
+  name: 根角色关闭
+  summary: 所有模块结束、来源释放和真实结算分别核验。
+  scenario: solo.runtime.close-role
+  startsAt: stop
+  steps:
+  - id: stop
+    kind: action
+    name: 停止全部模块
+    summary: 根宿主转入 CLOSING 并卸载所有模块。
+    concept: solo.runtime.close-role
+  - id: modules
+    kind: decision
+    name: 模块是否全部结束
+    summary: 仍有 work 或生命周期回调时等待。
+    concept: solo.runtime.true-settlement
+  - id: pending
+    kind: outcome
+    name: 保留关闭中状态
+    summary: 尚未结束或证据未知时保留资源与失败事实。
+  - id: release
+    kind: action
+    name: 按根许可调用来源释放
+    summary: 在精确清理执行体调用原来源正常退出。
+    concept: solo.runtime.release-origin
+  - id: proof
+    kind: decision
+    name: 来源释放与全部结算是否已证实
+    summary: 核对原生释放证明、根工作、资源和物理 lane。
+    concept: solo.runtime.exact-release
+  - id: closed
+    kind: outcome
+    name: 宿主 CLOSED
+    summary: 全部债务结束后关闭 lane 及宿主拥有的 executor。
+  transitions:
+  - from: stop
+    to: modules
+  - from: modules
+    to: pending
+    when: 模块尚未结束
+  - from: modules
+    to: release
+    when: 全部模块结束
+  - from: release
+    to: proof
+  - from: proof
+    to: pending
+    when: 释放未证实或还有未结算工作
+  - from: proof
+    to: closed
+    when: 来源释放已证实且全部真实排空

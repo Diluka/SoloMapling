@@ -1,0 +1,543 @@
+schemaVersion: 1
+map:
+  id: solo-market
+  title: Solo 自由市场与机器人交易
+  summary: 人工市场供给、报价、逛店消费、原生面对面交易及尚未确认接线的议价实现。
+nodes:
+- id: solo.market
+  kind: domain
+  name: Solo 自由市场与机器人交易
+  summary: 为玩家提供人工商店、逛店买家和面对面买卖；由 Solo 决定货源、报价与交易意愿，原生背包、货币和最终经济结算归北斗。
+  aliases:
+  - 人工市场
+  - 商人机器人
+  - FM
+  anchors:
+  - kind: directory
+    value: src/main/java/soloMapling/FreeMarket
+    description: 人工市场生成、报价和原生商店适配。
+- id: solo.market.populate
+  kind: scenario
+  name: 铺设人工市场
+  summary: 按地区、房间和摊位随机生成雇佣商人或角色商店；跳过部分摊位并异步错峰，不保证固定商店类型数量。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ArtificialFreeMarket.java
+    value: ArtificialFreeMarket.populateFreeMarketRoom
+    description: 选择摊位、商店类型并调度市场生成。
+- id: solo.market.generate-stock
+  kind: operation
+  name: 生成商店货源
+  summary: 按房间档次、热门房间和商品类别产生装备、卷轴与消耗品等货源，并进行数量、折扣和商品组合处理。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ArtificialShopGenerator.java
+    value: ArtificialShopGenerator.generateShop
+    description: 按职业和档次生成装备货源。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ArtificialShopGenerator.java
+    value: ArtificialShopGenerator.generateSecondaryShop
+    description: 生成卷轴、消耗品等补充货源。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/ScrollingBot.java
+    value: ScrollingBot.setScrollingItems
+    description: 从人工装备池取已生成装备，并为卷轴表演安排既定成功/失败顺序。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/ScrollingBot.java
+    value: ScrollingBot.setSellingItems
+    description: 把生成装备写入待售意图并估价广播；不把卷轴表演当原生玩家消耗强化。
+- id: solo.market.catalog
+  kind: data
+  name: Solo 商品池与估值参数
+  summary: 维护商品分类、版本、档次、基础价格及数量配置；这是人工市场的供给和估值输入，并非玩家实际背包。
+  aliases: []
+  anchors:
+  - kind: directory
+    value: src/main/java/soloMapling/itemPool/itemConfig
+    description: 商品池配置目录，定义人工货源及基础价格。
+  - kind: symbol
+    file: src/main/java/soloMapling/itemPool/ItemSelector.java
+    value: ItemSelector.getRandomItemFull
+    description: 按池、类别、档次和当前物品版本选择货源。
+- id: solo.market.price-stock
+  kind: operation
+  name: 计算人工商品价格与数量
+  summary: 综合市场指数、星期、随机波动、房间和门口位置调整商品价格及数量，形成具体商店报价。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/FMEconomyManager.java
+    value: FMEconomyManager.priceAdjustmentRules
+    description: 应用市场、日期、房间与位置的报价规则。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ArtificialShopGenerator.java
+    value: ArtificialShopGenerator.addItemToShop
+    description: 生成含调整后报价和数量的人工商品。
+- id: solo.market.quotes
+  kind: data
+  name: 人工商店报价与货架
+  summary: 人工商品保留可变报价，货架持有商品批数；议价只允许修改 ArtificialShopItem，不能任意改原生玩家商品价格。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/FreeMarket/ArtificialShopItem.java
+    description: ArtificialShopItem 保存人工商品可变报价。
+  - kind: file
+    value: src/main/java/soloMapling/FreeMarket/HiredMerchantArtificial.java
+    description: 人工雇佣商人的档次和商品类别。
+- id: solo.market.open-store
+  kind: operation
+  name: 开放角色商店
+  summary: 将生成的人工货架交给原生 PlayerShop 并在地图上开放；当前适配仅允许空货架一次初始化且最多十六项。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ArtificialFreeMarket.java
+    value: ArtificialFreeMarket.BotPlayerStorePermit
+    description: 创建原生角色商店并装入人工货架后开放。
+  - kind: file
+    value: beidou-integration/src/main/aspect/soloMapling/beidou/EngineCompatibility.aj
+    description: PlayerShop.setItems 在一次性初始化时检查货架数量。
+- id: solo.market.browse-buy
+  kind: scenario
+  name: 机器人逛店购买
+  summary: FMBot 访问商店、根据标价与估值的比例随机决定是否购买，再委托原生商店购买；不从适配方法返回或发言直接推导成交。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FMBot.java
+    value: FMBot.purchaseShopItems
+    description: 读取实际货架、选择可购买商品并委托商店。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/FMBot.java
+    value: FMBot.shouldPurchaseItem
+    description: 拒绝无效估值或高于估值二成的商品，其余按比例概率选择。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/PlayerShopAdapter.java
+    value: PlayerShopAdapter.botBuyItemPlayerShop
+    description: 进入织入的 PlayerShop.botBuy，再调用原生 buy。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/HiredMerchantAdapter.java
+    value: HiredMerchantAdapter.botBuyItem
+    description: 委托原生雇佣商店买入并刷新货架。
+- id: solo.market.direct-trade
+  kind: scenario
+  name: 与商人机器人面对面交易
+  summary: 买卖机器人公布所需金币或物品，沿原生邀请、托管、双边确认与结算回调推进；拒绝、取消和超时均不视为成交。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeSM.java
+    value: BotTradeSM.update
+    description: 处理买入或卖出的需求、确认、取消、超时和结算后清理。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/BuyingMerchantBot.java
+    value: BuyingMerchantBot.updateState
+    description: 执行收购机器人业务状态。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/SellingMerchantBot.java
+    value: SellingMerchantBot.updateState
+    description: 执行出售机器人业务状态。
+- id: solo.market.sale-intent
+  kind: data
+  name: 机器人待售货品与求购条件
+  summary: 维护广告货品、已实体化原生库存的对应关系、所需金币和物品数量；报价条件与原生实际托管分别核对。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeInventory.java
+    description: 广告货品及其原生库存对应关系。
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeWants.java
+    description: 买卖要求、数量和金币短差容忍规则。
+- id: solo.market.reserve-offer
+  kind: operation
+  name: 准备原生交易托管
+  summary: 只为登记的 Solo 机器人准备货品和资金；商品先入其原生库存，再沿原生背包扣减托管，失败或替换时处理返还。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeCommands.java
+    value: BotTradeCommands.reserveItem
+    description: 检查交易锁、物品限制、库存与槽位后扣减并托管货品，拒绝时返还。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeCommands.java
+    value: BotTradeCommands.setMeso
+    description: 为登记机器人补足交易资金并使用原生金币托管路径。
+- id: solo.market.confirm-trade
+  kind: operation
+  name: 复核报价并提交原生确认
+  summary: 卖出确认前核对同一原生交易、同一托管对象、槽位、物品与数量以及对方报价；最终成功须由原生双方真实结算回调确认。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeSM.java
+    value: BotTradeSM.hasAdvertisedEscrow
+    description: 再次核对广告货品与真实托管对象、数量和槽位。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeSM.java
+    value: BotTradeSM.confirmAcceptedTrade
+    description: 确认意愿后调用原生交易确认。
+  - kind: file
+    value: beidou-integration/src/main/aspect/soloMapling/beidou/TradeHooks.aj
+    description: 仅在两边原生 completeTrade 实际完成后通知 SUCCESSFUL；原生 cancel 传回实际取消结果。
+- id: solo.market.abort-trade
+  kind: operation
+  name: 中止交易并清理买卖意图
+  summary: 原生交易缺失、托管失配或货品准备失败时走 Trade.cancelTrade，再清理广告和需求；取消返还由北斗执行。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeSM.java
+    value: BotTradeSM.abortSale
+    description: 在对应原生交易锁内取消，清理 Solo 买卖意图而不伪报成功。
+  - kind: file
+    value: beidou-integration/src/test/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeSMFailureTest.java
+    description: 以真实原生托管规则覆盖禁售物品、卖方背包满、临确认换货及不重复退款。
+- id: solo.market.native-economic-rules
+  kind: invariant
+  name: 人工供给与原生结算分开
+  summary: Solo 可以生成机器人供给并补足登记机器人的买入资金；玩家资产转移仍服从原生物品限制、背包容量、金币托管和双方确认，不能把机器人意愿或锁定当成交。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTradeSystem/BotTradeCommands.java
+    value: BotTradeCommands.reserveItem
+    description: 保留原生禁售、不可丢弃和背包容量约束。
+  - kind: file
+    value: beidou-integration/src/main/aspect/soloMapling/beidou/TradeHooks.aj
+    description: 观察原生结算，取消/锁定不转换为成功。
+- id: solo.market.haggle
+  kind: capability
+  name: 商店议价实现
+  summary: 源码具备在场店主还价、拒绝、次数限制和离线店主延迟调价；当前北斗及 Solo 适配未发现商店聊天入口调用，作为已有实现边界记录，不宣称可从游戏触发。
+  aliases:
+  - 砍价
+  - 还价
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ShopOfferSystem/ShopOfferSystem.java
+    value: ShopOfferSystem.onPlayerShopChat
+    description: 解析角色商店报价并进入在场或离线店主处理。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ShopOfferSystem/ShopOfferSystem.java
+    value: ShopOfferSystem.onHiredMerchantChat
+    description: 解析雇佣商店报价并安排延迟改价。
+- id: solo.market.haggle-sessions
+  kind: data
+  name: 议价会话与商品锁
+  summary: 会话按玩家记录店主、尝试次数、还价和最后活动时间，六十秒过期；商品按店主和货架索引锁定，锁定后的新报价被忽略。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/FreeMarket/ShopOfferSystem/HaggleSession.java
+    description: 议价会话的三次尝试阈值和六十秒过期判断。
+  - kind: file
+    value: src/main/java/soloMapling/FreeMarket/ShopOfferSystem/ShopOfferSystem.java
+    description: 会话集合、店主在场模式及商品报价锁。
+- id: solo.market.reprice
+  kind: operation
+  name: 接受报价后修改人工标价
+  summary: 在场店主接受时即时更新报价；离线店主对非拒绝报价安排五至三十分钟延迟更新并在玩家仍在线时通知，调价本身不完成购买。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ShopOfferSystem/ShopOfferResponse.java
+    value: ShopOfferResponse.handlePresentOwner
+    description: 按现有还价、尝试次数和随机评估接受、还价或拒绝。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ShopOfferSystem/ShopOfferResponse.java
+    value: ShopOfferResponse.handleAFKOwner
+    description: 锁住报价商品后安排延迟改价及在线通知。
+  - kind: symbol
+    file: src/main/java/soloMapling/FreeMarket/ArtificialShopItem.java
+    value: ArtificialShopItem.reprice
+    description: 仅允许人工商品且非负的动态改价。
+- id: solo.market.nx-handoff
+  kind: scenario
+  name: 交易后交付兑换码的源码路径
+  summary: NXMerchantBot 仅在记录原生交易成功后邀请聊天、生成兑换码并写入北斗兑换码表；未确认真实北斗客户端完整交付与兑换效果。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/NXMerchantBot.java
+    value: NXMerchantBot.deliverNXCode
+    description: 核原生交易成功后邀请聊天，接受后生成并传达兑换码。
+  - kind: symbol
+    file: src/main/java/soloMapling/server/NXCodeManager.java
+    value: NXCodeManager.createCompleteNXCode
+    description: 顺次创建 nxcode 和 nxcode_items 数据，不能据此宣称交付具有事务保证。
+relations:
+- from: solo.market.populate
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.generate-stock
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.catalog
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.price-stock
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.quotes
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.open-store
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.browse-buy
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.direct-trade
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.sale-intent
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.reserve-offer
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.confirm-trade
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.abort-trade
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.native-economic-rules
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.haggle
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.haggle-sessions
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.reprice
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.nx-handoff
+  type: part_of
+  to: solo.market
+  summary: 此责任、规则或状态由 Solo 市场与机器人交易域维护。
+- from: solo.market.populate
+  type: invokes
+  to: solo.market.generate-stock
+  summary: 铺设市场时生成相应人工货源。
+- from: solo.market.populate
+  type: invokes
+  to: solo.market.open-store
+  summary: 随机选择角色商店时开放原生货架。
+- from: solo.market.generate-stock
+  type: reads
+  to: solo.market.catalog
+  summary: 生成货源使用商品池、版本和档次配置。
+- from: solo.market.generate-stock
+  type: invokes
+  to: solo.market.price-stock
+  summary: 货品入架前计算实际价格和数量。
+- from: solo.market.price-stock
+  type: writes
+  to: solo.market.quotes
+  summary: 报价规则形成人工货架的实际价格与批数。
+- from: solo.market.browse-buy
+  type: reads
+  to: solo.market.quotes
+  summary: 买家以实际标价和剩余批数选择商品。
+- from: solo.market.browse-buy
+  type: reads
+  to: solo.market.catalog
+  summary: 买家以 Solo 商品池估值判断标价比例。
+- from: solo.market.browse-buy
+  type: writes
+  to: beidou.economy.inventory
+  summary: 实际购买沿原生 buy 把货品加入机器人背包。
+- from: solo.market.browse-buy
+  type: writes
+  to: beidou.economy.wallet
+  summary: 实际购买委托原生商店扣款和卖方收益结算。
+- from: solo.market.direct-trade
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 机器人邀请、访问、确认与取消均沿北斗原生 Trade 接口。
+- from: solo.market.direct-trade
+  type: reads
+  to: solo.market.sale-intent
+  summary: 买卖流程根据已登记广告与求购条件判断意愿。
+- from: solo.market.direct-trade
+  type: invokes
+  to: solo.market.reserve-offer
+  summary: 买卖双方先准备真实原生物品或金币托管。
+- from: solo.market.direct-trade
+  type: invokes
+  to: solo.market.confirm-trade
+  summary: 意愿满足后复核并提交原生确认。
+- from: solo.market.direct-trade
+  type: invokes
+  to: solo.market.abort-trade
+  summary: 无货、托管不符等失败路径取消交易。
+- from: solo.market.reserve-offer
+  type: writes
+  to: beidou.economy.inventory
+  summary: 货源实体化、库存扣减与托管拒绝返还使用原生背包。
+- from: solo.market.reserve-offer
+  type: writes
+  to: beidou.economy.wallet
+  summary: 登记机器人的资金补足与金币托管沿原生钱包路径。
+- from: solo.market.abort-trade
+  type: writes
+  to: solo.market.sale-intent
+  summary: 中止后清理广告、库存对应关系和求购条件。
+- from: solo.market.direct-trade
+  type: constrained_by
+  to: solo.market.native-economic-rules
+  summary: 意愿、托管和真实结算按不同事实判断。
+- from: solo.market.browse-buy
+  type: constrained_by
+  to: solo.market.native-economic-rules
+  summary: 选中商品不绕过原生商店购买和资产规则。
+- from: solo.market.reprice
+  type: writes
+  to: solo.market.quotes
+  summary: 接受报价改变人工商品标价，不直接转移金币或商品。
+- from: solo.market.reprice
+  type: reads
+  to: solo.market.haggle-sessions
+  summary: 在场处理读取尝试次数及当前还价。
+- from: solo.market.reprice
+  type: writes
+  to: solo.market.haggle-sessions
+  summary: 议价更新尝试、还价、锁定与会话清理。
+- from: solo.market.nx-handoff
+  type: invokes
+  to: solo.market.direct-trade
+  summary: 该源码场景以真实交易成功为交付前提。
+- from: solo.market.populate
+  type: constrained_by
+  to: solo.social.language-rule
+  summary: 店主名称与商店描述经 FMShopDescGen 的 LocalizedResources 选择市场语言资源和回退。
+- from: solo.market.reprice
+  type: constrained_by
+  to: solo.social.language-rule
+  summary: 议价接受、拒绝、还价及延迟改价通知使用 BotDialogueHandler 的本地化文案。
+- from: solo.market.direct-trade
+  type: invokes
+  to: solo.social.broadcast
+  summary: 商人广告及交易完成或取消反馈调用 V1 SocialCommands.BotSpeak 广播。
+- from: solo.market.nx-handoff
+  type: invokes
+  to: solo.social.broadcast
+  summary: 兑换码交付前后的地图提示沿 V1 SocialCommands.BotSpeak 发送。
+- from: solo.market.nx-handoff
+  type: writes
+  to: beidou.economy.coupon-codes
+  summary: NXCodeManager创建北斗nxcode/nxcode_items兑换码，实际核销由上游经济域拥有。
+flows:
+- id: solo.market.direct-trade.sell-flow
+  name: 机器人卖出货品并确认原生结果
+  summary: 保留无法备货、托管失配、对方报价不符和原生取消分支；不把 Solo 已确认意愿当成经济成交。
+  scenario: solo.market.direct-trade
+  startsAt: prepare
+  steps:
+  - id: prepare
+    kind: action
+    name: 准备广告货品
+    summary: 进入同一原生交易，尝试把广告货品放入真实托管。
+    concept: solo.market.reserve-offer
+  - id: stock
+    kind: decision
+    name: 货品托管是否有效
+    summary: 核备货成功和同一原生交易及托管对象。
+    concept: solo.market.native-economic-rules
+  - id: offer
+    kind: decision
+    name: 买方报价是否满足
+    summary: 不满足且未锁定则等待；买方锁定不足报价时拒绝。
+    concept: solo.market.sale-intent
+  - id: wait
+    kind: action
+    name: 等待新报价
+    summary: 继续观察报价，并受交易超时约束。
+    concept: solo.market.direct-trade
+  - id: recheck
+    kind: decision
+    name: 临确认托管及报价是否仍一致
+    summary: 在原生交易共同锁内重新检查同一广告托管与买方报价，防止先前满足后被改变。
+    concept: solo.market.confirm-trade
+  - id: confirm
+    kind: action
+    name: 提交原生交易确认
+    summary: 临确认复核通过后调用原生 completeTrade，等待实际结算结果。
+    concept: solo.market.confirm-trade
+  - id: settlement
+    kind: decision
+    name: 原生回调是否成功
+    summary: 只有双方原生实际结算成功才进入成功结果。
+    concept: solo.market.native-economic-rules
+  - id: cancel
+    kind: action
+    name: 取消和清理
+    summary: 备货失败、托管失配、拒绝或超时走原生取消及 Solo 清理。
+    concept: solo.market.abort-trade
+  - id: success
+    kind: outcome
+    name: 交易成功
+    summary: 依据真实原生成功回调记录成交。
+  - id: not-sold
+    kind: outcome
+    name: 未成交
+    summary: 保留原生取消结果，不能记成成功。
+  transitions:
+  - from: prepare
+    to: stock
+  - from: stock
+    to: offer
+    when: 托管有效
+  - from: stock
+    to: cancel
+    when: 备货失败或托管失配
+  - from: offer
+    to: recheck
+    when: 报价满足
+  - from: offer
+    to: wait
+    when: 报价不足且买方尚未锁定
+  - from: offer
+    to: cancel
+    when: 报价不足已锁定或超时
+  - from: wait
+    to: offer
+  - from: confirm
+    to: settlement
+  - from: settlement
+    to: success
+    when: 双方原生真实结算成功
+  - from: settlement
+    to: not-sold
+    when: 原生取消或其他非成功结果
+  - from: cancel
+    to: not-sold
+  - from: recheck
+    to: confirm
+    when: 同一托管和报价仍有效
+  - from: recheck
+    to: cancel
+    when: 托管或报价已改变

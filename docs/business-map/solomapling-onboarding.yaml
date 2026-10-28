@@ -1,0 +1,344 @@
+schemaVersion: 1
+map:
+  id: solo.onboarding
+  title: SoloMapling · 教程与新玩家引导
+  summary: 如实记录教程参与、真人GM与成长变更、资金物品赠送和武器改造；不承诺已启用或已验。
+nodes:
+- id: solo.onboarding
+  kind: domain
+  name: SoloMapling 教程与新玩家引导
+  summary: TutorialBot 提供交互式教学，但源码还包含对真人授 GM6、成长变更、赠礼与武器改造。这里记录既有源码，不证明北斗环境已启用、可安全使用或完成实际验收。
+  aliases: []
+  anchors:
+  - kind: file
+    value: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    description: 教程状态机及全部业务副作用。
+- id: solo.onboarding.tutorial
+  kind: scenario
+  name: 参与机器人教程
+  summary: 发现范围内尚未帮助的玩家后询问是否参加；拒绝转入送别，同意后仍有权限选择、礼品交易、选帽和武器处理等分支。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.updateState
+    description: 编排教程、拒绝、赠礼、武器处理和送别状态。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.waitForNewPlayer
+    description: 按距离与本进程帮助记录挑选交互者。
+- id: solo.onboarding.state
+  kind: data
+  name: 教程进度与本进程帮助记录
+  summary: 保存本轮参与/授予选择、当前武器对象、兑换码、时间窗及已帮助 CID；不是持久新手任务系统。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.resetTutorialBotState
+    description: 清除本轮选择和临时数据以开始下一轮。
+- id: solo.onboarding.grant
+  kind: operation
+  name: 授予真人权限与成长
+  summary: 玩家在教程中答 Yes 后，源码把 Character 与 Client 的 GM 等级设为6，设 level149再levelUp、转职412、增加AP750/SP450并改HP/MP；再生成两码字符串并各尝试写入25000点NX记录。两表写入可失败或不完整，教程不检查结果且此前权限成长不回滚；方法内未见独立管理员授权门槛。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.grantAdmin
+    description: 修改当前真人权限、等级职业与成长，再尝试创建兑换码，不以代码字符串证明有效记录。
+  - kind: symbol
+    file: src/main/java/soloMapling/server/NXCodeManager.java
+    value: NXCodeManager.createCompleteNXCode
+    description: 分两次独立数据库连接写码表和内容表，失败可不完整，非原子发码。
+- id: solo.onboarding.gift
+  kind: operation
+  name: 通过交易赠送资金与物品
+  summary: 主动邀请交易；检测到 full trade 后安排托管10亿金币、药水、苹果、回城卷、飞镖与装备并调用确认。已有trade但超时会取消并继续教程；trade为null时提前返回，不保证此等待路径会超时结束。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.initiateGiftTrade
+    description: 向当前玩家发出赠礼交易邀请。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.waitForTradeAccept
+    description: 检查full trade，明确trade缺失与已有trade超时两条路径。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.placeTradeItems
+    description: 安排金币与物品赠送并调用原生交易确认，不以void返回证明结算。
+- id: solo.onboarding.choose-hat
+  kind: operation
+  name: 用掉落与回答演示选帽
+  summary: 在地图摆出三件帽子，玩家按名字回答后清理未选择帽子；回答选择不等于已经原生拾取，选择等待存在时间窗。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.tutorial_2_drops
+    description: 在地图生成候选帽子与提示。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.handleTutPickResponse
+    description: 按帽子名字匹配回答。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.handleSelectedHat
+    description: 记录选择并延时清理其余帽子。
+- id: solo.onboarding.upgrade-weapon
+  kind: operation
+  name: 处理玩家掉落武器并返还
+  summary: 读取玩家当前武器ID，等待附近同ID的地面装备，移除这些掉落后用卷轴2043003改造并重投；源码按位置与ID查找，未证明精确个人托管、自动回滚或完整返还保证。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.analyzePlayersWeapon
+    description: 读取当前装备武器ID决定是否进入等待。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.lootPlayersDroppedWeapon
+    description: 按附近掉落和item ID选择装备并移除匹配掉落。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.scrollPlayersDroppedWeapon
+    description: 调用北斗卷轴改造并设置owner文案。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.returnUpgradedWeapon
+    description: 以地图掉落形式返还改造装备。
+- id: solo.onboarding.finish
+  kind: operation
+  name: 送别并恢复等待位置
+  summary: 播放送别、引导机器人到出口并投放苹果，把玩家加入本进程已帮助列表；回到录制路径起点后清除交互者。拒绝参加也进入此路径，不能视为零副作用拒绝。
+  aliases: []
+  anchors:
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.send_off
+    description: 执行送别文案、移动与礼物。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.send_off_parting_gift
+    description: 丢出苹果并登记已帮助CID。
+  - kind: symbol
+    file: src/main/java/soloMapling/ArtificialPlayer/BotTypes/TutorialBot.java
+    value: TutorialBot.returnOrigin
+    description: 沿旧录制动作回到等待位置。
+relations:
+- from: solo.onboarding.tutorial
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.state
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.grant
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.gift
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.choose-hat
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.upgrade-weapon
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.finish
+  type: part_of
+  to: solo.onboarding
+  summary: 属于教程和新玩家引导责任。
+- from: solo.onboarding.tutorial
+  type: writes
+  to: solo.onboarding.state
+  summary: 推进本轮教程选择与进度。
+- from: solo.onboarding.tutorial
+  type: invokes
+  to: solo.onboarding.grant
+  summary: 玩家同意授予分支会直接修改真人。
+- from: solo.onboarding.tutorial
+  type: invokes
+  to: solo.onboarding.gift
+  summary: 授予分支随后进入礼品交易。
+- from: solo.onboarding.tutorial
+  type: invokes
+  to: solo.onboarding.choose-hat
+  summary: 继续教学时演示地图选帽。
+- from: solo.onboarding.tutorial
+  type: invokes
+  to: solo.onboarding.upgrade-weapon
+  summary: 存在可读取武器时等待地面装备并改造。
+- from: solo.onboarding.tutorial
+  type: invokes
+  to: solo.onboarding.finish
+  summary: 正常完成或拒绝参加都进入送别。
+- from: solo.onboarding.grant
+  type: writes
+  to: beidou.identity.characters
+  summary: 修改真人Character及Client GM等级；不声称管理网页账号权限同时改变。
+- from: solo.onboarding.grant
+  type: writes
+  to: beidou.combat.growth
+  summary: 修改等级、职业、AP/SP与HP/MP。
+- from: solo.onboarding.grant
+  type: writes
+  to: beidou.economy.coupon-codes
+  summary: 尝试经NXCodeManager写入两张兑换码及点数内容；两表独立写入且调用者不检查结果，不能保证两张有效码都建立。
+- from: solo.onboarding.gift
+  type: consumes
+  to: beidou.economy.trade-entry
+  summary: 邀请、托管、确认或取消复用北斗交易。
+- from: solo.onboarding.gift
+  type: writes
+  to: beidou.economy.wallet
+  summary: 交易托管10亿金币，是否真正入玩家钱包由原生结算决定。
+- from: solo.onboarding.gift
+  type: writes
+  to: beidou.economy.inventory
+  summary: 创建赠品并沿原生交易托管与结算；不承诺未验的最终后态。
+- from: solo.onboarding.choose-hat
+  type: writes
+  to: beidou.world.scene
+  summary: 生成帽子掉落并移除未选帽子。
+- from: solo.onboarding.upgrade-weapon
+  type: reads
+  to: beidou.economy.inventory
+  summary: 读取当前武器槽定位拟演示的装备ID。
+- from: solo.onboarding.upgrade-weapon
+  type: writes
+  to: beidou.world.scene
+  summary: 移除近处同ID掉落并尝试投放改造装备。
+- from: solo.onboarding.finish
+  type: writes
+  to: solo.onboarding.state
+  summary: 将CID记入进程内已帮助集合并准备下一轮。
+- from: solo.onboarding.finish
+  type: writes
+  to: beidou.world.scene
+  summary: 投放送别礼物并移动机器人。
+- from: solo.onboarding.tutorial
+  type: invokes
+  to: solo.social.broadcast
+  summary: 教程沿V1 BotSpeak和对话播放显示提示。
+flows:
+- id: solo.onboarding.tutorial.flow
+  name: 教程选择及真人副作用
+  summary: 呈现参加/拒绝、授予选择、交易等待与教学关键分支，不把方法受理或文案当实际结算证明。
+  scenario: solo.onboarding.tutorial
+  startsAt: participate
+  steps:
+  - id: participate
+    kind: decision
+    name: 玩家是否参加教程
+    summary: 未回复可能超时退出本轮；拒绝也有送别赠礼。
+  - id: admin
+    kind: decision
+    name: 是否答应授予权限
+    summary: 教程直接根据当前玩家Yes/No文本决定授予分支。
+  - id: grant
+    kind: action
+    name: 修改真人权限成长并尝试记录兑换码
+    summary: GM6及成长先变更，再生成两码字符串并尝试写表；发码失败不回滚之前副作用。
+    concept: solo.onboarding.grant
+  - id: gift
+    kind: action
+    name: 发起并等待礼品交易
+    summary: 已有交易和缺失交易路径按当前源码分别处理。
+    concept: solo.onboarding.gift
+  - id: trade
+    kind: decision
+    name: 礼品交易到达何种状态
+    summary: 仅full trade会安排赠品和原生确认。
+  - id: pending
+    kind: outcome
+    name: 继续等待未建立的交易
+    summary: trade为null时检查提前返回，不能声称必然超时。
+  - id: hat
+    kind: action
+    name: 演示选帽
+    summary: 摆放帽子并等待名字回答。
+    concept: solo.onboarding.choose-hat
+  - id: hat-result
+    kind: decision
+    name: 帽子选择是否完成
+    summary: 名字无匹配仍等待，时间窗耗尽停止本轮。
+  - id: weapon
+    kind: decision
+    name: 是否读到当前武器ID
+    summary: 没有武器时跳过改造。
+  - id: upgrade
+    kind: action
+    name: 等待并改造地面装备
+    summary: 只有找到近处匹配ID装备后才继续；缺失时保持等待，不保证托管返还。
+    concept: solo.onboarding.upgrade-weapon
+  - id: sendoff
+    kind: action
+    name: 送别并赠送苹果
+    summary: 拒绝参加也执行此动作。
+    concept: solo.onboarding.finish
+  - id: finished
+    kind: outcome
+    name: 机器人返回等待
+    summary: 当前玩家记入进程内已帮助集合。
+  - id: timeout
+    kind: outcome
+    name: 本轮等待响应超时
+    summary: 状态进入FINISHED并重置本轮教程变量，不声称执行完整送别。
+  transitions:
+  - from: participate
+    to: admin
+    when: Yes参加
+  - from: participate
+    to: sendoff
+    when: No拒绝参加
+  - from: participate
+    to: timeout
+    when: 未在时间窗答复
+  - from: admin
+    to: grant
+    when: Yes同意授予
+  - from: admin
+    to: hat
+    when: No不授予
+  - from: admin
+    to: timeout
+    when: 未在时间窗答复
+  - from: grant
+    to: gift
+  - from: gift
+    to: trade
+  - from: trade
+    to: hat
+    when: full trade并已安排赠品确认
+  - from: trade
+    to: hat
+    when: 已有trade但等待超时取消
+  - from: trade
+    to: pending
+    when: trade仍为null或尚在等待
+  - from: hat
+    to: hat-result
+  - from: hat-result
+    to: weapon
+    when: 成功匹配帽子名字
+  - from: hat-result
+    to: timeout
+    when: 选择时间窗耗尽
+  - from: weapon
+    to: upgrade
+    when: 可读取非零武器ID
+  - from: weapon
+    to: sendoff
+    when: 没有可读取武器
+  - from: upgrade
+    to: sendoff
+  - from: sendoff
+    to: finished
