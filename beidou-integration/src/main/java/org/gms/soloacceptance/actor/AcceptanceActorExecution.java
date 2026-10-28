@@ -5,6 +5,8 @@ import org.springframework.http.HttpStatus;
 import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeChatAction;
+import soloMapling.game.action.NativeInventoryActions;
+import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
@@ -102,6 +104,17 @@ final class AcceptanceActorExecution {
 
     NativeActionService.SubmissionReceipt submitChat(NativeActionService.ActionHandle action) {
         return backend.submitChat(action);
+    }
+
+    NativeInventoryActions.MoveHandle prepareInventoryMove(ExecutionScope.WorkHandle work, NativeActorHandle exactHandle,
+                                                           NativeInventoryMoveAction action, Runnable mcpPreflight) {
+        if (adoptedHandle() != exactHandle) throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
+        return requireModule().prepareInventoryMove(work, mcpPreflight, (lane, permit, original, character) ->
+                backend.prepareInventoryMove(exactHandle, lane, permit, original, action));
+    }
+
+    NativeActionService.SubmissionReceipt submitInventoryMove(NativeInventoryActions.MoveHandle action) {
+        return backend.submitInventoryMove(action);
     }
 
     void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {

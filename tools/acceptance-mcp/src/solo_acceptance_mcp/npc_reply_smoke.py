@@ -32,7 +32,7 @@ class NpcReplyAcceptance(NpcCenterAcceptance):
 
     def capabilities(self, caps: dict[str, Any], names: list[str]) -> None:
         super().capabilities(caps, names)
-        check(set(caps["actions"]) == REPLY_ACTIONS, "NPC_REPLY_NOT_ENABLED")
+        check(REPLY_ACTIONS <= set(caps["actions"]), "NPC_REPLY_NOT_ENABLED")
         npc = caps["actor_control"]["npc_dialogue"]
         check(npc.get("message_types") == [4, 12] and npc.get("reply_kinds") == ["select", "decline"]
               and npc.get("requires_complete_offers") is True

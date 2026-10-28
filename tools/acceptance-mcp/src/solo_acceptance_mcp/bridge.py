@@ -168,8 +168,8 @@ def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None
 
 
 def validate_chat_action(action: str, parameters: dict[str, Any], expected_context: dict[str, Any]) -> None:
-    if not isinstance(action, str) or action not in {"chat", "npc_center_open", "npc_cancel", "npc_reply"}:
-        raise BridgeError("INVALID_ARGUMENTS", "action 只支持 chat、npc_center_open、npc_cancel 或 npc_reply。")
+    if not isinstance(action, str) or action not in {"chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"}:
+        raise BridgeError("INVALID_ARGUMENTS", "action 只支持 chat、npc_center_open、npc_cancel、npc_reply 或 inventory_move。")
     if not isinstance(parameters, dict):
         raise BridgeError("INVALID_ARGUMENTS", "parameters 必须为当前动作对应的对象。")
     if action == "chat":
@@ -187,6 +187,16 @@ def validate_chat_action(action: str, parameters: dict[str, Any], expected_conte
         if set(parameters) != {"dialogue_version"}:
             raise BridgeError("INVALID_ARGUMENTS", "npc_cancel parameters 必须且只能包含 dialogue_version。")
         validate_integer(parameters["dialogue_version"], "dialogue_version", 1, MAX_LONG)
+    elif action == "inventory_move":
+        if set(parameters) != {"inventory_type", "source_slot", "target_slot"}:
+            raise BridgeError("INVALID_ARGUMENTS", "inventory_move parameters 必须且只能包含 inventory_type、source_slot 和 target_slot。")
+        inventory_type = parameters["inventory_type"]
+        if not isinstance(inventory_type, str) or inventory_type not in {"EQUIP", "USE", "SETUP", "ETC", "CASH"}:
+            raise BridgeError("INVALID_ARGUMENTS", "inventory_type 只支持 EQUIP、USE、SETUP、ETC 或 CASH。")
+        validate_integer(parameters["source_slot"], "source_slot", 1, 127)
+        validate_integer(parameters["target_slot"], "target_slot", 1, 127)
+        if parameters["source_slot"] == parameters["target_slot"]:
+            raise BridgeError("INVALID_ARGUMENTS", "source_slot 和 target_slot 必须不同。")
     else:
         kind = parameters.get("kind")
         if not isinstance(kind, str) or kind not in {"select", "decline"}:

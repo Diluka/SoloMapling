@@ -15,7 +15,7 @@ public final class McpControlModule implements RuntimeModule {
     private volatile CharacterRuntime.ModuleContext context;
 
     public McpControlModule(String instanceId) {
-        spec = new Spec("mcp-control", instanceId, Set.of("chat", "interaction"),
+        spec = new Spec("mcp-control", instanceId, Set.of("chat", "interaction", "inventory"),
                 new ExecutionScope.Limits(16, 0, 16, 0));
     }
 
@@ -48,6 +48,11 @@ public final class McpControlModule implements RuntimeModule {
     public <T> T prepareChat(ExecutionScope.WorkHandle work, Runnable preflight,
                              CharacterRuntime.NativePreparation<T> preparation) {
         return context().prepareNative("chat", work, preflight, preparation);
+    }
+
+    public <T> T prepareInventoryMove(ExecutionScope.WorkHandle work, Runnable preflight,
+                                      CharacterRuntime.NativePreparation<T> preparation) {
+        return context().prepareNative("inventory", work, preflight, preparation);
     }
 
     public void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {

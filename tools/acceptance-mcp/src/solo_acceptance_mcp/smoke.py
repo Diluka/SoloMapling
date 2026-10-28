@@ -48,7 +48,8 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         if (not isinstance(actions, list) or any(not isinstance(value, str) for value in actions)
                 or len(actions) != len(set(actions))
                 or set(actions) not in ({"chat"}, {"chat", "npc_center_open", "npc_cancel"},
-                                       {"chat", "npc_center_open", "npc_cancel", "npc_reply"})
+                                       {"chat", "npc_center_open", "npc_cancel", "npc_reply"},
+                                       {"chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"})
                 or not isinstance(control, dict) or control.get("actions") != actions):
             raise RuntimeError("聊天动作与实际工具能力不一致。")
     elif actions != []:
@@ -102,6 +103,7 @@ async def run_smoke(config_path: Path, *, limit: int = 25) -> dict[str, Any]:
         command=sys.executable,
         args=["-m", "solo_acceptance_mcp", "--config", str(config_path.resolve())],
         cwd=Path(__file__).resolve().parents[2],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parents[1])},
     )
     failure: RuntimeError | None = None
     report: dict[str, Any] = {}

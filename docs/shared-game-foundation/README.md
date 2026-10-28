@@ -129,3 +129,7 @@ public final class NativeContextChecks {
 | [#122](https://github.com/Diluka/SoloMapling/issues/122)、[#123](https://github.com/Diluka/SoloMapling/issues/123)、[#124](https://github.com/Diluka/SoloMapling/issues/124)、[#125](https://github.com/Diluka/SoloMapling/issues/125)、[#126](https://github.com/Diluka/SoloMapling/issues/126)、[#127](https://github.com/Diluka/SoloMapling/issues/127)、[#128](https://github.com/Diluka/SoloMapling/issues/128)、[#129](https://github.com/Diluka/SoloMapling/issues/129) 各动作 | 待实现，按实际依赖逐叶验收 |
 
 已完成的 MCP #110 不等于共享 #121 已完成；#119 普通聊天提炼不包含 NPC 会话或其他原生动作。后续先推进共享基础的实际依赖，#112礼包、#113完整菜单/付费出行暂后排；既有任务树和里程碑保留，各共享叶子独立记录测试、第二适配、隔离和实际结果后关闭。
+
+## 基本动作增量
+
+[#164 背包移位](inventory-move.md) 提供运行体模块可直接消费的中立原生能力，MCP 仅作薄接线；其实际交付与部署证据单独核对。

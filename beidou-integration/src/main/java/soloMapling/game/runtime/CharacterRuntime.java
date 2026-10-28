@@ -1,6 +1,6 @@
 package soloMapling.game.runtime;
 
-import soloMapling.game.action.NativeActionResult;
+import soloMapling.game.action.NativeActionFact;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -330,10 +330,10 @@ public final class CharacterRuntime {
             synchronized (monitor) { current = requireLane(); permit = permit(this, control, preflight); }
             return preparation.prepare(current, permit, work, permit.characterRef());
         }
-        public void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {
+        public void recordResult(ExecutionScope.WorkHandle work, NativeActionFact result) {
             requireOwn(work); Objects.requireNonNull(result);
             require(characterId != null && result.senderCharacterId() == characterId
-                    && epoch.value().equals(result.evidence().epoch()), "foreign_action_result");
+                    && epoch.value().equals(result.epoch()), "foreign_action_result");
             // This records an observed native fact; it does not revive the old module or apply its state.
             events.append(RuntimeEvents.Kind.ACTION_RESULT, ref.instanceId, ref.moduleGeneration,
                     work.snapshot().id(), result.fixedReason(), result.outcome().name());

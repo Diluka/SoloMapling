@@ -52,6 +52,13 @@ class NpcDeclineParameters(BaseModel):
     kind: Literal["decline"]
 
 
+class InventoryMoveParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    inventory_type: Literal["EQUIP", "USE", "SETUP", "ETC", "CASH"]
+    source_slot: Annotated[int, Field(ge=1, le=127, strict=True)]
+    target_slot: Annotated[int, Field(ge=1, le=127, strict=True)]
+
+
 class ExpectedContext(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     scene_ref: Identifier
@@ -70,7 +77,8 @@ class AcceptanceMCPServer(MCPServer):
                     {"properties": {"action": {"const": action},
                                     "parameters": {"$ref": "#/$defs/" + model}}}
                     for action, model in [("chat", "ChatParameters"), ("npc_center_open", "CenterOpenParameters"),
-                                          ("npc_cancel", "NpcCancelParameters")]
+                                          ("npc_cancel", "NpcCancelParameters"),
+                                          ("inventory_move", "InventoryMoveParameters")]
                 ] + [{"properties": {"action": {"const": "npc_reply"}, "parameters": {"oneOf": [
                     {"$ref": "#/$defs/NpcSelectParameters"}, {"$ref": "#/$defs/NpcDeclineParameters"},
                 ]}}}]}]}
@@ -113,7 +121,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         version=__version__,
         instructions=("观察实际游戏状态并控制专用验收角色的登录/退出。"
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
-                      "取消操作不等于结束NPC对话。game_act 支持 chat、中心打开、版本绑定取消及有限 npc_reply select/decline；实际能力以桥公告为准，不开放礼包accept、任意NPC、未审查选项、移动或通关工具。"),
+                      "取消操作不等于结束NPC对话。game_act 支持 chat、中心打开、版本绑定取消、有限 npc_reply select/decline 及 inventory_move 正槽位背包移位；实际能力以桥公告为准，不开放礼包accept、任意NPC、未审查选项、移动或通关工具。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -181,11 +189,11 @@ def build_server(config: BridgeConfig) -> MCPServer:
     @server.tool(annotations=open_annotations)
     async def game_act(
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
-        action: Literal["chat", "npc_center_open", "npc_cancel", "npc_reply"],
-        parameters: ChatParameters | CenterOpenParameters | NpcCancelParameters | NpcSelectParameters | NpcDeclineParameters,
+        action: Literal["chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"],
+        parameters: ChatParameters | CenterOpenParameters | NpcCancelParameters | NpcSelectParameters | NpcDeclineParameters | InventoryMoveParameters,
         expected_context: ExpectedContext,
     ) -> CallToolResult:
-        """在实际 actor 场景排队 chat、中心首屏、最新版本取消或npc_reply的有限select/decline；回复必须来自当前真实完整offer及已审路径，截断菜单不可select。无accept、模板、脚本、原始封包。"""
+        """在实际 actor 场景排队 chat、中心首屏、最新版本取消、npc_reply 的有限 select/decline 或 inventory_move。移位仅接受同一背包中不同的正槽位，沿原生合并/交换规则，不穿脱、丢弃或自动整理；NPC 回复须来自当前真实完整 offer 及已审路径。实际开放能力以 game_capabilities 为准。"""
         try:
             return result(await bridge.act(
                 session_id, expected_generation, request_id=request_id, action=action,

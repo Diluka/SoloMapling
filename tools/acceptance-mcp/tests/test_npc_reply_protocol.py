@@ -63,7 +63,7 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
 
-    async def test_reply_seven_tools_schema_binds_four_actions_and_two_strict_kind_branches(self) -> None:
+    async def test_reply_seven_tools_schema_preserves_two_strict_kind_branches(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         self.assertEqual(TOOLS, set(tools))
@@ -74,12 +74,12 @@ class NpcReplyProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tool.annotations.open_world_hint)
         schema = tool.input_schema
         self.assertIs(False, schema.get("additionalProperties"))
-        self.assertEqual(ACTIONS, schema["properties"]["action"]["enum"])
+        self.assertEqual(ACTIONS + ["inventory_move"], schema["properties"]["action"]["enum"])
         self.assertEqual(set(self.args), set(schema["required"]))
         tagged = schema["allOf"][0]["oneOf"]
-        self.assertEqual(4, len(tagged))
+        self.assertEqual(5, len(tagged))
         by_action = {branch["properties"]["action"]["const"]: branch["properties"]["parameters"] for branch in tagged}
-        self.assertEqual(set(ACTIONS), set(by_action))
+        self.assertEqual(set(ACTIONS) | {"inventory_move"}, set(by_action))
 
         def resolve(value: dict) -> dict:
             return schema["$defs"][value["$ref"].split("/")[-1]] if "$ref" in value else value

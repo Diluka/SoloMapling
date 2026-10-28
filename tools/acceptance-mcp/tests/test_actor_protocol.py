@@ -167,6 +167,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
                 command=sys.executable,
                 args=["-m", "solo_acceptance_mcp", "--config", str(config)],
                 cwd=Path(__file__).resolve().parents[1],
+                env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
             )
             async with Client(params, read_timeout_seconds=10) as client:
                 names = {tool.name for tool in (await client.list_tools()).tools}

@@ -5,9 +5,12 @@ import java.util.Objects;
 /** Receipt, native entry and observed outcome are separate facts. */
 public record NativeActionResult(Outcome outcome, Dispatch dispatch, int senderCharacterId,
                                  boolean cancelRequested, boolean handlerError, String fixedReason,
-                                 ChatEvidence evidence) {
+                                 ChatEvidence evidence) implements NativeActionFact {
     public enum Outcome { SUCCEEDED, FAILED, CANCELLED, INDETERMINATE }
     public enum Dispatch { NOT_STARTED, STARTED }
+
+    @Override
+    public String epoch() { return evidence.epoch(); }
 
     public NativeActionResult {
         Objects.requireNonNull(outcome);

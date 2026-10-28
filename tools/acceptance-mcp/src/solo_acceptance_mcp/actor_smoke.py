@@ -185,7 +185,7 @@ class ActorAcceptance:
         check(type(value.get("schema_version")) is int and value["schema_version"] == 1, "OPERATION_SCHEMA_INVALID")
         check(value.get("kind") == kind and value.get("profile_id") == self.profile, "OPERATION_IDENTITY_MISMATCH")
         if kind == "ACTION":
-            check(value.get("action") in {"chat", "npc_center_open", "npc_cancel", "npc_reply"}, "OPERATION_ACTION_INVALID")
+            check(value.get("action") in {"chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move"}, "OPERATION_ACTION_INVALID")
         check(isinstance(value.get("operation_id"), str) and bool(value["operation_id"]), "MISSING_OPERATION_ID")
         if operation_id is not None:
             check(value["operation_id"] == operation_id, "OPERATION_ID_MISMATCH")
@@ -392,6 +392,7 @@ async def run_actor_acceptance(
         command=sys.executable,
         args=["-m", "solo_acceptance_mcp", "--config", str(config_path.resolve())],
         cwd=Path(__file__).resolve().parents[2],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parents[1])},
     )
     try:
         async with Client(params, read_timeout_seconds=config.timeout_seconds * 4 + 5) as client:

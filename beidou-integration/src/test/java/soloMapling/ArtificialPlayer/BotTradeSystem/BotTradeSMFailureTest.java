@@ -6,28 +6,14 @@ import org.gms.client.Client;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
 import org.gms.client.inventory.Item;
-import org.gms.provider.Data;
-import org.gms.provider.DataDirectoryEntry;
-import org.gms.provider.DataFileEntry;
-import org.gms.provider.DataProvider;
-import org.gms.provider.DataProviderFactory;
-import org.gms.provider.wz.DataType;
-import org.gms.provider.wz.WZFiles;
 import org.gms.server.ItemInformationProvider;
 import org.gms.server.Trade;
-import org.gms.util.DatabaseConnection;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
 import soloMapling.ArtificialPlayer.BotMessagingSystem.CharacterStorage;
 import soloMapling.ArtificialPlayer.BotSM;
 import soloMapling.beidou.BotRegistry;
-import soloMapling.beidou.CharacterTestContext;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -43,21 +29,7 @@ class BotTradeSMFailureTest {
 
     @BeforeAll
     static void contextAndItemMetadata() throws Exception {
-        CharacterTestContext.install();
-        DataProvider provider = itemMetadata();
-        Connection connection = mock(Connection.class);
-        PreparedStatement statement = mock(PreparedStatement.class);
-        ResultSet rows = mock(ResultSet.class);
-        when(connection.prepareStatement(anyString())).thenReturn(statement);
-        when(statement.executeQuery()).thenReturn(rows);
-        // The provider constructor normally reads monster-card JDBC data. Keep that
-        // external input in memory while running the actual item restriction rules.
-        try (MockedStatic<DatabaseConnection> database = mockStatic(DatabaseConnection.class);
-             MockedStatic<DataProviderFactory> data = mockStatic(DataProviderFactory.class)) {
-            database.when(DatabaseConnection::getConnection).thenReturn(connection);
-            data.when(() -> DataProviderFactory.getDataProvider(any(WZFiles.class))).thenReturn(provider);
-            ItemInformationProvider.getInstance();
-        }
+        soloMapling.beidou.InventoryMetadataTestContext.install();
     }
 
     @Test
@@ -168,45 +140,6 @@ class BotTradeSMFailureTest {
     private static void release(Sale sale) {
         CharacterStorage.removeActiveBot(sale.seller.character.getId());
         BotRegistry.unregister(sale.seller.character);
-    }
-
-    private static DataProvider itemMetadata() {
-        DataProvider provider = mock(DataProvider.class);
-        DataDirectoryEntry root = mock(DataDirectoryEntry.class);
-        DataDirectoryEntry consume = mock(DataDirectoryEntry.class);
-        DataFileEntry file = mock(DataFileEntry.class);
-        when(root.getSubdirectories()).thenReturn(List.of(consume));
-        when(consume.getName()).thenReturn("Consume");
-        when(consume.getFiles()).thenReturn(List.of(file));
-        when(file.getName()).thenReturn("0200.img");
-        when(provider.getRoot()).thenReturn(root);
-        Data empty = mock(Data.class);
-        when(provider.getData(anyString())).thenReturn(empty);
-        Data container = mock(Data.class);
-        when(provider.getData("Consume/0200.img")).thenReturn(container);
-        Data blocked = itemInfo(true);
-        Data sale = itemInfo(false);
-        Data other = itemInfo(false);
-        when(container.getChildByPath("0" + UNTRADEABLE)).thenReturn(blocked);
-        when(container.getChildByPath("0" + SALE_ITEM)).thenReturn(sale);
-        when(container.getChildByPath("0" + OTHER_ITEM)).thenReturn(other);
-        return provider;
-    }
-
-    private static Data itemInfo(boolean blocked) {
-        Data item = mock(Data.class);
-        Data tradeBlock = integer(blocked ? 1 : 0);
-        Data slotMax = integer(100);
-        when(item.getChildByPath("info/tradeBlock")).thenReturn(tradeBlock);
-        when(item.getChildByPath("info/slotMax")).thenReturn(slotMax);
-        return item;
-    }
-
-    private static Data integer(int value) {
-        Data data = mock(Data.class);
-        when(data.getType()).thenReturn(DataType.INT);
-        when(data.getData()).thenReturn(value);
-        return data;
     }
 
     private record Participant(Character character, Trade trade, AtomicInteger wallet, Inventory inventory) { }
