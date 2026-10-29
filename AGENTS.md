@@ -194,3 +194,6 @@ python3 beidou-integration/scripts/build.py --help
 - 复活在原生派发点确认死亡；原本存活、实际复活、事件接管仍未复活及未知后态分别表达。合法换图后继续沿原CharacterRef及epoch确认HP和新场景，既发效果保留；处理器返回、事件裁决、真实复活及事件后续任务完成分别核对。模块只收尾本次原lane工作，EIM/EM仍归原所有者，不能把Future/operation已终态当实际排空。
 - 兼容层用Solo普通Java回调承载延时金币/机关掉落，避免ITD lambda引用不存在的宿主synthetic方法；原事件脚本的 `respawn(eim,MapleMap)` 转交原int重载。官方submodule与脚本保持原样。
 - 长期 `mcp_test` 显式装配combat与native-actions；临时测试类型和材料只放未提交的RobotPopulation.local.yaml。完整公共契约、职业清单、脚本使用与实际交付证据见 `docs/robot-runtime/modules.md`、`combat.md`、`combat-jobs.md`、`native-actions.md` 及对应Issue；源码与各层实测状态分别记录。
+## 导航抵达容差
+
+- `arrival_tolerance_px` 支持4～32767px，默认8px；配置边界拒绝小于现有地面4px停靠距离的值，不自动钳制，也不修改原路径规划、物理积分及停靠算法。实际交付以#269的分层验收证据为准。
