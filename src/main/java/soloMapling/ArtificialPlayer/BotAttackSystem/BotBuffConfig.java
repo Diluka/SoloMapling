@@ -34,6 +34,7 @@ import org.gms.constants.skills.NightLord;
 import org.gms.constants.skills.Shadower;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
@@ -109,6 +110,11 @@ public final class BotBuffConfig {
 
     private static void put(Job job, int... skillIds) {
         BUFFS_BY_JOB.put(job, skillIds);
+    }
+
+    /** Buffs introduced by this advancement, in their original declaration order. */
+    public static List<Integer> localBuffsForJob(Job job) {
+        return Arrays.stream(BUFFS_BY_JOB.getOrDefault(job, new int[0])).boxed().toList();
     }
 
     /*

@@ -4,7 +4,7 @@
 
 ## 配置与调用
 
-类型配置通过模块 `type: navigation` 选择 [NavigationModule](../../beidou-integration/src/main/java/soloMapling/game/navigation/NavigationModule.java)。模块持有 `movement` 执行资源，实例同时处理一个导航任务。
+类型配置通过模块 `type: navigation` 选择 [NavigationActionModule](../../beidou-integration/src/main/java/soloMapling/game/navigation/NavigationActionModule.java)。模块实现 `ActionModule<MoveToRequest, NavigationResult>`，持有 `movement` 执行资源，实例同时处理一个导航任务。Java 动作入口 `execute(request, context, work)` 接收本次目标与当前提供者的受管工作；共享函数适配把 `x/y` 及可选 `timeout_ms` 转成 `MoveToRequest`，调用同一入口并投影既有 JSON 结果。配置类型、函数名与实例标识保持原契约。
 
 | 模块配置 | 默认值 | 含义 |
 |---|---:|---|
@@ -25,7 +25,7 @@ if (navigation.status === "SUCCEEDED" && navigation.result.outcome === "ARRIVED"
 navigation;
 ```
 
-`x/y` 是当前实际场景中的整数坐标，范围为有符号 16 位坐标。调用保留当前地图对象与场景身份；目标地形规划使用 `WALK/JUMP/DROP/CLIMB`，分别对应步行、跳跃、可落地下降和梯绳。具体地图能否完成路线，以实际规划与执行结果为准。
+`x/y` 是当前实际场景中的整数坐标，范围为有符号 16 位坐标。可选调用参数 `timeout_ms` 为1～120,000毫秒，默认120,000；实际期限取调用预算与模块配置的较小值。Java 使用 `MoveToRequest(x, y, timeoutMs)`，双参数构造沿用默认预算。持续动作组合接敌时可传入自己的剩余预算，返回前仍等待导航实际停止与本次收尾。调用保留当前地图对象与场景身份；目标地形规划使用 `WALK/JUMP/DROP/CLIMB`，分别对应步行、跳跃、可落地下降和梯绳。具体地图能否完成路线，以实际规划与执行结果为准。
 
 ## 结果与完成条件
 
@@ -39,7 +39,7 @@ navigation;
 | `READ_FAILED` | 地形图读取或构建失败 |
 | `UNSUPPORTED` | 当前地形或起始状态尚未支持 |
 | `BLOCKED` | 执行持续无位置进展 |
-| `TIMED_OUT` | 导航模块自身期限到达 |
+| `TIMED_OUT` | 本次调用预算或导航模块期限到达 |
 | `CANCELLED` | 调用或模块生命周期请求停止 |
 | `CONTEXT_CHANGED` | 实际角色或场景来源已失效 |
 
@@ -47,7 +47,7 @@ navigation;
 
 ## 执行与收尾
 
-规划与同步等待在模块受管载体执行。每个实际移动帧从导航提供者接受新的短 work，再进入原角色 lane；导出 handler 的调用 work 仅跟踪这次导航调用。到达取决于真实位置与稳定状态，不由路径回调或广播请求单独确认。
+`execute` 在本次给定目标内完成路径规划、移动、抵达判断和收尾，复用实例的配置与状态。规划与同步等待在模块受管载体执行。每个实际移动帧从导航提供者接受新的短 work，再进入原角色 lane；导出 handler 的调用 work 仅跟踪这次导航调用。到达取决于真实位置与稳定状态，不由路径回调或广播请求单独确认。
 
 调用者脚本 work 的取消和 scope 停止持续关联到提供者 work。脚本期限沿现有取消入口停止本次导航，因此实际执行同时受脚本期限与模块自身期限约束。停止时保留已发生位移，并等待本次执行及资源真实收尾。外层脚本的最终状态和 `invocation_settled/work_settled` 仍按[脚本执行契约](script-execution.md)核对。
 

@@ -13,7 +13,7 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
-import soloMapling.game.navigation.NavigationModule;
+import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.population.RobotPopulationService;
 import soloMapling.game.runtime.RuntimeEvents;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
@@ -36,7 +36,7 @@ final class AcceptanceActorExecution {
     private String moduleInstance;
     private volatile AcceptanceRuntimeOrigin origin;
     private volatile McpControlModule module;
-    private volatile NavigationModule navigation;
+    private volatile NavigationActionModule navigation;
     private volatile Map<String, Object> cleanupEvidence;
     private volatile Map<String, Object> diagnostics = Map.of();
     private long moduleGeneration;
@@ -99,7 +99,7 @@ final class AcceptanceActorExecution {
         var assembly = population.assemble("mcp_test", runtime);
         var mounted = assembly.find(McpControlModule.class).orElseThrow();
         module = mounted.instance();
-        navigation = assembly.find(NavigationModule.class).map(CharacterRuntime.MountedModule::instance).orElse(null);
+        navigation = assembly.find(NavigationActionModule.class).map(CharacterRuntime.MountedModule::instance).orElse(null);
         CharacterRuntime.ModuleRef reference = mounted.reference();
         moduleInstance = reference.instanceId();
         runtime.context(reference); // Mounting without an active context is not OPEN success.
@@ -261,7 +261,7 @@ final class AcceptanceActorExecution {
         return attached;
     }
 
-    private NavigationModule requireNavigation() {
+    private NavigationActionModule requireNavigation() {
         var attached = navigation;
         var context = attached == null ? null : attached.context();
         if (context == null || !context.scope().isActive()) {

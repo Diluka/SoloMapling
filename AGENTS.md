@@ -100,7 +100,7 @@ python3 beidou-integration/scripts/build.py --help
 ## #205 机器人模块框架
 
 - 当前候选实现使用 `ModuleDefinition<C, M>` 声明类型、控制资源、scope 额度、工厂及导出；`ModuleSelection<C>` 选择实例 ID、配置及启用标志。挂载返回 `MountedModule<M>` 的精确引用和实际实例。工厂接收模块自有配置并构造私有状态；实际工作与资源通过生命周期 hook 和原模块 scope 管理。
-- 模块组合和配置属于源码中的装配方案，通过相应测试和验收。机器人正常工作周期内模块组合固定，变化的是已有模块的任务、状态和能力可用性。主控选择角色活动目标，能力模块完成既定任务及已启用服务的事件；具体职责和调用关系由装配方案确定。
+- 模块组合和配置属于源码中的装配方案，通过相应测试和验收。机器人正常工作周期内模块组合固定，变化的是已有模块的任务、状态和能力可用性。策略模块选择角色活动目标、约束及任务顺序，动作模块在这些条件内规划并完成任务；具体职责和调用关系由装配方案确定。
 - 装配登记实例和导出名称，再创建及初始化模块。暂停保留实例、配置和导出声明，卸载真实完成后撤下导出。停止或卸载清理 hook 失败时保留 `FAILED`、失败原因和未完成的清理责任，根关闭继续等待实际收尾。
 - `ModuleFunction` 的说明、参数校验和精确实例绑定同源；调用按当前有效提供者及代次解析，工作归提供者 scope。Java `ModuleContext.help()` / `call()` 与北斗原生引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录；缺失、停用或未激活正常返回 `UNAVAILABLE`，参数及执行异常沿现有脚本错误语义报告。
 - 脚本仍按原 `kind/operation` 进入真实北斗环境，复用 `cm/qm/pi/rm/em` 各自对象及 `executeCommand`。MCP 负责协议桥接，共享能力由实际装配的模块声明。源码测试、CI、隔离与实际部署证据按本轮交付记录分别确认，不由候选实现推导已上线。
@@ -108,8 +108,8 @@ python3 beidou-integration/scripts/build.py --help
 ## #263 类型配置与 #122 导航接入
 
 - 当前源码通过 `solomapling.robot-population-config` 读取单个路径或有序文件列表；未指定时仅读取内置默认文件。后文件按类型名完整替换同名 `types`，按类型名覆盖 `initial_population`，合并后一次编译装配计划及核对引用。每轮世界启动只创建一次初始人口；运行期通过 `robots.create/remove` 增减完整实例，文件与实例模块组合保持固定。
-- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主控制放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
-- `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
+- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主策略放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
+- `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾；可选调用参数`timeout_ms`取1..120000ms，实际取与模块配置期限的较小值，供组合动作传递剩余预算。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
 - 脚本默认期限30秒、最大120秒，调用者取消持续关联到提供者work。导航自身默认30秒、8px容差、3秒无进展；真实抵达、失败、已发生位移和实际停止分别核验。源码和部署结果以#122/#263证据为准，参考 `docs/robot-runtime/population.md`、`navigation.md` 及脚本调试技能。
 
 ## Git 与上游
@@ -177,3 +177,10 @@ python3 beidou-integration/scripts/build.py --help
 - `skills/` 提供游戏交互、脚本调试与机器人验收三个技能，`references/` 是所属技能的使用说明书，随源码整套分发。
 - 源码中的方法、继承、返回类型和原脚本直接查阅；生成方法按需查询匹配构建产物，不手写 API 全集。
 - 当前提供九个执行／观察工具、十三动作和实际 capabilities。环境、对象方法与命令查询通过相应技能导航源码或北斗既有只读目录；命令查询脚本不执行命令或改变配置。
+
+
+## #270 动作与策略调用契约
+
+- `RuntimeModule` 统一可装载模块的激活、停止与卸载生命周期。`ActionModule<I, R>.execute(input, context, work)` 完成既定目标的执行规划、推进、确认与收尾；`StrategyModule<I, R>.run(input, context, work)` 选择或切换目标及约束，并决定发起、继续或中断任务。具体类名分别使用 `<Name>ActionModule`、`<Name>StrategyModule`。MCP控制和世界人口入口继续使用通用生命周期协议。
+- `NavigationActionModule` 使用 `MoveToRequest → NavigationResult`；共享目录适配JSON参数与结果，Java/脚本消费同一受管入口。配置类型 `navigation`、导出 `navigation.moveTo`、`mcp_test` 和既有实例标识保持原契约。导出work执行一次，实际原生短命令使用提供者scope的新work进入角色唯一lane。
+- 父模块在构造或初始化阶段创建内部组合与私有状态，单次 `execute/run` 复用这些状态。内部子模块的工作、资源和最终收尾纳入父模块scope；目录中独立提供者保持自己的scope，沿调用链传递取消、期限并等待实际收尾。内部结果由父模块解释、业务结果由具体R表达、提供者可用性由共享目录表达。持续动作和动作组合按这一边界接入。源码、隔离及实际部署证据以对应Issue记录为准。

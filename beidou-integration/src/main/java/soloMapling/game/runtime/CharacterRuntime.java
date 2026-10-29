@@ -348,6 +348,12 @@ public final class CharacterRuntime {
         }
         public ModuleRef reference() { return ref; }
         public ExecutionScope scope() { return scope; }
+        /** Bound native facts for module initialization; this read does not admit an action. */
+        public GameContext.CharacterRef characterRef() {
+            synchronized (monitor) { requireActive(this, null); }
+            return requireBound().characterRef();
+        }
+
         /** One owned native environment per module; published before its first carrier can execute. */
         public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                       NativeScriptAdapter adapter) {

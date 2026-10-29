@@ -1,6 +1,7 @@
 package soloMapling.game.navigation;
 
 import org.gms.net.server.Server;
+import soloMapling.game.navigation.NavigationResult.Outcome;
 import soloMapling.ArtificialPlayer.GCMoveSystem.RuntimeNavigationEngine;
 import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.action.NativeMovementGeometry;
@@ -12,10 +13,9 @@ import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleFunction;
-import soloMapling.game.runtime.RuntimeModule;
+import soloMapling.game.runtime.ActionModule;
 
 import java.awt.Point;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -25,18 +25,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** One target-directed navigation task, using the role's original native lane and module scope. */
-public final class NavigationModule implements RuntimeModule {
+public final class NavigationActionModule implements ActionModule<MoveToRequest, NavigationResult> {
     public record Config(int arrivalTolerancePx, int timeoutMs, int stalledTimeoutMs) { }
     public static final Config DEFAULT_CONFIG = new Config(8, 30_000, 3_000);
-    public static final ModuleDefinition<Config, NavigationModule> DEFINITION = new ModuleDefinition<>(
+    public static final ModuleDefinition<Config, NavigationActionModule> DEFINITION = new ModuleDefinition<>(
             "navigation", Set.of("movement"), new ExecutionScope.Limits(16, 2, 4, 2),
-            config -> new NavigationModule(config, Server.getInstance()), List.of(new ModuleFunction<>(
+            config -> new NavigationActionModule(config, Server.getInstance()), List.of(new ModuleFunction<>(
             "navigation.moveTo", "在当前实际场景内规划并移动到指定坐标，等待抵达或失败及收尾。",
             List.of(new ModuleFunction.Parameter("x", ModuleFunction.Type.INTEGER, true, "目标横坐标"),
-                    new ModuleFunction.Parameter("y", ModuleFunction.Type.INTEGER, true, "目标纵坐标")),
+                    new ModuleFunction.Parameter("y", ModuleFunction.Type.INTEGER, true, "目标纵坐标"),
+                    new ModuleFunction.Parameter("timeout_ms", ModuleFunction.Type.INTEGER, false,
+                            "本次规划及移动预算1..120000ms，实际取与模块期限的较小值")),
             "返回outcome、实际末位置、稳定状态、执行步数和经过的基础边类型。",
-            (module, context, work, args) -> module.moveTo(context, work,
-                    coordinate(args.get("x")), coordinate(args.get("y"))))));
+            (module, context, work, args) -> module.execute(new MoveToRequest(
+                    (int) ((Number) args.get("x")).doubleValue(), (int) ((Number) args.get("y")).doubleValue(),
+                    (int) ((Number) args.getOrDefault("timeout_ms", MoveToRequest.MAX_TIMEOUT_MS)).doubleValue()),
+                    context, work).toMap())));
 
     private final Config config;
     private final Server server;
@@ -44,7 +48,7 @@ public final class NavigationModule implements RuntimeModule {
     private volatile CharacterRuntime.ModuleContext context;
     private Job active;
 
-    public NavigationModule(Config config, Server server) {
+    public NavigationActionModule(Config config, Server server) {
         this.config = config;
         this.server = server;
     }
@@ -61,14 +65,6 @@ public final class NavigationModule implements RuntimeModule {
         return value;
     }
 
-    private static int coordinate(Object value) {
-        double number = ((Number) value).doubleValue();
-        if (number < Short.MIN_VALUE || number > Short.MAX_VALUE) {
-            throw new IllegalArgumentException("navigation_coordinate_out_of_range");
-        }
-        return (int) number;
-    }
-
     @Override public void onActivated(CharacterRuntime.ModuleContext context) { this.context = context; }
     @Override public synchronized void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) {
         if (active != null) active.stopRequested = true;
@@ -78,13 +74,14 @@ public final class NavigationModule implements RuntimeModule {
     public NativeMovementActions movement() { return movement; }
 
     /** Java callers use the same target execution as the exported module function. */
-    public Map<String, Object> moveTo(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, int x, int y) {
-        var job = new Job(context, work, new Point(x, y));
+    @Override public NavigationResult execute(MoveToRequest input, CharacterRuntime.ModuleContext context,
+                                              ExecutionScope.WorkHandle work) {
+        var job = new Job(context, work, new Point(input.x(), input.y()), Math.min(config.timeoutMs(), input.timeoutMs()));
         synchronized (this) {
-            if (active != null) return Map.of("outcome", "BUSY", "reason", "navigation_busy");
+            if (active != null) return new NavigationResult(Outcome.BUSY, "navigation_busy", null);
             active = job;
         }
-        String outcome = null;
+        Outcome outcome = null;
         String reason = null;
         try {
             var actor = context.prepareNative("movement", work, () -> {},
@@ -103,7 +100,7 @@ public final class NavigationModule implements RuntimeModule {
                     catch (Halt stop) { outcome = stop.outcome; reason = stop.reason; }
                     if (outcome == null && System.nanoTime() - lastProgress
                             >= TimeUnit.MILLISECONDS.toNanos(config.stalledTimeoutMs())) {
-                        outcome = "BLOCKED"; reason = "navigation_no_progress";
+                        outcome = Outcome.BLOCKED; reason = "navigation_no_progress";
                     }
                 }
                 Point before = job.position;
@@ -114,8 +111,8 @@ public final class NavigationModule implements RuntimeModule {
                     if (outcome != null) throw blocked;
                     reason = blocked.reason();
                     outcome = switch (reason) {
-                        case "movement_slow_unsupported", "movement_mode_unsupported", "movement_surface_unsupported" -> "UNSUPPORTED";
-                        default -> "BLOCKED";
+                        case "movement_slow_unsupported", "movement_mode_unsupported", "movement_surface_unsupported" -> Outcome.UNSUPPORTED;
+                        default -> Outcome.BLOCKED;
                     };
                     if (job.steps == 0) break;
                     continue;
@@ -123,7 +120,7 @@ public final class NavigationModule implements RuntimeModule {
                 job.stable = frame.stable();
                 if (!before.equals(job.position)) lastProgress = System.nanoTime();
                 if (outcome == null && job.stable && distance(job.position, job.target) <= config.arrivalTolerancePx()) {
-                    outcome = "ARRIVED";
+                    outcome = Outcome.ARRIVED;
                 }
                 if (outcome != null) {
                     stableFrames = job.stable ? stableFrames + 1 : 0;
@@ -133,20 +130,20 @@ public final class NavigationModule implements RuntimeModule {
                 catch (InterruptedException interrupted) {
                     job.interrupted = true;
                     job.stopRequested = true;
-                    if (outcome == null) { outcome = "CANCELLED"; reason = "navigation_cancelled"; }
+                    if (outcome == null) { outcome = Outcome.CANCELLED; reason = "navigation_cancelled"; }
                 }
             }
         } catch (Halt stop) {
             outcome = stop.outcome; reason = stop.reason;
         } catch (RuntimeNavigationEngine.Failure failed) {
             reason = failed.reason();
-            outcome = reason.startsWith("UNSUPPORTED") ? "UNSUPPORTED"
-                    : "NO_PATH".equals(reason) ? "NO_PATH" : "READ_FAILED";
+            outcome = reason.startsWith("UNSUPPORTED") ? Outcome.UNSUPPORTED
+                    : "NO_PATH".equals(reason) ? Outcome.NO_PATH : Outcome.READ_FAILED;
         } catch (CancellationException cancelled) {
-            outcome = "CANCELLED"; reason = "navigation_cancelled";
+            outcome = Outcome.CANCELLED; reason = "navigation_cancelled";
             job.interrupted |= Thread.interrupted();
         } catch (GameContext.Invalid changed) {
-            outcome = "CONTEXT_CHANGED"; reason = changed.reason().name();
+            outcome = Outcome.CONTEXT_CHANGED; reason = changed.reason().name();
         } finally {
             try {
                 if (job.registration != null) {
@@ -161,16 +158,11 @@ public final class NavigationModule implements RuntimeModule {
                 if (job.interrupted) Thread.currentThread().interrupt();
             }
         }
-        var result = new LinkedHashMap<String, Object>();
-        result.put("outcome", outcome);
-        if (reason != null) result.put("reason", reason);
-        result.put("target", Map.of("x", x, "y", y));
-        if (job.position != null) result.put("position", Map.of("x", job.position.x, "y", job.position.y));
-        result.put("stable", job.stable);
-        result.put("steps", job.steps);
-        result.put("elapsed_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.started));
-        result.put("edge_types", List.copyOf(job.modes));
-        return result;
+        return new NavigationResult(outcome, reason,
+                new NavigationResult.Progress(new NavigationResult.Position(input.x(), input.y()),
+                        job.position == null ? null : new NavigationResult.Position(job.position.x, job.position.y),
+                        job.stable, job.steps, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.started),
+                        List.copyOf(job.modes)));
     }
 
     private RuntimeNavigationEngine.Frame step(Job job, boolean stopping) {
@@ -184,7 +176,7 @@ public final class NavigationModule implements RuntimeModule {
                 else {
                     checkpoint(job);
                     NativeMovementGeometry.requireOrdinaryMovementMode(job.scene.actor().character(), job.scene.map());
-                    if (job.engine.attributesChanged()) throw new Halt("BLOCKED", "attributes_changed");
+                    if (job.engine.attributesChanged()) throw new Halt(Outcome.BLOCKED, "attributes_changed");
                 }
                 NativeContextChecks.requireSceneCurrent(server, job.scene);
                 var next = job.engine.nextFrame(stopping);
@@ -211,7 +203,7 @@ public final class NavigationModule implements RuntimeModule {
         step.completion().toCompletableFuture().join();
         if (failure.get() != null) throw failure.get();
         if (frame.get() == null) {
-            if (!stopping) throw new Halt("CANCELLED", "navigation_step_cancelled");
+            if (!stopping) throw new Halt(Outcome.CANCELLED, "navigation_step_cancelled");
             throw new CancellationException("navigation_cleanup_not_entered");
         }
         return frame.get();
@@ -219,9 +211,9 @@ public final class NavigationModule implements RuntimeModule {
 
     private void checkpoint(Job job) {
         if (Thread.interrupted()) { job.interrupted = true; job.stopRequested = true; }
-        if (job.stopRequested || job.work.cancelRequested()) throw new Halt("CANCELLED", "navigation_cancelled");
-        if (System.nanoTime() - job.started >= TimeUnit.MILLISECONDS.toNanos(config.timeoutMs())) {
-            throw new Halt("TIMED_OUT", "navigation_timeout");
+        if (job.stopRequested || job.work.cancelRequested()) throw new Halt(Outcome.CANCELLED, "navigation_cancelled");
+        if (System.nanoTime() - job.started >= TimeUnit.MILLISECONDS.toNanos(job.timeoutMs)) {
+            throw new Halt(Outcome.TIMED_OUT, "navigation_timeout");
         }
         NativeContextChecks.requireSceneCurrent(server, job.scene);
     }
@@ -231,15 +223,16 @@ public final class NavigationModule implements RuntimeModule {
     }
 
     private static final class Halt extends RuntimeException {
-        final String outcome;
+        final Outcome outcome;
         final String reason;
-        Halt(String outcome, String reason) { super(reason, null, false, false); this.outcome = outcome; this.reason = reason; }
+        Halt(Outcome outcome, String reason) { super(reason, null, false, false); this.outcome = outcome; this.reason = reason; }
     }
 
     private static final class Job {
         final CharacterRuntime.ModuleContext context;
         final ExecutionScope.WorkHandle work;
         final Point target;
+        final int timeoutMs;
         final long started = System.nanoTime();
         final Set<String> modes = new LinkedHashSet<>();
         volatile boolean stopRequested;
@@ -250,8 +243,8 @@ public final class NavigationModule implements RuntimeModule {
         Point position;
         boolean stable;
         int steps;
-        Job(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, Point target) {
-            this.context = context; this.work = work; this.target = target;
+        Job(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, Point target, int timeoutMs) {
+            this.context = context; this.work = work; this.target = target; this.timeoutMs = timeoutMs;
         }
     }
 }

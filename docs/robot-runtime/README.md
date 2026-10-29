@@ -9,7 +9,10 @@
 
 当前包含通用角色壳、MCP 控制接入、配置装配、环境实例创建/移除和导航模块。生产自主练级、巡逻、刷怪、
 跟随及其策略按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
-其中的最小示例仅说明协议接线。
+其中的最小示例仅说明协议接线。`RuntimeModule` 统一可装载模块生命周期；
+`ActionModule<I, R>.execute` 执行既定目标，`StrategyModule<I, R>.run` 选择任务目标、约束及继续或中断。
+动作可持续执行、组织步骤及组合其他动作，具体业务输入和结果由各模块定义。
+`NavigationActionModule` 使用 `MoveToRequest → NavigationResult`，共享目录保留 `navigation.moveTo`。
 
 ## 分工与迭代
 

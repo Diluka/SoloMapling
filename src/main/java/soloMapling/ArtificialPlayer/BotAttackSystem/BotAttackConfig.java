@@ -167,6 +167,14 @@ public final class BotAttackConfig {
         BY_JOB.put(job, new JobAttacks(single, aoe, ultimate));
     }
 
+    /** Attacks introduced by this advancement, before any ancestor lookup. */
+    public static JobAttacks localAttacks(Job job, WeaponType weapon) {
+        if (job == Job.THIEF) {
+            return new JobAttacks(weapon == WeaponType.CLAW ? ROGUE_CLAW : ROGUE_DAGGER, null, null);
+        }
+        return BY_JOB.getOrDefault(job, new JobAttacks(null, null, null));
+    }
+
     /*
      * The bot's effective {single, aoe, ultimate} attacks: the most advanced of each across its
      * lineage (highest job id wins, which is also the highest tier within a branch). Because the

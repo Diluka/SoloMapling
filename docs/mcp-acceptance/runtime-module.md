@@ -105,10 +105,12 @@ MCP模块保留combat等基本动作资源，movement由配置中的导航提供
 
 `script_run` 直接接收 `kind/operation/context_id/options/entry/args`，仅执行北斗脚本，不保留独立纯JS及外层environment模式。`AcceptanceActorExecution` 经MCP模块把已接纳的原work交给 `ModuleContext.runNativeScript`，不申请第二份工作，也不排入角色短命令lane。外层沿既有request/operation历史保留幂等、鉴权与有界结果投影，首次close历史名额继续保留。
 
-运行体输出写入本次调用的有界UTF-8收集器，同时将纯文本片段交给原operation的输出窗口。HTTP流读取该窗口并发送，MCP将中间事件转为progress通知；guest线程仅记录内存事实，网络写入在HTTP响应载体执行。`since_output`独立推进输出读取，最终结果继续投影同一work的真实结算。
+运行体输出写入本次调用的有界UTF-8收集器，同时将纯文本片段交给原operation的输出窗口。指定 `output_file/error_file` 时，MCP将HTTP流中的过程消息实时追加到本地NDJSON文件；未指定文件时只返回最终结果。guest线程仅记录内存事实，网络写入在HTTP响应载体执行。`since_output`独立推进输出读取，最终结果继续投影同一work的真实结算。
 
 MCP中断通过独立取消请求转发；取消先到时建立原请求检查点，迟到run不执行。共享函数的新提供者work关联调用者脚本work的取消来源，导航按其实际work停止并收尾。持久Context可以在本次 `invocation_settled/work_settled` 后保持OPEN；最终关闭与未知收尾另核，债务保留，角色根关闭继续等待模块真实结束。`actor.runtime.module.scope` 与 `actor.runtime.modules` 投影原作用域的工作与资源计数，单个计数快照不能替代实际事实。
 
-[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)提供源码查阅与操作说明；上下文标识、状态与结算直接消费执行结果。行为模块、共享事实/事件和现有动作迁移仍归各自任务，详细契约见[脚本执行参考](../robot-runtime/script-execution.md)和[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
+[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)提供源码查阅与操作说明；上下文标识、状态与结算直接消费执行结果。动作模块、共享事实/事件和现有动作迁移仍归各自任务，详细契约见[脚本执行参考](../robot-runtime/script-execution.md)和[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)。
 
 [#216北斗脚本上下文](../robot-runtime/beidou-script-environment.md)复用原管理器、原文件和真实对象，NPC/QM连续回调及事件原调度保持同一引擎。owned EIM实例创建尚未接入延迟地图清理，入口明确拒绝；完整共享能力目录、直接动作迁移及真实机器人交互不由基础执行通过推导完成。
+
+动作/策略共享函数适配把JSON参数转换为具体业务输入，将提供者原context和本次work交给 `ActionModule.execute` 或 `StrategyModule.run`，并投影具体业务结果。MCP控制模块继续实现通用 `RuntimeModule`，外部Agent或其脚本负责作出任务决策。公共契约及父模块私有组合的边界见[模块参考](../robot-runtime/modules.md)。

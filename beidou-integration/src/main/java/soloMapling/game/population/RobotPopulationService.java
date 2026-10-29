@@ -7,8 +7,9 @@ import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.env.Environment;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.combat.CombatActionModule;
 import soloMapling.game.execution.ExecutionScope;
-import soloMapling.game.navigation.NavigationModule;
+import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeModule;
 
@@ -42,7 +43,8 @@ public final class RobotPopulationService {
         configPaths = Binder.get(environment).bind("solomapling.robot-population-config", Bindable.listOf(String.class))
                 .orElse(List.of());
         registry.register(McpControlModule.DEFINITION, Map::copyOf);
-        registry.register(NavigationModule.DEFINITION, NavigationModule::parseConfig);
+        registry.register(NavigationActionModule.DEFINITION, NavigationActionModule::parseConfig);
+        registry.register(CombatActionModule.DEFINITION, CombatActionModule::parseConfig);
         registry.register(RobotPopulationModule.definition(this), ignored -> null);
     }
 

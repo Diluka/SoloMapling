@@ -93,4 +93,6 @@ close的 `source/options/args` 使用空默认值且不得指定 `entry`，只�
 
 [#219](https://github.com/Diluka/SoloMapling/issues/219)验证的代表包括无收益NPC、任务拒绝、门户提示、机关状态检查及独占EM原init/schedule回调；本轮协议精简的源码、CI、隔离和实际结果另按当前交付记录留证。更多原脚本组合、真实机器人交互与客户端玩法仍须各自证据，不能从原生方法可达推导完成。
 
-官方北斗submodule保持只读。现有十三个 `game_act` 动作及独立管理工具保留，本次不执行[#213](https://github.com/Diluka/SoloMapling/issues/213)直接入口迁移，也不提前完成#205/#211的完整行为模块与共享环境设计。
+官方北斗submodule保持只读。现有十三个 `game_act` 动作及独立管理工具保留，本次不执行[#213](https://github.com/Diluka/SoloMapling/issues/213)直接入口迁移，也不提前完成#205/#211的完整动作模块与共享环境设计。
+
+北斗引擎中的 `modules.call` 经共享目录调用动作/策略适配入口，JSON参数与结果在目录边界转换；提供者的 `execute/run` 接收具体业务输入和原受管context/work。导航的公开函数仍为 `navigation.moveTo`。持续动作及动作组合的同步完成与收尾语义见[模块参考](modules.md#共享函数声明与调用)。

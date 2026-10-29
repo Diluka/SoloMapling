@@ -25,6 +25,7 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ActionModule;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
@@ -53,7 +54,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /** Real terrain planning, physics and native MovePlayerHandler through the exported module entry. */
-class NavigationModuleTest {
+class NavigationActionModuleTest {
     private final List<Fixture> fixtures = new ArrayList<>();
 
     @BeforeEach void startWorld() { CharacterTestContext.install(); WorldEpoch.onWorldStarted(); }
@@ -88,12 +89,48 @@ class NavigationModuleTest {
         assertEquals(4, fixture.stance.get() & ~1);
     }
 
+    @Test void javaActionEntryReturnsTypedResultAfterNativeMovementAndWorkSettlement() throws Exception {
+        var fixture = fixture(98_982_106, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of());
+        ActionModule<MoveToRequest, NavigationResult> action = fixture.module;
+        var context = fixture.module.context();
+        var work = context.acceptWork();
+        var result = new AtomicReference<NavigationResult>();
+        context.scope().runTracked(work,
+                () -> result.set(assertDoesNotThrow(() -> action.execute(new MoveToRequest(120, 0), context, work))));
+        work.completion().toCompletableFuture().join();
+        var facts = result.get();
+        assertEquals(NavigationResult.Outcome.ARRIVED, facts.outcome());
+        assertTrue(facts.progress().stable());
+        assertEquals(fixture.position.get().x, facts.progress().position().x());
+        assertTrue(fixture.position.get().distance(new Point(120, 0)) <= 8);
+        assertEquals(0, context.scope().snapshot().acceptedWork());
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+        verify(fixture.map, atLeastOnce()).movePlayer(eq(fixture.character), any());
+    }
+
     @Test void unreachableTargetReturnsNoPathWithoutMovingTheNativeRole() {
         var fixture = fixture(98_982_101, new Point(0, 0), List.of(foothold(-200, 0, 300, 0, 1)), List.of());
         var result = fixture.moveTo(new Point(0, -200));
         assertEquals("NO_PATH", result.get("outcome"));
         assertEquals(new Point(0, 0), fixture.position.get());
         verify(fixture.map, never()).movePlayer(any(), any());
+    }
+
+    @Test void callerBudgetStopsSharedNavigationAndSettlesBeforeReturning() {
+        var fixture = fixture(98_982_107, new Point(0, 0),
+                List.of(foothold(-200, 0, 600, 0, 1)), List.of());
+        assertEquals("ARRIVED", fixture.moveTo(new Point(0, 0)).get("outcome"));
+        var result = (Map<?, ?>) fixture.caller.call("navigation.moveTo",
+                Map.of("x", 500, "y", 0, "timeout_ms", 200)).get("result");
+        assertEquals("TIMED_OUT", result.get("outcome"), result.toString());
+        assertEquals("navigation_timeout", result.get("reason"));
+        assertTrue(fixture.position.get().x < 500);
+        assertEquals(true, result.get("stable"));
+        assertEquals(4, fixture.stance.get() & ~1);
+        assertTrue(((Number) result.get("elapsed_ms")).longValue() < 1500, result.toString());
+        assertEquals(0, fixture.module.context().scope().snapshot().acceptedWork());
+        assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
     }
 
     @Test void nativeMapMovementRulesAndMidRouteStunStopFurtherNavigationInput() {
@@ -165,7 +202,7 @@ class NavigationModuleTest {
         final AtomicReference<Point> position;
         final AtomicInteger stance = new AtomicInteger(4);
         final CharacterRuntime runtime;
-        final NavigationModule module;
+        final NavigationActionModule module;
         final CharacterRuntime.ModuleContext caller;
 
         Fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes) {
@@ -227,11 +264,11 @@ class NavigationModuleTest {
                 runtime.bindAdoptedOrigin();
             }, () -> {});
             opening.completion().toCompletableFuture().join();
-            var nav = new ModuleDefinition<NavigationModule.Config, NavigationModule>(
-                    NavigationModule.DEFINITION.typeId(), NavigationModule.DEFINITION.controls(),
-                    NavigationModule.DEFINITION.limits(), config -> new NavigationModule(config, server),
-                    NavigationModule.DEFINITION.exports());
-            module = runtime.mount(nav, new ModuleSelection<>("pathfinder", NavigationModule.DEFAULT_CONFIG, true)).instance();
+            var nav = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
+                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
+                    NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, server),
+                    NavigationActionModule.DEFINITION.exports());
+            module = runtime.mount(nav, new ModuleSelection<>("pathfinder", NavigationActionModule.DEFAULT_CONFIG, true)).instance();
             var controller = new ModuleDefinition<Void, RuntimeModule>("test-controller", Set.of(),
                     new ExecutionScope.Limits(8, 2, 4, 2), config -> new RuntimeModule() {}, List.of());
             caller = runtime.context(runtime.mount(controller, new ModuleSelection<>("controller", null, true)).reference());

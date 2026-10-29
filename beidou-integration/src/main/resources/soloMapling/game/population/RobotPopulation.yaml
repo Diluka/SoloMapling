@@ -10,6 +10,10 @@ types:
           arrival_tolerance_px: 8
           timeout_ms: 30000
           stalled_timeout_ms: 3000
+      combat:
+        type: combat
+        config:
+          timeout_ms: 30000
       population:
         type: robot-population
         config: {}
