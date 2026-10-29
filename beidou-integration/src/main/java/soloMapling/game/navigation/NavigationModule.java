@@ -50,7 +50,7 @@ public final class NavigationModule implements RuntimeModule {
     }
 
     public static Config parseConfig(Map<String, Object> values) {
-        return new Config(integer(values, "arrival_tolerance_px", DEFAULT_CONFIG.arrivalTolerancePx(), 0, 32_767),
+        return new Config(integer(values, "arrival_tolerance_px", DEFAULT_CONFIG.arrivalTolerancePx(), 4, 32_767),
                 integer(values, "timeout_ms", DEFAULT_CONFIG.timeoutMs(), 1, 120_000),
                 integer(values, "stalled_timeout_ms", DEFAULT_CONFIG.stalledTimeoutMs(), 1, 120_000));
     }
@@ -92,8 +92,7 @@ public final class NavigationModule implements RuntimeModule {
             job.scene = NativeContextChecks.captureScene(server, actor);
             job.position = new Point(actor.character().getPosition());
             checkpoint(job);
-            job.engine = RuntimeNavigationEngine.plan(actor.character(), job.target,
-                    config.arrivalTolerancePx(), () -> checkpoint(job));
+            job.engine = RuntimeNavigationEngine.plan(actor.character(), job.target, () -> checkpoint(job));
             job.registration = context.scope().resources().beginOwnedResult(work, "navigation_motion");
             job.registration.attach(job, () -> job.stopRequested = true);
             long lastProgress = System.nanoTime();

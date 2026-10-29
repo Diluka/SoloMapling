@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 // with types renamed (BotEntry->BotMovementState, BotCombatManager->BotContactDamage). SoloMapling
 // addition: beginPortalDrop(). Credit: NutNNut.
 final class BotPhysicsEngine {
-    static final double CLIENT_GROUND_STEP_MS = 8.0;
+    private static final double CLIENT_GROUND_STEP_MS = 8.0;
     private static final double CLIENT_GROUND_STEP_S = CLIENT_GROUND_STEP_MS / 1000.0;
     // Brake-to-stop sim bound for slippery landings: stop takes ~2.3/fs ticks from top
     // speed (11 at El Nath fs=0.2); 240 covers any fs >= ~0.01 with margin.
@@ -1012,8 +1012,7 @@ final class BotPhysicsEngine {
         // INPUT instead of the velocity-derived slide direction.
         boolean braking = desiredDir != 0 && entry.hspeed * desiredDir < 0.0;
         GroundStepResult step = simulateGroundMotion(map, currentPos, foothold, desiredDir,
-                new GroundTravelState(entry.physX, entry.hspeed, entry.groundPhysicsCarryMs), entry.movementProfile,
-                entry.groundTickMs);
+                new GroundTravelState(entry.physX, entry.hspeed, entry.groundPhysicsCarryMs), entry.movementProfile);
 
         // Snap-up to a *different* foothold means the bot walked off the edge and a separate
         // platform happens to be within MAX_SLOPE_UP above. That is not an uphill slope of the
@@ -1038,9 +1037,9 @@ final class BotPhysicsEngine {
         // pixel). One 50ms input pulse from rest moves well under a pixel; truncating
         // physX to the int position every tick discarded that progress and made tight
         // launch windows unreachable from rest (pathlog-Leroy-2026-06-12T140609: parked
-        // 2-3px short of a 2px jump window forever on fs=0.2). Short terminal steps also
-        // retain fractions so low-speed movement can accumulate a visible pixel.
-        entry.physX = mapGroundSlipScale(map, entry.movementProfile) < 1.0 || entry.groundTickMs < cfg.TICK_MS
+        // 2-3px short of a 2px jump window forever on fs=0.2). Normal ground keeps the
+        // int snap - bit-exact with prior behavior.
+        entry.physX = mapGroundSlipScale(map, entry.movementProfile) < 1.0
                 ? step.state().physX()
                 : position.x;
         entry.physY = position.y;
@@ -1075,25 +1074,13 @@ final class BotPhysicsEngine {
                                                  int desiredDir,
                                                  GroundTravelState state,
                                                  BotMovementProfile profile) {
-        return simulateGroundMotion(map, currentPos, foothold, desiredDir, state, profile, cfg.TICK_MS);
-    }
-
-    private static GroundStepResult simulateGroundMotion(MapleMap map,
-                                                 Point currentPos,
-                                                 Foothold foothold,
-                                                 int desiredDir,
-                                                 GroundTravelState state,
-                                                 BotMovementProfile profile,
-                                                 int durationMs) {
         if (map == null || currentPos == null || foothold == null || state == null) {
             return new GroundStepResult(currentPos, foothold, state, 0, 0, true);
         }
 
-        GroundTravelState displaced = applyGroundDisplacement(map, foothold, desiredDir, state, profile, durationMs);
+        GroundTravelState displaced = applyGroundDisplacement(map, foothold, desiredDir, state, profile);
         int newX = (int) Math.round(displaced.physX());
         int stepX = newX - currentPos.x;
-        double deltaX = displaced.physX() - (durationMs < cfg.TICK_MS ? state.physX() : currentPos.x);
-        int velocityX = (int) Math.round(deltaX * 1000.0 / durationMs);
         GroundStepPreview preview = previewGroundStep(map, currentPos, foothold, newX);
         if (preview == null) {
             return new GroundStepResult(currentPos, foothold, state, 0, 0, true);
@@ -1105,11 +1092,11 @@ final class BotPhysicsEngine {
 
         if (preview.lostGround()) {
             return new GroundStepResult(new Point(newX, preview.baseY()), foothold, displaced,
-                    stepX, velocityX, true);
+                    stepX, velocityFromDeltaX(displaced.physX() - currentPos.x), true);
         }
 
         return new GroundStepResult(preview.point(), preview.foothold() != null ? preview.foothold() : foothold, displaced,
-                stepX, velocityX, false);
+                stepX, velocityFromDeltaX(displaced.physX() - currentPos.x), false);
     }
 
     static WalkOffLanding simulateWalkOffLanding(MapleMap map,
@@ -1994,9 +1981,8 @@ final class BotPhysicsEngine {
                                                              Foothold foothold,
                                                              int desiredDir,
                                                              GroundTravelState state,
-                                                             BotMovementProfile profile,
-                                                             int durationMs) {
-        GroundStepCounter counter = groundPhysicsSteps(state.carryMs(), durationMs);
+                                                             BotMovementProfile profile) {
+        GroundStepCounter counter = groundPhysicsSteps(state.carryMs(), map);
         if (counter.steps() == 0) {
             return state;
         }
@@ -2014,8 +2000,8 @@ final class BotPhysicsEngine {
     private record GroundStepCounter(int steps, double carryMs) {
     }
 
-    private static GroundStepCounter groundPhysicsSteps(double carryMs, int durationMs) {
-        double nextCarryMs = carryMs + durationMs;
+    private static GroundStepCounter groundPhysicsSteps(double carryMs, MapleMap map) {
+        double nextCarryMs = carryMs + cfg.TICK_MS;
         int steps = (int) (nextCarryMs / CLIENT_GROUND_STEP_MS);
         nextCarryMs -= steps * CLIENT_GROUND_STEP_MS;
         return new GroundStepCounter(steps, nextCarryMs);
