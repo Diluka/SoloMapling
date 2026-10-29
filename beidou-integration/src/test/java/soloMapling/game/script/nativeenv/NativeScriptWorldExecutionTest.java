@@ -1,5 +1,6 @@
 package soloMapling.game.script.nativeenv;
 
+import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.config.GameConfig;
@@ -12,6 +13,7 @@ import org.gms.property.ServiceProperty;
 import org.gms.provider.Data;
 import org.gms.provider.DataProvider;
 import org.gms.provider.DataProviderFactory;
+import org.gms.scripting.map.MapScriptManager;
 import org.gms.scripting.npc.NPCConversationManager;
 import org.gms.scripting.npc.NPCScriptManager;
 import org.gms.scripting.quest.QuestScriptManager;
@@ -42,6 +44,7 @@ import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
 
+import javax.script.Invocable;
 import javax.script.ScriptEngine;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -114,6 +117,48 @@ class NativeScriptWorldExecutionTest {
         assertNull(quest.client.getQM());
         verify(quest.quest, never()).forceStart(any(), anyInt());
         quest.assertDrained();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test void coldMapEntryRunsInsideNpcCallbackAndKeepsItsOwnNativeEngineAfterTheNpcCloses() throws Exception {
+        stage("npc/1032110.js");
+        Path directory = scriptDirectory.resolve("map/onUserEnter");
+        Files.createDirectories(directory);
+        Path script = Files.createTempFile(directory, "__solo_264_", ".js");
+        Files.writeString(script, "function start(ms){ms.showInfoText('cold map entry 264');}");
+        String filename = script.getFileName().toString();
+        String mapScript = "onUserEnter/" + filename.substring(0, filename.length() - 3);
+        Fixture fixture = fixture("npc");
+        NativeScriptResult opened = fixture.start(Map.of("npc_id", 1032110), null, "var marker=264; status");
+        assertOpen(opened);
+        NPCConversationManager conversation = fixture.client.getCM();
+        try {
+            NativeScriptResult entered = fixture.invoke(opened.contextId(), null, List.of(),
+                    "({mapRan:Java.type('org.gms.scripting.map.MapScriptManager').getInstance()"
+                            + ".runMapScript(cm.getClient(),'" + mapScript + "',false), status:status, marker:marker})");
+            assertOpen(entered);
+            assertEquals(Map.of("mapRan", true, "status", 0, "marker", 264), entered.result());
+            assertTrue(fixture.packets().contains("cold map entry 264"));
+            assertSame(conversation, fixture.client.getCM());
+            NativeScriptResult continued = fixture.invoke(opened.contextId(), null, List.of(), "++marker");
+            assertOpen(continued);
+            assertEquals(265, continued.result());
+            assertClosed(fixture.closeContext(opened.contextId()));
+            fixture.assertDrained();
+
+            int packetsBefore = fixture.output.size();
+            try (AutoCloseable ignored = fixture.nativeBoundary()) {
+                assertTrue(MapScriptManager.getInstance().runMapScript(fixture.client, mapScript, false));
+            }
+            assertEquals(packetsBefore + 1, fixture.output.size());
+        } finally {
+            // The native map cache owns this engine; remove and close only this test's unique entry.
+            var cache = MapScriptManager.class.getDeclaredField("scripts");
+            cache.setAccessible(true);
+            var scripts = (Map<String, Invocable>) cache.get(MapScriptManager.getInstance());
+            var engine = (GraalJSScriptEngine) scripts.remove(mapScript);
+            if (engine != null) engine.close();
+        }
     }
 
     @Test void portalUsesTheActualMapPortalAndStopsWhenThatObjectOrItsScriptChanges() throws Exception {
