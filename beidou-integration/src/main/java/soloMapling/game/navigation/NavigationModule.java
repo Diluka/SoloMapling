@@ -3,6 +3,8 @@ package soloMapling.game.navigation;
 import org.gms.net.server.Server;
 import soloMapling.ArtificialPlayer.GCMoveSystem.RuntimeNavigationEngine;
 import soloMapling.game.action.NativeMovementActions;
+import soloMapling.game.action.NativeMovementGeometry;
+import soloMapling.game.action.NativeActionService;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
@@ -108,6 +110,16 @@ public final class NavigationModule implements RuntimeModule {
                 RuntimeNavigationEngine.Frame frame;
                 try { frame = step(job, outcome != null); }
                 catch (Halt stop) { outcome = stop.outcome; reason = stop.reason; continue; }
+                catch (NativeActionService.Invalid blocked) {
+                    if (outcome != null) throw blocked;
+                    reason = blocked.reason();
+                    outcome = switch (reason) {
+                        case "movement_slow_unsupported", "movement_mode_unsupported", "movement_surface_unsupported" -> "UNSUPPORTED";
+                        default -> "BLOCKED";
+                    };
+                    if (job.steps == 0) break;
+                    continue;
+                }
                 job.stable = frame.stable();
                 if (!before.equals(job.position)) lastProgress = System.nanoTime();
                 if (outcome == null && job.stable && distance(job.position, job.target) <= config.arrivalTolerancePx()) {
@@ -169,7 +181,11 @@ public final class NavigationModule implements RuntimeModule {
         Runnable body = () -> {
             try {
                 if (cleanup != null) cleanup.permit().requireExecuting(job);
-                else checkpoint(job);
+                else {
+                    checkpoint(job);
+                    NativeMovementGeometry.requireOrdinaryMovementMode(job.scene.actor().character(), job.scene.map());
+                    if (job.engine.attributesChanged()) throw new Halt("BLOCKED", "attributes_changed");
+                }
                 NativeContextChecks.requireSceneCurrent(server, job.scene);
                 var next = job.engine.nextFrame(stopping);
                 boolean applied = NativeMovementActions.dispatchNavigationFrame(server, job.scene, step, next.position(),

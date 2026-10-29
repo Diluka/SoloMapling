@@ -263,7 +263,10 @@ final class AcceptanceActorExecution {
 
     private NavigationModule requireNavigation() {
         var attached = navigation;
-        if (attached == null) throw new ObservationException(HttpStatus.CONFLICT, "actor_movement_unavailable");
+        var context = attached == null ? null : attached.context();
+        if (context == null || !context.scope().isActive()) {
+            throw new ObservationException(HttpStatus.CONFLICT, "actor_movement_unavailable");
+        }
         return attached;
     }
 

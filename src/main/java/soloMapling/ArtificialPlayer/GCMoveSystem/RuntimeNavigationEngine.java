@@ -1,9 +1,7 @@
 package soloMapling.ArtificialPlayer.GCMoveSystem;
 
 import org.gms.client.Character;
-import org.gms.client.inventory.InventoryType;
 import org.gms.constants.game.CharacterStance;
-import org.gms.server.ItemInformationProvider;
 import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Rope;
 
@@ -39,10 +37,7 @@ public final class RuntimeNavigationEngine {
         if (map.isSwim() || map.getFootholds() == null || BotPhysicsEngine.slipperyGround(map)) {
             throw new Failure("UNSUPPORTED_TERRAIN");
         }
-        var shoe = actor.getInventory(InventoryType.EQUIPPED).getItem((short) -7);
-        boolean snowShoes = shoe != null
-                && ItemInformationProvider.getInstance().getEquipStats(shoe.getItemId()).getOrDefault("fs", 0) >= 1;
-        var profile = new BotMovementProfile(actor.getTotalMoveSpeedStat(), actor.getTotalJumpStat(), snowShoes);
+        var profile = BotMovementProfile.fromNativeCharacter(actor);
         var pending = BotNavigationGraphProvider.requestGraph(map, profile);
         BotNavigationGraph source;
         while (true) {
@@ -122,6 +117,9 @@ public final class RuntimeNavigationEngine {
 
         public Point target() { return new Point(target); }
         public int tickMs() { return BotPhysicsEngine.cfg.TICK_MS; }
+        public boolean attributesChanged() {
+            return !motion.movementProfile.equals(BotMovementProfile.fromNativeCharacter(actor));
+        }
 
         /** Called once per role-lane tick; no search, timer, native role write or broadcast occurs here. */
         public Frame nextFrame(boolean stopping) {

@@ -53,6 +53,13 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
         return BASE;
     }
 
+    /** Native attributes without the V1 environment bot's simulated movement bonuses. */
+    static BotMovementProfile fromNativeCharacter(Character character) {
+        if (hasForcedBaseMovementStats(character)) return BASE;
+        return new BotMovementProfile(character.getTotalMoveSpeedStat(), character.getTotalJumpStat(),
+                readSnowShoes(character));
+    }
+
     static BotMovementProfile fromCharacter(Character character) {
         if (character == null) {
             return BASE;
@@ -62,8 +69,8 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
         }
         // SoloMapling: scale the walk-speed / jump baseline by bot level AND class so higher-level and
         // Haste-class (thief) bots roam faster and jump higher. The baseline replaces the flat 100; any
-        // equip/real-buff speed/jump (getTotal*Stat - 100) still stacks on top. Bucketed to the nearest 5
-        // by the canonical constructor, so the tiers below land on exact graph buckets.
+        // equip/real-buff speed/jump (getTotal*Stat - 100) still stacks on top. This V1 source buckets
+        // the result to the nearest 5, so the tiers below land on exact graph buckets.
         int level = character.getLevel();
         boolean hasteThief = hasHasteSkill(character.getJob());
 
@@ -161,16 +168,17 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
      *  slipperiness client-side — the wearer gets normal walk physics on snow/ice maps. */
     private static boolean wearsSnowShoes(Character character) {
         try {
-            Item shoe = character.getInventory(InventoryType.EQUIPPED).getItem((short) -7);
-            if (shoe == null) {
-                return false;
-            }
-            Map<String, Integer> stats =
-                    ItemInformationProvider.getInstance().getEquipStats(shoe.getItemId());
-            return stats != null && stats.getOrDefault("fs", 0) >= 1;
+            return readSnowShoes(character);
         } catch (Throwable t) {
             return false; // WZ/equip data unavailable (unit tests, partial mocks)
         }
+    }
+
+    private static boolean readSnowShoes(Character character) {
+        Item shoe = character.getInventory(InventoryType.EQUIPPED).getItem((short) -7);
+        if (shoe == null) return false;
+        Map<String, Integer> stats = ItemInformationProvider.getInstance().getEquipStats(shoe.getItemId());
+        return stats != null && stats.getOrDefault("fs", 0) >= 1;
     }
 
     private static boolean hasForcedBaseMovementStats(Character character) {

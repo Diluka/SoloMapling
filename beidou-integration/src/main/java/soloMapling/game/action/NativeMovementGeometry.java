@@ -10,8 +10,8 @@ import org.gms.server.maps.MapleMap;
 import java.awt.Point;
 import java.awt.Rectangle;
 
-/** One conservative ground-walk step, derived from native facts without changing the role. */
-final class NativeMovementGeometry {
+/** Native movement eligibility and conservative ground-walk geometry, without changing the role. */
+public final class NativeMovementGeometry {
     private NativeMovementGeometry() { }
 
     record Step(int beforeX, int beforeY, int x, int y, int footholdId, int velocity) { }
@@ -101,17 +101,22 @@ final class NativeMovementGeometry {
         return new SpawnGround(x, y, groundY, ground.getId());
     }
 
-    private static void requireOrdinaryGroundMode(Character character, MapleMap map) {
+    /** Character and map facts shared by native walking and target-directed navigation. */
+    public static void requireOrdinaryMovementMode(Character character, MapleMap map) {
         require(character.getHp() > 0, "movement_actor_dead");
         require(!character.hasDisease(Disease.STUN) && !character.hasDisease(Disease.SEDUCE)
                 && character.getChair() < 0, "movement_actor_immobilized");
         require(!character.hasDisease(Disease.SLOW), "movement_slow_unsupported");
         require(!map.isSwim() && character.getBuffedValue(BuffStat.MONSTER_RIDING) == null,
                 "movement_mode_unsupported");
-        int stance = character.getStance();
-        require(stance >= 0 && stance <= 5, "movement_mode_unsupported");
         require(Float.isFinite(map.getFootholdSpeed()) && Math.abs(map.getFootholdSpeed() - 1.0f) <= 0.0001f,
                 "movement_surface_unsupported");
+    }
+
+    private static void requireOrdinaryGroundMode(Character character, MapleMap map) {
+        requireOrdinaryMovementMode(character, map);
+        int stance = character.getStance();
+        require(stance >= 0 && stance <= 5, "movement_mode_unsupported");
     }
 
     private static int height(Foothold foothold, int x) {

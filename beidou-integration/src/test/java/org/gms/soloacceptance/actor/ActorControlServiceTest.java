@@ -154,8 +154,7 @@ class ActorControlServiceTest {
 
     @Test
     void mcpRoleUsesTheFixedConfiguredTypeAndBindsItsDeclaredModuleFunctions(@TempDir Path directory) throws Exception {
-        Path config = directory.resolve("RobotPopulation.yaml");
-        Files.writeString(config, """
+        population = populationFromConfig(directory, """
                 types:
                   mcp_test:
                     modules:
@@ -164,11 +163,6 @@ class ActorControlServiceTest {
                       population_from_file: {type: robot-population, config: {}}
                 initial_population: {mcp_test: 0}
                 """);
-        StandardEnvironment environment = new StandardEnvironment();
-        environment.getPropertySources().addFirst(new MapPropertySource("robot-test-config",
-                Map.of("solomapling.robot-population-config", config.toString())));
-        population = new RobotPopulationService(environment);
-        population.onWorldStarted();
         ActorControlService service = service(4, 20, 64);
         var opening = open(service, "configured-mcp-role");
         executors.getFirst().runNext();
@@ -180,6 +174,36 @@ class ActorControlServiceTest {
         assertEquals(Map.of("navigation.moveTo", "path_from_file", "robots.create", "population_from_file",
                 "robots.remove", "population_from_file"), functions.stream().collect(Collectors.toMap(
                 function -> (String) function.get("name"), function -> (String) function.get("module_id"))));
+    }
+
+    @Test
+    void disabledNavigationKeepsTheMcpRoleUsableAndReportsMovementUnavailable(@TempDir Path directory) throws Exception {
+        population = populationFromConfig(directory, """
+                types:
+                  mcp_test:
+                    modules:
+                      mcp: {type: mcp-control, config: {}}
+                      navigation: {type: navigation, config: {}, enabled: false}
+                initial_population: {mcp_test: 0}
+                """);
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opening = open(service, "mcp-with-navigation-disabled");
+        executors.getFirst().runNext();
+        var opened = service.get("admin", id(opening), 0, 100);
+        assertEquals("SUCCEEDED", opened.get("status"));
+        assertEquals("UNAVAILABLE", execution(service, opened).moduleContext()
+                .call("navigation.moveTo", Map.of("x", 0, "y", 0)).get("status"));
+
+        ObservationException unavailable = assertThrows(ObservationException.class, () -> service.act("admin",
+                "disabled-navigation-move", basicRequest(opened, "move", Map.of("direction", "RIGHT", "duration_ms", 300))));
+        assertEquals(HttpStatus.CONFLICT, unavailable.status());
+        assertEquals("actor_movement_unavailable", unavailable.reason());
+        verify(backend, never()).prepareMovement(any(), any(), any(), any(), any(), any(), any());
+
+        var chat = service.act("admin", "chat-with-navigation-disabled", chatRequest(opened, "chat remains available"));
+        executors.getFirst().runNext();
+        assertEquals("SUCCEEDED", service.get("admin", id(chat), 0, 100).get("status"));
     }
 
     @Test
@@ -3604,6 +3628,17 @@ class ActorControlServiceTest {
         }
         @Override public void close(NativeScriptSession session) { closes.incrementAndGet(); }
         @Override public Map<String, Object> describe(NativeScriptSession session) { return Map.of("kind", "npc"); }
+    }
+
+    private static RobotPopulationService populationFromConfig(Path directory, String yaml) throws IOException {
+        Path config = directory.resolve("RobotPopulation.yaml");
+        Files.writeString(config, yaml);
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("robot-test-config",
+                Map.of("solomapling.robot-population-config", config.toString())));
+        RobotPopulationService population = new RobotPopulationService(environment);
+        population.onWorldStarted();
+        return population;
     }
 
     private ActorControlService service(int sessionLimit, int historyLimit, int eventLimit) {

@@ -2,6 +2,8 @@ package soloMapling.game.navigation;
 
 import org.gms.client.Character;
 import org.gms.client.Client;
+import org.gms.client.Disease;
+import org.gms.client.BuffStat;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
 import org.gms.net.server.PlayerStorage;
@@ -9,6 +11,7 @@ import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.server.maps.Foothold;
+import org.gms.server.maps.FieldLimit;
 import org.gms.server.maps.FootholdTree;
 import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Rope;
@@ -40,6 +43,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -90,6 +94,38 @@ class NavigationModuleTest {
         assertEquals("NO_PATH", result.get("outcome"));
         assertEquals(new Point(0, 0), fixture.position.get());
         verify(fixture.map, never()).movePlayer(any(), any());
+    }
+
+    @Test void nativeMapMovementRulesAndMidRouteStunStopFurtherNavigationInput() {
+        var fixture = fixture(98_982_105, new Point(0, 0),
+                List.of(foothold(-200, 0, 400, 0, 1)), List.of());
+        when(fixture.character.getTotalMoveSpeedStat()).thenReturn(200);
+        when(fixture.character.getTotalJumpStat()).thenReturn(123);
+        when(fixture.map.getFieldLimit()).thenReturn((int) FieldLimit.MOVEMENTSKILLS.getValue());
+        var stunned = new AtomicBoolean();
+        when(fixture.character.hasDisease(Disease.STUN)).thenAnswer(call -> stunned.get());
+        var calls = new AtomicInteger();
+        var maximumStep = new AtomicInteger();
+        var previous = new AtomicInteger();
+        var stoppedAt = new AtomicReference<Point>();
+        doAnswer(call -> {
+            Point actual = fixture.position.get();
+            maximumStep.accumulateAndGet(actual.x - previous.getAndSet(actual.x), Math::max);
+            if (calls.incrementAndGet() == 10) {
+                stoppedAt.set(new Point(actual));
+                stunned.set(true);
+            }
+            return null;
+        }).when(fixture.map).movePlayer(eq(fixture.character), any());
+        var result = fixture.moveTo(new Point(300, 0));
+        assertEquals("BLOCKED", result.get("outcome"));
+        assertEquals("movement_actor_immobilized", result.get("reason"));
+        assertTrue(maximumStep.get() <= 7, "the map forces native base movement despite speed equipment/buffs");
+        assertNotNull(stoppedAt.get());
+        assertTrue(stoppedAt.get().x > 0);
+        assertEquals(stoppedAt.get(), fixture.position.get());
+        assertEquals(true, result.get("stable"));
+        assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
     }
 
     @Test void pausingNavigationWhileAirborneSettlesItsMotionBeforeTheModuleSuspends() throws Exception {
@@ -155,6 +191,7 @@ class NavigationModuleTest {
             when(character.getChair()).thenReturn(-1);
             when(character.getTotalMoveSpeedStat()).thenReturn(100);
             when(character.getTotalJumpStat()).thenReturn(100);
+            when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(null);
             when(character.getInventory(InventoryType.EQUIPPED)).thenReturn(mock(Inventory.class));
             when(character.getMap()).thenReturn(map);
             when(map.getCharacterById(41)).thenReturn(character);

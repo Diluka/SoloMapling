@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.gms.model.dto.SubmitBody;
 import org.gms.soloacceptance.ObservationException;
 import org.gms.soloacceptance.AcceptanceAccess;
+import jakarta.servlet.AsyncContext;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -31,6 +32,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import soloMapling.beidou.CharacterTestContext;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -468,19 +470,25 @@ class ActorControlControllerTest {
     }
 
     @Test
-    void scriptEndpointsKeepAdminOwnerRequestIdsAndOriginalCancellationFingerprint() {
+    void scriptEndpointsKeepAdminOwnerRequestIdsAndOriginalCancellationFingerprint() throws Exception {
         ActorControlService service = mock(ActorControlService.class);
         ActorControlController controller = new ActorControlController(service);
         authenticate("script-admin", "ROLE_ADMIN");
         var script = new ActorScriptRequest("session", 7L, "npc", "start", null, Map.of("npc_id", 1032110),
-                null, List.of(), "cm.getPlayer().getName()", Map.of(), 1000L);
+                null, List.of(), "cm.getPlayer().getName()", Map.of(), 120000L);
         when(service.scriptRun("script-admin", "script-id", script)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
         assertEquals("SUCCEEDED", controller.scriptRun(new SubmitBody<>("script-id", script)).getData().get("status"));
-        StreamingResponseBody stream = output -> { };
+        StreamingResponseBody stream = output -> output.write("{\"type\":\"started\"}\n".getBytes(StandardCharsets.UTF_8));
         when(service.scriptStream("script-admin", "script-id", script, 3)).thenReturn(stream);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        AsyncContext async = mock(AsyncContext.class);
+        when(request.getAsyncContext()).thenReturn(async);
         var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3,
-                mock(HttpServletRequest.class), mock(HttpServletResponse.class));
-        assertSame(stream, streamed.getBody());
+                request, mock(HttpServletResponse.class));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        streamed.getBody().writeTo(output);
+        assertEquals("{\"type\":\"started\"}\n", output.toString(StandardCharsets.UTF_8));
+        verify(async).setTimeout(125000L);
         assertEquals("application/x-ndjson", streamed.getHeaders().getContentType().toString());
         var cancel = new ActorScriptCancelRequest("session", 7L, "script-id", script.kind(), script.operation(),
                 script.contextId(), script.options(), script.entry(), script.args(), script.source(), script.parameters(), script.timeoutMs());
