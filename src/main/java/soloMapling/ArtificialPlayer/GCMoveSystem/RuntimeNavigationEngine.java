@@ -39,10 +39,10 @@ public final class RuntimeNavigationEngine {
     public static Session plan(Character actor, Point target, Runnable checkpoint) {
         checkpoint.run();
         MapleMap map = actor.getMap();
-        if (map.isSwim() || map.getFootholds() == null || BotPhysicsEngine.slipperyGround(map)) {
+        if (map.isSwim() || map.getFootholds() == null || !GroundRules.fromCharacter(actor).supportedSurface()) {
             throw new Failure("UNSUPPORTED_TERRAIN");
         }
-        var profile = BotMovementProfile.fromNativeCharacter(actor);
+        var profile = BotMovementProfile.fromNativeCharacter(actor).forGround(map);
         var pending = BotNavigationGraphProvider.requestGraph(map, profile);
         BotNavigationGraph source;
         while (true) {
@@ -81,6 +81,96 @@ public final class RuntimeNavigationEngine {
                 "runtime-navigation", true, false, 0, checkpoint).path();
         if (route.isEmpty() && startRegion != targetRegion) throw new Failure("NO_PATH");
         return new Session(actor, target, graph, profile, route, onRope, floor);
+    }
+
+    /** Bounded direction holds reuse the same profile and ground integrator as target navigation. */
+    public static GroundSession groundMotion(Character actor, int minimumX, int maximumX) {
+        return new GroundSession(actor, minimumX, maximumX);
+    }
+
+    public static final class GroundSession {
+        private final Character actor;
+        private BotMovementState motion;
+        private BotMovementState predicted;
+        private final org.gms.server.maps.Foothold initialFoothold;
+        private final BotMovementProfile initialProfile;
+        private final int minimumX, maximumX;
+        private boolean boundaryReached;
+
+        private GroundSession(Character actor, int minimumX, int maximumX) {
+            this.actor = actor;
+            this.minimumX = minimumX;
+            this.maximumX = maximumX;
+            motion = new BotMovementState(actor, null);
+            motion.projectMotion();
+            initialProfile = BotMovementProfile.fromNativeCharacter(actor).forGround(actor.getMap());
+            motion.movementProfile = initialProfile;
+            motion.facingDir = (actor.getStance() & 1) == 0 ? 1 : -1;
+            BotPhysicsEngine.resetMotion(motion, motion.position());
+            initialFoothold = BotPhysicsEngine.findGroundFoothold(actor.getMap(), motion.position());
+            motion.lastGroundFhId = initialFoothold.getId();
+        }
+
+        public int tickMs() { return BotPhysicsEngine.cfg.TICK_MS; }
+        public boolean boundaryReached() { return boundaryReached; }
+        public boolean attributesChanged() {
+            return !initialProfile.equals(BotMovementProfile.fromNativeCharacter(actor).forGround(actor.getMap()));
+        }
+
+        /** elapsedMs preserves the last partial hold frame; only accepted native frames advance this state. */
+        public Frame nextFrame(int direction, boolean stopping, int elapsedMs) {
+            predicted = new BotMovementState(actor, null);
+            predicted.projectMotion();
+            predicted.position(new Point(motion.position()));
+            predicted.physX = motion.physX;
+            predicted.physY = motion.physY;
+            predicted.hspeed = motion.hspeed;
+            predicted.groundPhysicsCarryMs = motion.groundPhysicsCarryMs;
+            predicted.facingDir = motion.facingDir;
+            predicted.inAir = motion.inAir;
+            predicted.velY = motion.velY;
+            predicted.airVelX = motion.airVelX;
+            predicted.airSteerVelX = motion.airSteerVelX;
+            predicted.fallPeakPhysY = motion.fallPeakPhysY;
+            predicted.downJumpGracePeriodMS = motion.downJumpGracePeriodMS;
+            predicted.lastGroundFhId = motion.lastGroundFhId;
+            predicted.movementProfile = stopping
+                    ? BotMovementProfile.fromNativeCharacter(actor).forGround(actor.getMap()) : motion.movementProfile;
+            var state = new BotPhysicsEngine.GroundTravelState(predicted.physX, predicted.hspeed,
+                    predicted.groundPhysicsCarryMs);
+            if (!stopping && !BotPhysicsEngine.groundInputCanStopOnFoothold(actor.getMap(), predicted.position(),
+                    initialFoothold, state, predicted.movementProfile, direction, elapsedMs, minimumX, maximumX)) {
+                boundaryReached = true;
+                stopping = true;
+            }
+            if (predicted.inAir) {
+                predicted.moveDir = 0;
+                BotPhysicsEngine.tickMotionTimers(predicted);
+                BotPhysicsEngine.stepAirborne(predicted, actor);
+            } else {
+                var foothold = stopping
+                        ? BotPhysicsEngine.findGroundFoothold(actor.getMap(), predicted.position()) : initialFoothold;
+                boolean originalGround = foothold != null && foothold.getId() == initialFoothold.getId()
+                        && initialProfile.equals(predicted.movementProfile);
+                predicted.moveDir = stopping
+                        ? originalGround ? BotPhysicsEngine.slipperyStopDir(actor.getMap(), predicted.movementProfile,
+                        predicted.position(), foothold, state, initialFoothold.getId(), minimumX, maximumX) : 0 : direction;
+                var step = BotPhysicsEngine.applyGroundMotion(predicted, actor, foothold, elapsedMs);
+                if (step.lostGround() && !stopping) throw new Failure("movement_foothold_edge");
+            }
+            var ground = BotPhysicsEngine.findGroundPoint(actor.getMap(), predicted.position());
+            boolean grounded = !predicted.inAir && ground != null && Math.abs(ground.y - predicted.position().y) <= 1;
+            if (grounded) predicted.lastGroundFhId = BotPhysicsEngine.findGroundFoothold(actor.getMap(), predicted.position()).getId();
+            var snapshot = BotPhysicsEngine.movementSnapshot(predicted);
+            boolean stable = grounded && predicted.hspeed == 0.0 && snapshot.velX() == 0 && snapshot.velY() == 0;
+            return new Frame(new Point(predicted.position()), snapshot.velX(), snapshot.velY(), snapshot.stance(),
+                    predicted.lastGroundFhId, elapsedMs, stable,
+                    stable ? Mode.IDLE : predicted.inAir ? Mode.DROP : Mode.WALK);
+        }
+
+        /** The caller has confirmed this frame through the native handler and actual role facts. */
+        public void acceptFrame() { motion = predicted; }
+
     }
 
     /** A session owns only predicted motion; the module dispatches every returned frame natively. */
@@ -123,13 +213,14 @@ public final class RuntimeNavigationEngine {
         public Point target() { return new Point(target); }
         public int tickMs() { return BotPhysicsEngine.cfg.TICK_MS; }
         public boolean attributesChanged() {
-            return !motion.movementProfile.equals(BotMovementProfile.fromNativeCharacter(actor));
+            return !motion.movementProfile.equals(BotMovementProfile.fromNativeCharacter(actor).forGround(actor.getMap()));
         }
 
         /** Called once per role-lane tick; no search, timer, native role write or broadcast occurs here. */
         public Frame nextFrame(boolean stopping) {
             Mode mode = Mode.IDLE;
             if (stopping) {
+                motion.movementProfile = BotMovementProfile.fromNativeCharacter(actor).forGround(actor.getMap());
                 motion.navEdge = null;
                 motion.moveDir = 0;
                 motion.climbVerticalDir = 0;
@@ -138,7 +229,8 @@ public final class RuntimeNavigationEngine {
                 else if (motion.inAir) {
                     motion.fixedAirArc = false;
                     BotMovementManager.tickAirborne(motion, null);
-                } else BotPhysicsEngine.idleOnGround(motion, actor);
+                } else BotPhysicsEngine.applyGroundMotion(motion, actor,
+                        BotPhysicsEngine.findGroundFoothold(actor.getMap(), motion.position()));
             } else {
                 int region = motion.climbing ? graph.findRopeRegionId(motion.position())
                         : graph.findRegionId(actor.getMap(), motion.position());
@@ -178,7 +270,7 @@ public final class RuntimeNavigationEngine {
             }
             var movement = BotPhysicsEngine.movementSnapshot(motion);
             boolean stable = motion.climbing ? motion.climbVerticalDir == 0
-                    : grounded && movement.velX() == 0 && movement.velY() == 0;
+                    : grounded && motion.hspeed == 0.0 && movement.velX() == 0 && movement.velY() == 0;
             if (stable) mode = Mode.IDLE;
             return new Frame(position, movement.velX(), movement.velY(), movement.stance(),
                     motion.lastGroundFhId, tickMs(), stable, mode);

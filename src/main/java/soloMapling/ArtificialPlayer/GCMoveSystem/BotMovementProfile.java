@@ -4,6 +4,7 @@ import org.gms.client.Character;
 import org.gms.client.Job;
 import org.gms.client.inventory.InventoryType;
 import org.gms.client.inventory.Item;
+import org.gms.constants.inventory.ItemConstants;
 import org.gms.net.server.world.Party;
 import org.gms.net.server.world.PartyCharacter;
 import org.gms.server.ItemInformationProvider;
@@ -55,7 +56,9 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
 
     /** Native attributes without the V1 environment bot's simulated movement bonuses. */
     static BotMovementProfile fromNativeCharacter(Character character) {
-        if (hasForcedBaseMovementStats(character)) return BASE;
+        if (hasForcedBaseMovementStats(character)) {
+            return new BotMovementProfile(BASE_TOTAL_STAT, BASE_TOTAL_STAT, readSnowShoes(character));
+        }
         return new BotMovementProfile(character.getTotalMoveSpeedStat(), character.getTotalJumpStat(),
                 readSnowShoes(character));
     }
@@ -65,7 +68,7 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
             return BASE;
         }
         if (hasForcedBaseMovementStats(character)) {
-            return BASE;
+            return new BotMovementProfile(BASE_TOTAL_STAT, BASE_TOTAL_STAT, wearsSnowShoes(character));
         }
         // SoloMapling: scale the walk-speed / jump baseline by bot level AND class so higher-level and
         // Haste-class (thief) bots roam faster and jump higher. The baseline replaces the flat 100; any
@@ -177,6 +180,7 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
     private static boolean readSnowShoes(Character character) {
         Item shoe = character.getInventory(InventoryType.EQUIPPED).getItem((short) -7);
         if (shoe == null) return false;
+        if ((shoe.getFlag() & ItemConstants.SPIKES) == ItemConstants.SPIKES) return true;
         Map<String, Integer> stats = ItemInformationProvider.getInstance().getEquipStats(shoe.getItemId());
         return stats != null && stats.getOrDefault("fs", 0) >= 1;
     }
@@ -194,6 +198,12 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
         // Nearest bucket, not floor: a 144% bot plays on the 145 graph — halves the
         // worst-case drift between real stats and the physics/graph profile.
         return (int) (Math.round(clamped / (double) STAT_BUCKET_SIZE) * STAT_BUCKET_SIZE);
+    }
+
+    /** Only effective movement differences split plans and map-graph profiles. */
+    BotMovementProfile forGround(MapleMap map) {
+        return snowShoes && !BotPhysicsEngine.slipperyGround(map)
+                ? new BotMovementProfile(totalSpeedStat, totalJumpStat, false) : this;
     }
 
     double speedMultiplier() {

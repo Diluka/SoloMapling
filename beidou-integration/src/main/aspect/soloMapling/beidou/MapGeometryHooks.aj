@@ -2,6 +2,7 @@ package soloMapling.beidou;
 
 import org.gms.provider.Data;
 import org.gms.provider.DataTool;
+import org.gms.provider.wz.XMLDomMapleData;
 import org.gms.scripting.event.EventInstanceManager;
 import org.gms.server.maps.Foothold;
 import org.gms.server.maps.MapFactory;
@@ -13,6 +14,15 @@ import java.util.Map;
 
 /** Extend the official map loader's resolved WZ data with navigation-only metadata. */
 public privileged aspect MapGeometryHooks {
+    /** Map WZ uses invariant decimal text, independently of the business currency formatter. */
+    public static float readGroundSlip(Data data) {
+        if (data instanceof XMLDomMapleData) {
+            XMLDomMapleData xml = (XMLDomMapleData) data;
+            return Float.parseFloat(xml.node.getAttributes().getNamedItem("value").getNodeValue());
+        }
+        return DataTool.getFloat(data);
+    }
+
     after(int mapId, int world, int channel, EventInstanceManager event) returning(MapleMap map):
             execution(MapleMap MapFactory.loadMapFromWz(int, int, int, EventInstanceManager))
             && args(mapId, world, channel, event) {
@@ -21,7 +31,7 @@ public privileged aspect MapGeometryHooks {
         Data info = data.getChildByPath("info");
         map.setSwim(DataTool.getInt("swim", info, 0) != 0);
         Data speed = info.getChildByPath("fs");
-        if (speed != null) map.setFootholdSpeed(DataTool.getFloat(speed));
+        if (speed != null) map.setFootholdSpeed(readGroundSlip(speed));
         String link = DataTool.getString(info.getChildByPath("link"), "");
         if (!link.isEmpty()) data = MapFactory.mapSource.getData(MapFactory.getMapName(Integer.parseInt(link)));
         Data ropes = data.getChildByPath("ladderRope");

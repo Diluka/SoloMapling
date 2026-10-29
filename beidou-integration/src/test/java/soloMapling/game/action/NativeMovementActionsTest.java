@@ -4,6 +4,10 @@ import org.gms.client.BuffStat;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.client.Disease;
+import org.gms.client.inventory.Inventory;
+import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
+import org.gms.constants.inventory.ItemConstants;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -63,6 +67,7 @@ class NativeMovementActionsTest {
     private NativeMovementActions service;
     private AtomicReference<Point> position;
     private AtomicInteger stance;
+    private final AtomicReference<Item> shoe = new AtomicReference<>();
 
     @BeforeEach void setup() {
         CharacterTestContext.install(); WorldEpoch.onWorldStarted();
@@ -77,7 +82,11 @@ class NativeMovementActionsTest {
         when(client.getPlayer()).thenReturn(character); when(client.getChannel()).thenReturn(1);
         when(client.isLoggedIn()).thenReturn(true); when(character.getHp()).thenReturn(50);
         when(character.getChair()).thenReturn(-1);
-        when(character.getTotalMoveSpeedStat()).thenReturn(100); when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(null);
+        when(character.getTotalMoveSpeedStat()).thenReturn(100); when(character.getTotalJumpStat()).thenReturn(100);
+        var equipped = mock(Inventory.class);
+        when(equipped.getItem((short) -7)).thenAnswer(call -> shoe.get());
+        when(character.getInventory(InventoryType.EQUIPPED)).thenReturn(equipped);
+        when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(null);
         when(worldPlayers.getCharacterById(41)).thenReturn(character); when(channelPlayers.getCharacterById(41)).thenReturn(character);
         map = mock(MapleMap.class); when(map.getId()).thenReturn(10000);
         when(character.getMap()).thenReturn(map); when(map.getCharacterById(41)).thenReturn(character);
@@ -112,7 +121,7 @@ class NativeMovementActionsTest {
 
     @AfterEach void cleanup() {
         if (runtime != null && WorldEpoch.snapshot().active()) {
-            runtime.beginClose(Optional.empty()); clock.all(); lane.all();
+            runtime.beginClose(Optional.empty()); drain();
             if (runtime.snapshot().modules().isEmpty() && !runtime.originReleased()) {
                 var cleanup = runtime.acquireOriginCleanup();
                 runtime.submitOriginCleanup(cleanup, () -> runtime.releaseOrigin(cleanup), () -> {}); lane.all();
@@ -138,59 +147,85 @@ class NativeMovementActionsTest {
     }
     private NativeBasicResult result(NativeMovementActions.MoveHandle handle) { return handle.result().toCompletableFuture().join(); }
 
+    private void advance() { clock.next(); lane.all(); }
+    private void drain() {
+        int remaining = 2000;
+        while ((clock.size() != 0 || lane.size() != 0) && remaining-- > 0) {
+            lane.all();
+            if (clock.size() != 0) clock.next();
+        }
+        assertTrue(remaining > 0, "movement and cleanup must reach physical settlement");
+    }
+    private static Item spikedShoe() {
+        var shoe = mock(Item.class);
+        when(shoe.getFlag()).thenReturn(ItemConstants.SPIKES);
+        return shoe;
+    }
+
     @Test void realNativeWalkingUsesTimedShortCommandsAndCompletesAfterIdleAndResourceDrain() {
-        var handle = move(100); var parent = work(handle);
+        var handle = move(137); var parent = work(handle);
         assertFalse(parent.isSettled()); assertEquals(0,lane.size()); assertEquals(1,clock.size());
-        assertEquals(0,position.get().x); clock.next();
+        clock.next();
         assertEquals(0,position.get().x); assertEquals(1,lane.size()); assertFalse(handle.dispatchStarted());
-        lane.all();
-        assertEquals(SUCCEEDED,result(handle).outcome()); assertEquals(12,position.get().x); assertEquals(4,stance.get());
+        lane.all(); assertTrue(position.get().x > 0); assertFalse(parent.isSettled());
+        drain();
+        assertEquals(SUCCEEDED,result(handle).outcome()); assertEquals(4,stance.get());
         assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
         assertTrue((Boolean)result(handle).facts().get("native_idle_observed"));
-        assertEquals(1,result(handle).facts().get("movement_steps"));
+        assertEquals(137,result(handle).facts().get("simulated_duration_ms"));
         assertTrue((Boolean)result(handle).facts().get("completed_duration"));
         assertNull(ThreadLocalUtil.getCurrentClient());
     }
-    @Test void stopWaitsForTheActuallyScheduledCallbackAndNeverMovesAgainAfterStop() {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all(); assertEquals(12,position.get().x);
+    @Test void stopRetainsThePhysicalSlideAndReturnsOnlyAfterItActuallySettles() {
+        when(map.getFootholdSpeed()).thenReturn(0.2f);
+        var moving = move(2000); var parent = work(moving);
+        for (int i = 0; i < 8; i++) advance();
+        int releasedAt = position.get().x;
         var stopWork = context.acceptWork(); var stop = service.prepareStop(server,context,stopWork,scene,() -> {});
-        service.submitMove(stop); lane.all();
-        assertFalse(parent.isSettled()); assertFalse(stopWork.isSettled()); assertFalse(stop.result().toCompletableFuture().isDone());
-        assertEquals(1,clock.size()); clock.next(); lane.all();
-        assertEquals(SUCCEEDED,result(stop).outcome()); assertEquals(12,position.get().x);
-        assertEquals(CANCELLED,result(moving).outcome());
+        service.submitMove(stop);
+        assertFalse(parent.isSettled()); assertFalse(stopWork.isSettled());
+        advance(); assertTrue(position.get().x > releasedAt); assertFalse(parent.isSettled());
+        drain();
+        assertEquals(SUCCEEDED,result(stop).outcome()); assertEquals(CANCELLED,result(moving).outcome());
         assertEquals("stop_requested",result(moving).facts().get("stop_reason"));
         assertFalse((Boolean)result(moving).facts().get("completed_duration"));
+        assertTrue((Boolean)result(stop).facts().get("native_idle_observed"));
         assertTrue(parent.isSettled()); assertTrue(stopWork.isSettled()); assertEquals(0,clock.size());
-        verify(map,times(2)).movePlayer(eq(character),any());
+        int settledAt = position.get().x; lane.all(); assertEquals(settledAt,position.get().x);
     }
     @Test void cancelledBeforeTheFirstTickDoesNotSendAnyNativePacket() {
         var moving = move(1000); var parent = work(moving); context.cancel(parent);
-        assertFalse(parent.isSettled()); clock.next(); lane.all();
+        assertFalse(parent.isSettled()); drain();
         assertEquals(CANCELLED,result(moving).outcome()); assertFalse(moving.dispatchStarted()); assertEquals(0,position.get().x);
         verify(map,never()).movePlayer(any(),any()); assertTrue(parent.isSettled());
     }
-    @Test void cancellationAfterProgressStopsAtTheObservedPositionAndRetainsTheProgress() {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all(); context.cancel(parent);
-        clock.next(); lane.all();
+    @Test void cancellationAfterProgressRetainsMovementAndWaitsForTheObservedIdle() {
+        var moving = move(1000); var parent = work(moving); advance();
+        int progressedAt = position.get().x; assertTrue(progressedAt > 0);
+        context.cancel(parent); assertFalse(parent.isSettled()); drain();
         assertEquals(CANCELLED,result(moving).outcome());
-        assertTrue(result(moving).cancelRequested()); assertEquals(12,position.get().x);
+        assertTrue(result(moving).cancelRequested()); assertTrue(position.get().x >= progressedAt);
         assertEquals("movement_cancelled",result(moving).facts().get("stop_reason"));
-        assertFalse((Boolean)result(moving).facts().get("completed_duration")); assertEquals(0,clock.size()); assertTrue(parent.isSettled());
+        assertFalse((Boolean)result(moving).facts().get("completed_duration"));
+        assertTrue((Boolean)result(moving).facts().get("native_idle_observed"));
+        assertEquals(0,clock.size()); assertTrue(parent.isSettled());
     }
-    @Test void moduleUnloadCannotFinishBeforeTheClockActuallyExitsAndDoesNotDispatchCleanupMovement() {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
+    @Test void moduleUnloadWaitsForCleanupFramesAndTheClockToActuallyExit() {
+        when(map.getFootholdSpeed()).thenReturn(0.2f);
+        var moving = move(1000); var parent = work(moving);
+        for (int i = 0; i < 6; i++) advance();
+        int progressedAt = position.get().x;
         var stop = runtime.stop(context.reference(),CharacterRuntime.StopMode.UNLOAD);
-        assertFalse(stop.complete()); assertFalse(parent.isSettled()); assertEquals(1,clock.size());
-        clock.next(); lane.all();
-        assertTrue(parent.isSettled()); assertTrue(stop.complete()); assertEquals(12,position.get().x);
-        verify(map,times(1)).movePlayer(eq(character),any());
+        assertFalse(stop.complete()); assertFalse(parent.isSettled());
+        drain();
+        assertTrue(parent.isSettled()); assertTrue(stop.complete()); assertTrue(position.get().x > progressedAt);
+        assertTrue((Boolean)result(moving).facts().get("native_idle_observed"));
         assertEquals(0,context.scope().resources().snapshot().outstanding());
     }
     @Test void queuedNativeTickCannotRunAfterTheOriginalWorldStops() {
         var moving = move(1000); var parent = work(moving); clock.next();
         runtime.beginClose(Optional.of(ExecutionScope.tryBeginWorldStop().orElseThrow()));
-        lane.all(); clock.all(); lane.all();
+        drain();
         assertTrue(parent.isSettled()); assertFalse(moving.dispatchStarted()); assertEquals(0,position.get().x);
         verify(map,never()).movePlayer(any(),any());
     }
@@ -199,15 +234,15 @@ class NativeMovementActionsTest {
         var next = move(100);
         assertEquals(FAILED,result(next).outcome()); assertEquals("movement_busy",result(next).fixedReason());
         assertFalse(parent.isSettled()); assertEquals(1,clock.size());
-        context.cancel(parent); clock.all(); lane.all();
+        context.cancel(parent); drain();
     }
     @Test void duplicateHandleSubmissionDoesNotCreateAnotherClockOrNativeCarrier() {
         var handle = move(100);
         assertSame(handle.receipt(),service.submitMove(handle)); assertEquals(1,clock.size());
-        clock.next(); lane.all(); assertEquals(12,position.get().x); assertEquals(SUCCEEDED,result(handle).outcome());
+        drain(); assertTrue(position.get().x > 0); assertEquals(SUCCEEDED,result(handle).outcome());
         assertSame(handle.receipt(),service.submitMove(handle)); assertEquals(0,clock.size());
     }
-    @Test void timerAndLaneRejectsReleaseTheOwnedClockWithoutPretendingMovementHappened() {
+    @Test void timerRejectsReleaseTheOwnedClockWithoutPretendingMovementHappened() {
         service = new NativeMovementActions((body,delay) -> { throw new RejectedExecutionException(); },clock.now::get);
         var handle = move(100);
         assertEquals(FAILED,result(handle).outcome()); assertFalse(handle.dispatchStarted());
@@ -220,49 +255,53 @@ class NativeMovementActionsTest {
         assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
     }
     @Test void lateTimerNeverCatchesUpByTeleportingAcrossItsExpiredDuration() {
-        var handle = move(100); clock.now.addAndGet(TimeUnit.MILLISECONDS.toNanos(1000)); clock.next(); lane.all();
+        var handle = move(100); clock.now.addAndGet(TimeUnit.MILLISECONDS.toNanos(1000)); drain();
         assertEquals(FAILED,result(handle).outcome()); assertEquals(0,position.get().x);
         assertEquals("movement_duration_elapsed",result(handle).facts().get("stop_reason"));
     }
-    @Test void spawnSettlementUsesTwoBoundedNativeFramesThenTheRequestedHorizontalPeriod() {
+    @Test void spawnSettlementUsesBoundedFramesBeforeTheRequestedHorizontalPeriod() {
         position.set(new Point(0,-19));
-        var handle = move(100); var parent = work(handle);
-        clock.next(); lane.all(); assertEquals(new Point(0,-9),position.get()); assertFalse(parent.isSettled());
-        clock.next(); lane.all(); assertEquals(new Point(0,0),position.get()); assertFalse(parent.isSettled());
-        clock.next(); lane.all(); assertEquals(new Point(12,0),position.get());
-        assertEquals(SUCCEEDED,result(handle).outcome()); assertEquals(2,result(handle).facts().get("spawn_settlement_ticks"));
-        assertEquals(1,result(handle).facts().get("movement_steps")); assertTrue(parent.isSettled());
+        var handle = move(137); var parent = work(handle);
+        advance(); assertTrue(position.get().y > -19); assertEquals(0,position.get().x); assertFalse(parent.isSettled());
+        drain();
+        assertEquals(SUCCEEDED,result(handle).outcome()); assertEquals(0,position.get().y); assertTrue(position.get().x > 0);
+        int settling = ((Number)result(handle).facts().get("spawn_settlement_ticks")).intValue();
+        assertTrue(settling > 0 && settling <= 4);
+        assertEquals(137,result(handle).facts().get("simulated_duration_ms")); assertTrue(parent.isSettled());
     }
-
     @Test void walkingUsesNativeSpeedSlopeAndTheRemainingShortFrameInBothDirections() {
         FootholdTree slope = new FootholdTree(new Point(-500,-500),new Point(500,500));
         slope.insert(new Foothold(new Point(-100,-20),new Point(100,20),42));
         when(map.getFootholds()).thenReturn(slope);
         when(character.getTotalMoveSpeedStat()).thenReturn(140);
-        var right = move(150); clock.next(); lane.all(); clock.next(); lane.all();
-        assertEquals(SUCCEEDED,result(right).outcome()); assertEquals(new Point(25,5),position.get());
-        assertEquals(2,result(right).facts().get("movement_steps"));
-        var left = move("LEFT",100); clock.next(); lane.all();
-        assertEquals(SUCCEEDED,result(left).outcome()); assertEquals(new Point(8,2),position.get());
+        var right = move(137); drain();
+        assertEquals(SUCCEEDED,result(right).outcome()); assertTrue(position.get().x > 0);
+        assertTrue(Math.abs(position.get().y-position.get().x*0.2) <= 1);
+        assertEquals(137,result(right).facts().get("simulated_duration_ms"));
+        int rightX = position.get().x;
+        var left = move("LEFT",100); drain();
+        assertEquals(SUCCEEDED,result(left).outcome()); assertTrue(position.get().x < rightX);
+        assertTrue(Math.abs(position.get().y-position.get().x*0.2) <= 1);
     }
-
-    @Test void eitherWallOrientationRejectsWalkingBeforeAnyNativeDisplacement() {
+    @Test void eitherWallOrientationPreventsWalkingAcrossTheWall() {
         FootholdTree tree = map.getFootholds();
         tree.insert(new Foothold(new Point(8,-50),new Point(8,50),43));
         tree.insert(new Foothold(new Point(-8,50),new Point(-8,-50),44));
-        assertMoveRejected("RIGHT","movement_wall_blocked");
-        assertMoveRejected("LEFT","movement_wall_blocked");
-        assertEquals(new Point(0,0),position.get()); verify(map,never()).movePlayer(any(),any());
+        var right = move(100); drain(); assertTrue(position.get().x < 8, result(right)+" at "+position.get());
+        position.set(new Point(0,0));
+        var left = move("LEFT",100); drain(); assertTrue(position.get().x > -8, result(left)+" at "+position.get());
+        assertTrue(right.result().toCompletableFuture().isDone()); assertTrue(left.result().toCompletableFuture().isDone());
     }
-
     @Test void walkingCannotLeaveItsFootholdMapOrNativePacketCoordinateRange() {
-        position.set(new Point(395,0)); assertMoveRejected("RIGHT","movement_foothold_edge");
+        position.set(new Point(395,0)); var edge = move(100); drain();
+        assertTrue(position.get().x <= 400); assertEquals(FAILED,result(edge).outcome());
+        assertEquals("movement_foothold_edge",result(edge).facts().get("stop_reason"));
+        assertFalse((Boolean)result(edge).facts().get("completed_duration"));
         position.set(new Point(0,0)); when(map.getMapArea()).thenReturn(new Rectangle(-10,-10,20,20));
-        assertMoveRejected("RIGHT","movement_map_boundary");
+        var boundary = move(100); drain(); assertTrue(map.getMapArea().contains(position.get()));
+        assertEquals(FAILED,result(boundary).outcome(), result(boundary)+" at "+position.get());
         position.set(new Point(40000,0)); assertMoveRejected("RIGHT","movement_position_out_of_range");
-        verify(map,never()).movePlayer(any(),any());
     }
-
     @Test void unsupportedTerrainAndNativeRoleStatesCannotStartWalkingOrSpawnSettlement() {
         FootholdTree steep = new FootholdTree(new Point(-500,-500),new Point(500,500));
         steep.insert(new Foothold(new Point(-100,-100),new Point(100,100),42));
@@ -280,42 +319,42 @@ class NativeMovementActionsTest {
         assertMoveRejected("RIGHT","movement_mode_unsupported");
         when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(null); stance.set(14);
         assertMoveRejected("RIGHT","movement_mode_unsupported");
-        stance.set(4); when(map.getFootholdSpeed()).thenReturn(0.5f);
+        stance.set(4); when(map.getFootholdSpeed()).thenReturn(Float.NaN);
         assertMoveRejected("RIGHT","movement_surface_unsupported");
         when(map.getFootholdSpeed()).thenReturn(1.0f); when(character.getHp()).thenReturn(0);
         assertMoveRejected("RIGHT","movement_actor_dead");
         verify(map,never()).movePlayer(any(),any());
     }
-
     private void assertMoveRejected(String direction, String reason) {
         var parent = context.acceptWork();
         var handle = service.prepareMove(server,context,parent,scene,new NativeMovementAction(direction,100),() -> {});
-        service.submitMove(handle); clock.all(); lane.all();
+        service.submitMove(handle); drain();
         assertEquals(FAILED,result(handle).outcome()); assertEquals(reason,result(handle).fixedReason());
         assertFalse(handle.dispatchStarted()); assertTrue(parent.isSettled());
         assertEquals(0,context.scope().resources().snapshot().outstanding());
     }
-
     @Test void aLaterStopGetsItsOwnRealIdleDispatchInsteadOfBorrowingAnOlderStopCheckpoint() {
-        var moving = move(1000); clock.next(); lane.all();
+        when(map.getFootholdSpeed()).thenReturn(0.2f);
+        var moving = move(1000); for (int i = 0; i < 8; i++) advance();
         var firstWork = context.acceptWork(); var first = service.prepareStop(server,context,firstWork,scene,() -> {});
-        service.submitMove(first); lane.all(); assertTrue(first.dispatchStarted()); assertFalse(firstWork.isSettled());
+        service.submitMove(first); advance(); assertTrue(first.dispatchStarted()); assertFalse(firstWork.isSettled());
         var secondWork = context.acceptWork(); var second = service.prepareStop(server,context,secondWork,scene,() -> {});
-        service.submitMove(second); assertFalse(second.dispatchStarted()); lane.all(); assertTrue(second.dispatchStarted());
-        clock.next(); lane.all();
+        service.submitMove(second); assertFalse(second.dispatchStarted()); advance(); assertTrue(second.dispatchStarted());
+        drain();
         assertEquals(SUCCEEDED,result(first).outcome()); assertEquals(SUCCEEDED,result(second).outcome());
-        assertEquals(CANCELLED,result(moving).outcome()); verify(map,times(3)).movePlayer(eq(character),any());
+        assertEquals(CANCELLED,result(moving).outcome());
     }
     @Test void aRegisteredWorldStopTicketAllowsExactLocalClockCleanupBeforeTheScopeExplicitlyJoins() {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
+        var moving = move(1000); var parent = work(moving); advance();
+        int observedAt = position.get().x;
         var stop = ExecutionScope.tryBeginWorldStop().orElseThrow();
-        clock.next(); lane.all();
+        drain();
         assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
         runtime.beginClose(Optional.of(stop)); assertTrue(runtime.snapshot().modules().isEmpty());
-        verify(map,times(1)).movePlayer(eq(character),any());
+        assertEquals(observedAt,position.get().x);
     }
     @Test void aTemporarilyUnavailableCleanupHandshakeCanBeRetriedByTheActualModuleStopSignal() throws Exception {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
+        var moving = move(1000); var parent = work(moving); advance();
         Field active = NativeMovementActions.class.getDeclaredField("active"); active.setAccessible(true);
         Object job = active.get(service); Field registration = job.getClass().getDeclaredField("registration"); registration.setAccessible(true);
         ScopeResources.Registration original = (ScopeResources.Registration)registration.get(job);
@@ -323,10 +362,10 @@ class NativeMovementActionsTest {
         doThrow(new ExecutionScope.Invalid("resource_cleanup_window_expired"))
                 .doAnswer(call -> original.acquireCleanup()).when(unavailable).acquireCleanup();
         registration.set(job,unavailable);
-        context.cancel(parent); clock.next(); lane.all();
+        context.cancel(parent); advance();
         assertFalse(parent.isSettled()); assertFalse(moving.result().toCompletableFuture().isDone());
         assertSame(job,active.get(service)); assertEquals(1,context.scope().resources().snapshot().outstanding());
-        var stopped = runtime.stop(context.reference(),CharacterRuntime.StopMode.UNLOAD);
+        var stopped = runtime.stop(context.reference(),CharacterRuntime.StopMode.UNLOAD); drain();
         assertEquals(CANCELLED,result(moving).outcome()); assertTrue(parent.isSettled()); assertTrue(stopped.complete());
         assertEquals(0,context.scope().resources().snapshot().outstanding()); assertNull(active.get(service));
     }
@@ -337,39 +376,102 @@ class NativeMovementActionsTest {
             var reentrant = move(100);
             assertEquals(FAILED,result(reentrant).outcome()); assertEquals("movement_busy",result(reentrant).fixedReason());
         });
-        clock.next(); lane.all(); assertion.toCompletableFuture().join(); assertTrue(parent.isSettled());
-        var next = move(100); clock.next(); lane.all();
-        assertEquals(SUCCEEDED,result(next).outcome()); assertEquals(24,position.get().x);
-        assertEquals(Map.of("x",12,"y",0),result(moving).facts().get("after"));
+        drain(); assertion.toCompletableFuture().join(); assertTrue(parent.isSettled());
+        int firstX = position.get().x;
+        var next = move(100); drain();
+        assertEquals(SUCCEEDED,result(next).outcome()); assertTrue(position.get().x > firstX);
+        assertEquals(Map.of("x",firstX,"y",0),result(moving).facts().get("after"));
     }
-
     @Test void completedDurationWithoutDisplacementRemainsAFailureEvenWhenCancellationArrivesAtDispatch() {
         when(character.getTotalMoveSpeedStat()).thenReturn(1);
-        var moving = move(100); var parent = work(moving);
-        doAnswer(call -> { context.cancel(parent); return null; }).when(map).movePlayer(eq(character),any());
-        clock.next(); lane.all();
+        var moving = move(100); var parent = work(moving); var packets = new AtomicInteger();
+        doAnswer(call -> { if (packets.incrementAndGet() == 2) context.cancel(parent); return null; }).when(map).movePlayer(eq(character),any());
+        drain();
         assertEquals(FAILED,result(moving).outcome()); assertEquals(new Point(0,0),position.get());
         assertTrue((Boolean)result(moving).facts().get("completed_duration"));
         assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
-        var after = move(100); clock.next(); lane.all(); assertEquals(FAILED,result(after).outcome());
+        var after = move(100); drain(); assertEquals(FAILED,result(after).outcome());
     }
-
     @Test void aResultReductionFailureCannotStrandAnAlreadyReleasedClockAndRealParentCarrier() throws Exception {
-        var moving = move(1000); var parent = work(moving); clock.next(); lane.all();
+        var moving = move(1000); var parent = work(moving); advance();
         Field active = NativeMovementActions.class.getDeclaredField("active"); active.setAccessible(true);
         Object job = active.get(service); Field reason = job.getClass().getDeclaredField("reason"); reason.setAccessible(true);
-        reason.set(job,"invalid internal reason"); context.cancel(parent); clock.next(); lane.all();
+        reason.set(job,"invalid internal reason"); context.cancel(parent); drain();
         assertThrows(java.util.concurrent.CompletionException.class, () -> result(moving));
         assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
         assertNull(active.get(service));
-        var after = move(100); clock.next(); lane.all(); assertEquals(SUCCEEDED,result(after).outcome());
+        var after = move(100); drain(); assertEquals(SUCCEEDED,result(after).outcome());
+    }
+    @Test void iceAcceleratesThenSlidesAfterTheRequestedInputUntilNativeIdleAndDrain() {
+        when(map.getFootholdSpeed()).thenReturn(0.2f);
+        var moving = move(400); var parent = work(moving);
+        int previous = 0, firstDelta = 0, finalDelta = 0;
+        for (int i = 0; i < 8; i++) {
+            advance(); int delta = position.get().x-previous;
+            if (i == 0) firstDelta = delta;
+            finalDelta = delta; previous = position.get().x;
+        }
+        int releasedAt = position.get().x;
+        assertTrue(finalDelta > firstDelta); assertFalse(parent.isSettled());
+        advance(); assertTrue(position.get().x > releasedAt); assertFalse(parent.isSettled());
+        drain();
+        assertEquals(SUCCEEDED,result(moving).outcome()); assertEquals(4,stance.get());
+        assertTrue((Boolean)result(moving).facts().get("native_idle_observed"));
+        assertTrue(parent.isSettled()); assertEquals(0,clock.size());
+        assertEquals(0,context.scope().resources().snapshot().outstanding());
+    }
+    @Test void spikedShoesUseOrdinaryRulesAndChangingShoesStopsTheOldIceTask() {
+        var ordinary = move(400); drain();
+        var ordinaryAfter = result(ordinary).facts().get("after");
+        long ordinaryElapsed = ((Number)result(ordinary).facts().get("actual_elapsed_ms")).longValue();
+        position.set(new Point(0,0));
+        when(map.getFootholdSpeed()).thenReturn(0.2f);
+        var ice = move(400); drain(); long iceElapsed = ((Number)result(ice).facts().get("actual_elapsed_ms")).longValue();
+        position.set(new Point(0,0)); shoe.set(spikedShoe());
+        var spiked = move(400); drain();
+        assertEquals(SUCCEEDED,result(spiked).outcome());
+        long spikedElapsed = ((Number)result(spiked).facts().get("actual_elapsed_ms")).longValue();
+        assertTrue(spikedElapsed < iceElapsed);
+        assertEquals(ordinaryElapsed,spikedElapsed);
+        assertEquals(ordinaryAfter,result(spiked).facts().get("after"));
+        position.set(new Point(0,0)); shoe.set(null);
+        var changing = move(2000); var parent = work(changing);
+        for (int i = 0; i < 6; i++) advance();
+        shoe.set(spikedShoe()); drain();
+        assertEquals(FAILED,result(changing).outcome()); assertEquals("attributes_changed",result(changing).fixedReason());
+        assertFalse((Boolean)result(changing).facts().get("completed_duration"));
+        assertTrue((Boolean)result(changing).facts().get("native_idle_observed"));
+        assertTrue(parent.isSettled()); assertEquals(0,context.scope().resources().snapshot().outstanding());
+    }
+
+    @Test void removingSpikesNearTheEdgeRetainsMomentumUntilTheNewIceRulesLandAndStop() {
+        when(map.getFootholdSpeed()).thenReturn(0.2f);
+        map.getFootholds().insert(new Foothold(new Point(400,80),new Point(590,80),2));
+        position.set(new Point(350,0)); shoe.set(spikedShoe());
+        var moving = move(1000); var parent = work(moving);
+        int inputFrames = 0;
+        while (position.get().x < 388 && !parent.isSettled() && inputFrames++ < 12) advance();
+        int changedAt = position.get().x;
+        assertTrue(changedAt >= 388 && changedAt < 400, "held input must remain on its original foothold");
+        assertEquals(0,position.get().y); assertFalse(parent.isSettled());
+        shoe.set(null);
+        drain();
+        var stopped = result(moving);
+        assertEquals(FAILED,stopped.outcome()); assertEquals("attributes_changed",stopped.fixedReason());
+        assertFalse((Boolean)stopped.facts().get("completed_duration"));
+        assertTrue(position.get().x >= 400 && position.get().x <= 590);
+        assertEquals(80,position.get().y, "cleanup must complete the actual fall onto the lower foothold");
+        assertTrue((Boolean)stopped.facts().get("native_idle_observed"));
+        assertTrue((Boolean)stopped.facts().get("movement_stopped"));
+        assertTrue(parent.isSettled()); assertEquals(0,clock.size()); assertEquals(0,lane.size());
+        assertEquals(0,context.scope().resources().snapshot().outstanding());
     }
 
     private static final class ManualClock implements NativeMovementActions.Wakeups {
         final AtomicLong now = new AtomicLong(); final ArrayDeque<Runnable> queue = new ArrayDeque<>();
-        public void schedule(Runnable body,int delayMs) { assertEquals(100,delayMs); queue.add(body); }
+        public void schedule(Runnable body,int delayMs) { assertEquals(50,delayMs); queue.add(body); }
         int size() { return queue.size(); }
-        void next() { now.addAndGet(TimeUnit.MILLISECONDS.toNanos(100)); queue.remove().run(); }
+        void next() { now.addAndGet(TimeUnit.MILLISECONDS.toNanos(50)); queue.remove().run(); }
         void all() { int limit=100; while(!queue.isEmpty() && limit-->0)next(); assertTrue(limit>0); }
     }
     private static final class ManualExecutor extends AbstractExecutorService implements CharacterCommandLane.SerialBoundedExecutor {

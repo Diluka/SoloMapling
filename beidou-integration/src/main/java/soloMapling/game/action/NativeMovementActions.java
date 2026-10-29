@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.handlers.MovePlayerHandler;
+import soloMapling.ArtificialPlayer.GCMoveSystem.RuntimeNavigationEngine;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.context.WorldEpoch;
@@ -32,7 +33,7 @@ import static soloMapling.game.action.NativeActionService.SubmissionStatus.*;
 
 /** Module-owned bounded movement. Timers only wake; every native write uses the original character lane. */
 public final class NativeMovementActions {
-    public static final int TICK_MS = 100;
+    public static final int TICK_MS = 50;
     @FunctionalInterface interface Wakeups { void schedule(Runnable body, int delayMs); }
     private static final class TimerHolder {
         private static final ScheduledThreadPoolExecutor TIMER = new ScheduledThreadPoolExecutor(1, task -> {
@@ -48,11 +49,14 @@ public final class NativeMovementActions {
         return Map.ofEntries(Map.entry("directions", List.of("LEFT", "RIGHT")),
                 Map.entry("minimum_duration_ms", 100), Map.entry("maximum_duration_ms", 3000),
                 Map.entry("tick_interval_ms", TICK_MS), Map.entry("maximum_tick_delay_grace_ms", TICK_MS),
-                Map.entry("terrain", "ordinary_ground_same_foothold_only"),
-                Map.entry("spawn_settlement", Map.of("maximum_gap_px", 24, "maximum_ticks", 2,
+                Map.entry("terrain", "ordinary_and_ice_same_foothold_only"),
+                Map.entry("ground_rules", Map.of("anti_slip_sources", List.of("equipped_shoe_wz_fs", "equipped_shoe_SPIKES"),
+                        "anti_slip_on_ice", "ordinary_ground_physics", "slip_changes_maximum_speed", false,
+                        "attribute_change", "stop_old_task_and_finish_with_current_rules")),
+                Map.entry("spawn_settlement", Map.of("maximum_gap_px", 24, "maximum_ticks", 4,
                         "gravity_px_per_second_squared", 2000, "maximum_extra_duration_ms", 200)),
-                Map.entry("excluded", List.of("jump", "general_fall", "swim", "ladder", "rope", "mount", "ice", "disease_slow", "teleport", "navigation")),
-                Map.entry("stop_semantics", "stop_future_steps_then_verify_native_idle_and_drain"),
+                Map.entry("excluded", List.of("jump", "general_fall", "swim", "ladder", "rope", "mount", "disease_slow", "teleport", "navigation")),
+                Map.entry("stop_semantics", "release_input_then_glide_or_brake_until_native_idle_and_drain"),
                 Map.entry("clock_cancel_is_drain_proof", false));
     }
 
@@ -107,6 +111,8 @@ public final class NativeMovementActions {
         final Map<MoveHandle, Pending> stopInputs = new IdentityHashMap<>();
         final int mapId, worldId, channelId;
         ScopeResources.Registration registration;
+        RuntimeNavigationEngine.GroundSession motion;
+        NativeMovementGeometry.GroundBounds bounds;
         Step step;
         Pending idleInput;
         int wakeups;
@@ -119,7 +125,7 @@ public final class NativeMovementActions {
         int initialX, initialY, lastX, lastY;
         long started;
         boolean initialized, stopRequested, idleRequested, idleObserved, finishing, finished, retryCleanup;
-        boolean handlerError;
+        boolean handlerError, stopUnverified;
         String reason;
         Job(MoveHandle primary, Pending input) {
             this.primary = primary; this.input = input;
@@ -132,6 +138,7 @@ public final class NativeMovementActions {
         final boolean idle;
         final int elapsedMs;
         ExecutionScope.WorkHandle work;
+        ScopeResources.CleanupAttempt cleanup;
         boolean entered, dispatched;
         Step(Pending input, boolean idle, int elapsedMs) { this.input = input; this.idle = idle; this.elapsedMs = elapsedMs; }
     }
@@ -204,7 +211,7 @@ public final class NativeMovementActions {
                     }
                 }
                 job.registration = input.context.scope().resources().beginOwnedResult(input.work, "movement_clock");
-                job.registration.attach(job, () -> requestStop(job, "movement_module_stopped", false));
+                job.registration.attach(job, () -> requestStop(job, "movement_module_stopped", job.primary.dispatched));
                 if ("move".equals(handle.action)) schedule(job);
             });
             handle.initialized = true;
@@ -240,7 +247,8 @@ public final class NativeMovementActions {
     }
     private void schedule(Job job) {
         synchronized (monitor) {
-            if (job.stopRequested || job.finished || job.wakeups != 0) return;
+            if (job.finished || job.wakeups != 0
+                    || job.stopRequested && (!job.idleRequested || job.idleObserved || !sameWorld(job.input))) return;
             job.wakeups++;
         }
         try { wakeups.schedule(() -> wake(job), TICK_MS); }
@@ -263,15 +271,18 @@ public final class NativeMovementActions {
     }
     private void drive(Job job) {
         boolean idle;
+        boolean clockedStop = false;
         int elapsed;
         synchronized (monitor) {
             if (!job.initialized || job.finished || job.finishing || job.step != null) return;
             if (job.stopRequested) {
                 if (!job.idleRequested || job.idleObserved && job.stops.stream().allMatch(stop -> stop.dispatched)
-                        || !job.input.context.scope().isActive() || !sameWorld(job.input)) {
-                    // An already scheduled wakeup is allowed to exit naturally; Future.cancel is not a drain proof.
+                        || !sameWorld(job.input)) {
                     elapsed = 0; idle = false;
-                } else { elapsed = 0; idle = true; }
+                } else {
+                    elapsed = TICK_MS; idle = true;
+                    clockedStop = !job.idleObserved && job.callbacks == 0 && (job.motion != null || job.spawning && job.primary.dispatched);
+                }
             } else {
                 long realElapsed = Math.max(0, TimeUnit.NANOSECONDS.toMillis(nanos.getAsLong() - job.walkingStarted));
                 elapsed = job.spawning ? TICK_MS
@@ -280,7 +291,8 @@ public final class NativeMovementActions {
                 idle = false;
             }
         }
-        if (elapsed > 0 || idle) submitStep(job, idle, elapsed);
+        if (clockedStop) schedule(job);
+        else if (elapsed > 0 || idle) submitStep(job, idle, elapsed);
         else maybeFinish(job);
     }
     private void submitStep(Job job, boolean idle, int elapsedMs) {
@@ -292,11 +304,17 @@ public final class NativeMovementActions {
             step = new Step(input, idle, elapsedMs); job.step = step;
         }
         try {
-            ExecutionScope.WorkHandle work = input.context.acceptWork(); step.work = work;
+            step.cleanup = idle ? job.registration.acquireCleanup() : null;
+            ExecutionScope.WorkHandle work = step.cleanup == null ? input.context.acceptWork() : step.cleanup.work();
+            step.work = work;
             work.completion().whenComplete((fact, failure) -> stepSettled(job, step));
-            input.context.submit("movement", work, input.preflight, () -> runStep(job, step), () -> { });
+            if (step.cleanup == null) input.context.submit("movement", work, input.preflight, () -> runStep(job, step), () -> {});
+            else input.context.submitCleanup(step.cleanup, () -> runStep(job, step), () -> {});
         } catch (Throwable failure) {
-            synchronized (monitor) { job.reason = reason(failure); job.stopRequested = true; job.idleRequested = false; }
+            synchronized (monitor) {
+                job.reason = reason(failure); job.stopRequested = true;
+                job.idleRequested = job.primary.dispatched && sameWorld(job.input);
+            }
             if (step.work != null && !step.work.snapshot().carrierClaimed()) step.work.reject();
             else if (step.work == null) {
                 synchronized (monitor) { if (job.step == step) job.step = null; }
@@ -318,64 +336,99 @@ public final class NativeMovementActions {
             }
         });
         try {
+            if (step.cleanup != null) step.cleanup.permit().requireExecuting(job);
             if (!step.idle) {
                 synchronized (monitor) {
                     if (job.stopRequested || input.work.cancelRequested()) return;
                     long deadlineStart = job.spawning ? job.started : job.walkingStarted;
                     int deadlineMs = job.spawning ? 200 : input.action.durationMs();
                     if (nanos.getAsLong() - deadlineStart > TimeUnit.MILLISECONDS.toNanos(deadlineMs + TICK_MS)) {
-                        job.reason = "movement_duration_elapsed"; job.stopRequested = true; job.idleRequested = true; return;
+                        job.reason = "movement_duration_elapsed"; job.stopRequested = true; job.idleRequested = job.primary.dispatched; return;
                     }
                 }
             }
             context.requireCurrent();
-            Point before = input.scene.actor().character().getPosition();
+            if (step.idle) job.stopUnverified = false;
+            var actor = input.scene.actor().character();
+            Point before = actor.getPosition();
             int x, y, foothold, velocity, vertical = 0;
-            boolean settling = !step.idle && job.spawning;
+            byte stance;
+            boolean settling = job.spawning;
             boolean landed = false;
-            if (step.idle) {
-                x = before.x; y = before.y; velocity = 0;
-                var ground = input.scene.map().getFootholds().findBelow(new Point(x, y - 5));
-                foothold = ground == null ? 0 : ground.getId();
-            } else if (settling) {
-                var next = NativeMovementGeometry.settle(input.scene.actor().character(), input.scene.map(), job.verticalVelocity);
-                if (job.spawnFrames >= 2 || job.spawnFoothold != 0 && job.spawnFoothold != next.footholdId()) {
+            boolean stable = false;
+            if (settling) {
+                var next = NativeMovementGeometry.settle(actor, input.scene.map(), job.verticalVelocity, step.elapsedMs);
+                if (job.spawnFrames >= 4 || job.spawnFoothold != 0 && job.spawnFoothold != next.footholdId()) {
                     throw new NativeActionService.Invalid("movement_spawn_settlement_rejected");
                 }
                 x = next.x(); y = next.y(); foothold = next.footholdId(); velocity = 0;
                 vertical = next.verticalVelocity(); landed = next.landed();
+                stance = (byte) (4 | actor.getStance() & 1);
+            } else if (step.idle && job.motion == null) {
+                x = before.x; y = before.y; velocity = 0;
+                var ground = input.scene.map().getFootholds().findBelow(new Point(x, y - 5));
+                foothold = ground == null ? 0 : ground.getId();
+                stance = (byte) (4 | actor.getStance() & 1);
+                stable = true;
             } else {
-                var next = NativeMovementGeometry.step(input.scene.actor().character(), input.scene.map(), input.action.direction(), step.elapsedMs);
-                x = next.x(); y = next.y(); foothold = next.footholdId(); velocity = next.velocity();
+                if (job.motion == null) {
+                    job.bounds = NativeMovementGeometry.groundBounds(actor, input.scene.map());
+                    job.motion = RuntimeNavigationEngine.groundMotion(actor, job.bounds.minimumX(), job.bounds.maximumX());
+                }
+                if (!step.idle) {
+                    NativeMovementGeometry.requireOrdinaryMovementMode(actor, input.scene.map());
+                    if (job.motion.attributesChanged()) {
+                        synchronized (monitor) { job.reason = "attributes_changed"; job.stopRequested = true; job.idleRequested = true; }
+                        return;
+                    }
+                }
+                var next = job.motion.nextFrame(job.input.action != null && job.input.action.direction().equals("LEFT") ? -1 : 1,
+                        step.idle, step.elapsedMs);
+                if (step.idle) NativeMovementGeometry.requireCleanupFrame(input.scene.map(), before, next);
+                else NativeMovementGeometry.requireGroundStep(actor, input.scene.map(), before, next);
+                x = next.position().x; y = next.position().y; foothold = next.footholdId();
+                velocity = next.velocityX(); vertical = next.velocityY(); stance = (byte) next.stance();
+                stable = next.stable();
             }
-            byte stance = (byte) (step.idle || settling ? 4 | input.scene.actor().character().getStance() & 1
-                    : "LEFT".equals(input.action.direction()) ? 3 : 2);
             ByteBuf packet = Unpooled.buffer(24).writeZero(9).writeByte(1).writeByte(0)
                     .writeShortLE(x).writeShortLE(y).writeShortLE(velocity).writeShortLE(vertical)
-                    .writeShortLE(foothold).writeByte(stance).writeShortLE(step.idle ? 0 : step.elapsedMs);
+                    .writeShortLE(foothold).writeByte(stance).writeShortLE(step.elapsedMs);
             context.dispatch(new MovePlayerHandler(), packet);
-            Point after = input.scene.actor().character().getPosition();
+            Point after = actor.getPosition();
             synchronized (monitor) {
                 job.handlerError |= context.handlerError();
                 job.lastX = after.x; job.lastY = after.y;
-                if (after.x != x || after.y != y || input.scene.actor().character().getMap() != input.scene.map()) {
+                if (after.x != x || after.y != y || actor.getMap() != input.scene.map() || actor.getStance() != stance) {
                     job.reason = "native_movement_outcome_unknown"; job.stopRequested = true; job.idleRequested = false;
-                } else if (step.idle) job.idleObserved = input.scene.actor().character().getStance() == stance;
-                else if (settling) {
+                } else if (settling) {
                     job.spawnFrames++; job.verticalVelocity = vertical; job.spawnFoothold = foothold;
                     if (landed) { job.spawning = false; job.walkingStarted = nanos.getAsLong(); }
                 } else {
-                    job.steps++; job.simulatedMs += step.elapsedMs;
-                    if (job.simulatedMs >= input.action.durationMs()
-                            || nanos.getAsLong() - job.walkingStarted >= TimeUnit.MILLISECONDS.toNanos(input.action.durationMs())) {
-                        job.stopRequested = true; job.idleRequested = true;
+                    if (job.motion != null) job.motion.acceptFrame();
+                    if (step.idle) job.idleObserved = stable;
+                    else {
+                        job.steps++;
+                        if (job.motion.boundaryReached()) {
+                            job.reason = job.input.action.direction().equals("LEFT") ? job.bounds.leftReason() : job.bounds.rightReason();
+                            job.stopRequested = true; job.idleRequested = true;
+                        } else {
+                            job.simulatedMs += step.elapsedMs;
+                            if (job.simulatedMs >= input.action.durationMs()
+                                    || nanos.getAsLong() - job.walkingStarted >= TimeUnit.MILLISECONDS.toNanos(input.action.durationMs())) {
+                                job.stopRequested = true; job.idleRequested = true;
+                            }
+                        }
                     }
                 }
             }
         } catch (Throwable failure) {
             synchronized (monitor) {
                 job.handlerError |= context.handlerError(); job.reason = reason(failure);
-                job.stopRequested = true; job.idleRequested = false;
+                job.stopRequested = true;
+                job.stopUnverified = step.idle && job.primary.dispatched && sameWorld(job.input)
+                        && !(failure instanceof GameContext.Invalid);
+                job.idleRequested = !step.idle && job.primary.dispatched && sameWorld(job.input)
+                        && !(failure instanceof GameContext.Invalid);
             }
         }
     }
@@ -389,10 +442,10 @@ public final class NativeMovementActions {
                 if (!step.entered || step.work.snapshot().rejected()) {
                     job.reason = "movement_tick_not_dispatched"; job.stopRequested = true; job.idleRequested = false;
                 }
-                if (step.idle && !job.idleObserved) { job.stopRequested = true; job.idleRequested = false; }
                 next = !job.stopRequested;
             }
-            if (next) schedule(job); else drive(job);
+            if (next || job.idleRequested && !job.idleObserved && sameWorld(job.input)) schedule(job);
+            else drive(job);
         } finally {
             synchronized (monitor) { job.callbacks--; }
             maybeFinish(job);
@@ -401,12 +454,14 @@ public final class NativeMovementActions {
     private void maybeFinish(Job job) {
         synchronized (monitor) {
             if (!job.initialized || !job.stopRequested || job.finished || job.finishing || job.step != null
-                    || job.wakeups != 0 || job.callbacks != 0 || job.stops.stream().anyMatch(stop -> !stop.initialized)) return;
+                    || job.wakeups != 0 || job.callbacks != 0 || job.stops.stream().anyMatch(stop -> !stop.initialized)
+                    || job.idleRequested && sameWorld(job.input) && (!job.idleObserved
+                    || job.stops.stream().anyMatch(stop -> !stop.dispatched))) return;
             job.finishing = true; job.retryCleanup = false;
         }
-        String cleanupFailure = null;
+        String cleanupFailure = job.stopUnverified && sameWorld(job.input) ? "movement_stop_unverified" : null;
         try {
-            if (job.registration != null) {
+            if (cleanupFailure == null && job.registration != null) {
                 if (job.registration.identity() == null) job.registration.confirmAbsent();
                 else {
                     var cleanup = job.registration.acquireCleanup();
@@ -427,7 +482,7 @@ public final class NativeMovementActions {
             // Keep the exact resource and carrier available to that original cleanup handshake.
             if (retry) { maybeFinish(job); return; }
             WorldEpoch.State world = WorldEpoch.snapshot();
-            if (world.active() && world.token() != job.input.work.acceptedEpoch()
+            if (job.stopUnverified || world.active() && world.token() != job.input.work.acceptedEpoch()
                     || job.input.context.scope().snapshot().state() != ExecutionScope.State.ACTIVE) {
                 complete(job.primary, job.input, INDETERMINATE, cleanupFailure, facts(job), job.handlerError);
                 for (MoveHandle stop : List.copyOf(job.stops)) {
@@ -444,7 +499,7 @@ public final class NativeMovementActions {
         boolean interrupted = job.input.work.cancelRequested() || !job.stops.isEmpty() || !sameWorld(job.input);
         NativeActionResult.Outcome outcome = "native_movement_outcome_unknown".equals(job.reason) ? INDETERMINATE
                 : "stop".equals(job.primary.action) ? job.idleObserved ? SUCCEEDED : FAILED
-                : completed ? moved ? SUCCEEDED : FAILED : interrupted ? CANCELLED : FAILED;
+                : completed ? moved && job.idleObserved ? SUCCEEDED : FAILED : interrupted ? CANCELLED : FAILED;
         if (outcome == SUCCEEDED && !job.primary.dispatched) outcome = FAILED;
         String reason = outcome == SUCCEEDED ? null : job.reason == null ? "native_movement_not_observed" : job.reason;
         completeAndSettle(job.primary, job.input, outcome, reason, facts, job.handlerError);
@@ -470,7 +525,9 @@ public final class NativeMovementActions {
         facts.put("actual_elapsed_ms", Math.max(0, TimeUnit.NANOSECONDS.toMillis(nanos.getAsLong() - job.started)));
         facts.put("spawn_settlement_ticks", job.spawnFrames);
         facts.put("completed_duration", job.input.action != null && job.simulatedMs >= job.input.action.durationMs());
-        facts.put("moving", false); facts.put("movement_stopped", true); facts.put("native_idle_observed", job.idleObserved);
+        facts.put("moving", !job.idleObserved && job.primary.dispatched && sameWorld(job.input));
+        facts.put("movement_stopped", job.idleObserved || !job.primary.dispatched);
+        facts.put("native_idle_observed", job.idleObserved);
         facts.put("stop_reason", job.reason == null ? "duration_completed" : job.reason);
         return facts;
     }
