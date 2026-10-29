@@ -108,7 +108,7 @@ python3 beidou-integration/scripts/build.py --help
 ## #263 类型配置与 #122 导航接入
 
 - 当前源码通过 `solomapling.robot-population-config` 读取单个路径或有序文件列表；未指定时仅读取内置默认文件。后文件按类型名完整替换同名 `types`，按类型名覆盖 `initial_population`，合并后一次编译装配计划及核对引用。每轮世界启动只创建一次初始人口；运行期通过 `robots.create/remove` 增减完整实例，文件与实例模块组合保持固定。
-- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主策略放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
+- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/combat/native-actions/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主策略放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
 - `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾；可选调用参数`timeout_ms`取1..120000ms，实际取与模块配置期限的较小值，供组合动作传递剩余预算。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
 - 脚本默认期限30秒、最大120秒，调用者取消持续关联到提供者work。导航自身默认30秒、8px容差、3秒无进展；真实抵达、失败、已发生位移和实际停止分别核验。源码和部署结果以#122/#263证据为准，参考 `docs/robot-runtime/population.md`、`navigation.md` 及脚本调试技能。
 
@@ -184,3 +184,13 @@ python3 beidou-integration/scripts/build.py --help
 - `RuntimeModule` 统一可装载模块的激活、停止与卸载生命周期。`ActionModule` 表达既定目标内的动作能力，`StrategyModule` 选择或切换目标及约束，并决定发起、继续或中断任务。两个职责接口不绑定模块级唯一输入和结果；每项 `ModuleFunction<M, I, R>` 操作分别声明业务输入、结果、完成条件及handler，同一模块可以提供多个异构操作。具体类名分别使用 `<Name>ActionModule`、`<Name>StrategyModule`。MCP控制和世界人口入口继续使用通用生命周期协议。
 - `NavigationActionModule.MOVE_TO` 使用 `MoveToRequest → NavigationResult`；共享目录适配JSON参数与结果，Java/脚本消费同一类型化handler。`RobotPopulationModule` 的创建、移除各自声明输入、结果及完成条件。目录通过Bound.prepare在受理前完成一次校验与解码；Bound.invoke保留Java强类型入口，导出集合保持异构操作。配置类型 `navigation`、导出 `navigation.moveTo`、`mcp_test` 和既有实例标识保持原契约。导出work执行一次，实际原生短命令使用提供者scope的新work进入角色唯一lane。
 - 父模块在构造或初始化阶段创建内部组合与私有状态，单项操作复用这些状态。内部子模块的工作、资源和最终收尾纳入父模块scope；目录中独立提供者保持自己的scope，沿调用链传递取消、期限并等待实际收尾。内部结果由父模块解释、业务结果由具体R表达、提供者可用性由共享目录表达。持续动作和动作组合按这一边界接入。源码、隔离及实际部署证据以对应Issue记录为准。
+
+
+## #271 简化战斗动作与 #275 原生动作
+
+- `CombatActionModule.ENGAGE` 声明 `CombatRequest → CombatResult`，共享名 `combat.engage`。父模块在角色绑定后初始化当前职业及祖先路径，复用旧 `BotAttackConfig/BotBuffConfig/BotAttackProfile/BotDamageModel`；34个冒险家职业节点及BEGINNER保持完整继承，单体、群攻、大招分别回溯，Buff按祖先顺序累计。Thief武器、Cleric亡灵Heal、ShadowPartner按旧规则；实际HP、死亡、经验和掉落分别核对。
+- 交战目标、允许命中集合、冷却和Buff节奏归模块实例，一次同步调用完成接敌、持续攻击及本次收尾。导航沿同一共享目录传剩余期限，实际短命令使用提供者新work和角色唯一lane。`combat-action`只声明本实例的持续交战控制；已有MCP基本攻击的控制边界保留。
+- `NativeActionModule` 类型为 `native-actions`，按操作声明强类型输入输出；首环 `REVIVE` 提供空参数 `native.revive`，使用独立 `revive` control，与MCP、导航同时装配。普通请求编码来自北斗1.12完整ChangeMapHandler，原事件先裁决，标准路径沿原Character.respawn，不传外部地图/坐标/任意封包。
+- 复活在原生派发点确认死亡；原本存活、实际复活、事件接管仍未复活及未知后态分别表达。合法换图后继续沿原CharacterRef及epoch确认HP和新场景，既发效果保留；处理器返回、事件裁决、真实复活及事件后续任务完成分别核对。模块只收尾本次原lane工作，EIM/EM仍归原所有者，不能把Future/operation已终态当实际排空。
+- 兼容层用Solo普通Java回调承载延时金币/机关掉落，避免ITD lambda引用不存在的宿主synthetic方法；原事件脚本的 `respawn(eim,MapleMap)` 转交原int重载。官方submodule与脚本保持原样。
+- 长期 `mcp_test` 显式装配combat与native-actions；临时测试类型和材料只放未提交的RobotPopulation.local.yaml。完整公共契约、职业清单、脚本使用与实际交付证据见 `docs/robot-runtime/modules.md`、`combat.md`、`combat-jobs.md`、`native-actions.md` 及对应Issue；源码与各层实测状态分别记录。
