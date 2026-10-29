@@ -2,6 +2,7 @@ package soloMapling.game.population;
 
 import org.gms.client.BotClient;
 import org.gms.client.Character;
+import org.gms.config.GameConfig;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
@@ -57,6 +58,11 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             character.setMap(map);
             character.setPosition(portal.getPosition());
             character.setStance(5);
+            // Initialize only this V2 origin, once; map changes must not multiply rates again.
+            character.resetPlayerRates();
+            if (GameConfig.getServerBoolean("use_add_rates_by_level")) character.setPlayerRates();
+            character.setWorldRates();
+            character.updateCouponRates();
             received = new EnvironmentRobotOrigin(server, new GameContext.CharacterRef(
                     runtime.acceptedEpoch(), character, client, world, channel));
             resource.adopt(received);
