@@ -8,7 +8,8 @@ from tests.helpers import BridgeStub, envelope
 
 
 STREAM_PATH = "/solo/acceptance/v1/script/stream"
-RUN_PATH = STREAM_PATH + "?since_output=0"
+RUN_PATH = "/solo/acceptance/v1/script/run"
+STREAM_RUN_PATH = STREAM_PATH + "?since_output=0"
 CANCEL_PATH = "/solo/acceptance/v1/script/cancel"
 SCRIPT_ARGS = {
     "session_id": "session-script-fixture", "expected_generation": 7,
@@ -90,7 +91,7 @@ class ScriptStub(BridgeStub):
         self.http.RequestHandlerClass = DisconnectableHandler
 
     def default_response(self, request: dict) -> tuple[int, object]:
-        if request["path"].startswith(STREAM_PATH):
+        if request["path"] == RUN_PATH or request["path"].startswith(STREAM_PATH):
             return 200, envelope(script_operation(request["body"]["requestId"], status=self.script_status,
                                                   error=self.script_error,
                                                   closed=request["body"]["data"]["operation"] == "close"))

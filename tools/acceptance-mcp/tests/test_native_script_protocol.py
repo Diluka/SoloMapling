@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import json
+from pathlib import Path
+import tempfile
 from threading import Event
 import unittest
 
@@ -26,17 +28,20 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self) -> None:
         self.stub = ScriptStub().start()
+        self.directory = tempfile.TemporaryDirectory()
+        self.output_file = Path(self.directory.name) / "output.ndjson"
 
     async def asyncTearDown(self) -> None:
         await asyncio.to_thread(self.stub.stop)
+        self.directory.cleanup()
 
-    async def test_stdio_progress_receives_output_before_completion_with_unicode_and_channels(self) -> None:
+    async def test_stdio_file_receives_output_before_completion_with_unicode_and_channels(self) -> None:
         release = Event()
-        observed = asyncio.Event()
         notifications = []
         operation = script_operation(NATIVE_ARGS["request_id"])
         operation["result"].update(stdout="开始😀\n", stderr="B中文\n")
         association = {"request_id": NATIVE_ARGS["request_id"], "operation_id": operation["operation_id"]}
+        self.output_file.write_text('{"previous":true}\n', encoding="utf-8")
 
         def stream(request):
             yield {"type": "started", **association}
@@ -52,28 +57,85 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             yield {"type": "result", "operation": operation}
 
         async def progress(value, total, message):
-            event = json.loads(message)
-            notifications.append((value, event))
-            if event["type"] == "output" and event["seq"] == 1:
-                observed.set()
+            notifications.append(message)
 
         self.stub.stream_responder = stream
         async with self.stdio_client() as client:
-            running = asyncio.create_task(client.call_tool("script_run", deepcopy(NATIVE_ARGS), progress_callback=progress))
+            running = asyncio.create_task(client.call_tool("script_run", {
+                **NATIVE_ARGS, "output_file": str(self.output_file)}, progress_callback=progress))
             try:
-                await asyncio.wait_for(observed.wait(), 4)
-                self.assertFalse(running.done(), "首段输出已到达时，脚本应仍在等待后续执行。")
-                self.assertEqual("开始😀\n", notifications[-1][1]["text"])
+                async with asyncio.timeout(4):
+                    while "开始😀" not in self.output_file.read_text(encoding="utf-8"):
+                        await asyncio.sleep(0.01)
+                self.assertFalse(running.done(), "首段输出已写入文件时，脚本仍应等待后续执行。")
+                written = [json.loads(line) for line in self.output_file.read_text(encoding="utf-8").splitlines()]
+                self.assertEqual([{"previous": True}, {"type": "started", **association}, {
+                    "type": "output", **association, "seq": 1, "channel": "stdout",
+                    "text": "开始😀\n", "output_truncated": False}], written)
             finally:
                 release.set()
             result = await asyncio.wait_for(running, 4)
-        self.assertEqual([1, 2, 3], [item[0] for item in notifications])
-        self.assertEqual(["stdout", "stderr"], [event["channel"] for _, event in notifications if event["type"] == "output"])
+        written = [json.loads(line) for line in self.output_file.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(["stdout", "stderr"], [event["channel"] for event in written if event.get("type") == "output"])
+        self.assertEqual([1, 2], [event["seq"] for event in written if event.get("type") == "output"])
+        self.assertFalse(any(event.get("type") == "result" for event in written))
+        self.assertEqual([], notifications)
         self.assertEqual(operation, result.structured_content)
+        request = next(request for request in self.stub.requests if request["path"].startswith(STREAM_PATH))
+        self.assertNotIn("output_file", request["body"]["data"])
+        self.assertNotIn("error_file", request["body"]["data"])
+
+    async def test_stdio_routes_stderr_to_separate_or_only_error_file(self) -> None:
+        error_file = Path(self.directory.name) / "error.ndjson"
+        operation = script_operation(NATIVE_ARGS["request_id"])
+        operation["result"].update(stdout="正常输出\n", stderr="诊断😀\n")
+        self.stub.stream_responder = lambda request: self.stub.operation_events(request, operation)
+        async with self.stdio_client() as client:
+            result = await client.call_tool("script_run", {
+                **NATIVE_ARGS, "output_file": str(self.output_file), "error_file": str(error_file)})
+            self.assertEqual(operation, result.structured_content)
+            output = [json.loads(line) for line in self.output_file.read_text(encoding="utf-8").splitlines()]
+            errors = [json.loads(line) for line in error_file.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(["started", "output"], [event["type"] for event in output])
+            self.assertEqual(["正常输出\n"], [event["text"] for event in output if event["type"] == "output"])
+            self.assertEqual(["诊断😀\n"], [event["text"] for event in errors])
+            self.assertEqual(["stderr"], [event["channel"] for event in errors])
+            output_before = self.output_file.read_bytes()
+            result = await client.call_tool("script_run", {**NATIVE_ARGS, "error_file": str(error_file)})
+        self.assertEqual(operation, result.structured_content)
+        self.assertEqual(output_before, self.output_file.read_bytes())
+        errors = [json.loads(line) for line in error_file.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(["诊断😀\n", "诊断😀\n"], [event["text"] for event in errors])
+
+    async def test_output_file_open_failure_rejects_before_submitting_script(self) -> None:
+        async with self.stdio_client() as client:
+            result = await client.call_tool("script_run", {
+                **NATIVE_ARGS, "output_file": str(Path(self.directory.name) / "missing" / "output.ndjson")})
+        self.assertTrue(result.is_error)
+        self.assertEqual("OUTPUT_FILE_UNAVAILABLE", result.structured_content["error"]["code"])
+        self.assertFalse(result.structured_content["error"]["outcome_unknown"])
+        self.assertEqual([], self.stub.requests)
+
+    async def test_file_write_failure_keeps_written_output_and_requests_backend_cancel(self) -> None:
+        operation = script_operation(NATIVE_ARGS["request_id"])
+        operation["result"].update(stdout="失败前的输出\n", stderr="触发写入失败\n")
+        self.stub.stream_responder = lambda request: self.stub.operation_events(request, operation)
+        async with self.stdio_client() as client:
+            result = await client.call_tool("script_run", {
+                **NATIVE_ARGS, "output_file": str(self.output_file), "error_file": "/dev/full"})
+        self.assertTrue(result.is_error)
+        self.assertEqual("OUTPUT_WRITE_FAILED", result.structured_content["error"]["code"])
+        self.assertTrue(result.structured_content["error"]["outcome_unknown"])
+        written = [json.loads(line) for line in self.output_file.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual("失败前的输出\n", written[-1]["text"])
+        cancels = [request for request in self.stub.requests if request["path"] == CANCEL_PATH]
+        self.assertEqual(1, len(cancels))
+        self.assertEqual(NATIVE_ARGS["request_id"], cancels[0]["body"]["data"]["target_request_id"])
+        self.assertNotIn("output_file", cancels[0]["body"]["data"])
+        self.assertNotIn("error_file", cancels[0]["body"]["data"])
 
     async def test_same_request_recovers_output_from_cursor_and_queries_its_window(self) -> None:
-        notifications = []
-        arguments = {**NATIVE_ARGS, "since_output": 4}
+        arguments = {**NATIVE_ARGS, "since_output": 4, "output_file": str(self.output_file)}
         operation = script_operation(NATIVE_ARGS["request_id"])
         association = {"request_id": NATIVE_ARGS["request_id"], "operation_id": operation["operation_id"]}
         output = {"type": "output", **association, "seq": 7, "channel": "stdout",
@@ -92,21 +154,21 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                 return 200, envelope(operation)
             return self.stub.default_response(request)
 
-        async def progress(value, total, message):
-            notifications.append(json.loads(message))
-
         self.stub.stream_responder = stream
         self.stub.responder = respond
         async with self.stdio_client() as client:
-            result = await client.call_tool("script_run", arguments, progress_callback=progress)
+            result = await client.call_tool("script_run", arguments)
             queried = await client.call_tool("operation_get", {"operation_id": operation["operation_id"],
                                                                "since_output": 4})
-        self.assertEqual(["started", "gap", "output"], [event["type"] for event in notifications])
+        written = [json.loads(line) for line in self.output_file.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(["started", "gap", "output"], [event["type"] for event in written])
+        self.assertEqual(output, written[-1])
         self.assertEqual(operation, result.structured_content)
         self.assertEqual(operation["script_output"], queried.structured_content["script_output"])
         request = next(request for request in self.stub.requests if request["path"].startswith(STREAM_PATH))
         self.assertTrue(request["path"].endswith("?since_output=4"))
         self.assertNotIn("since_output", request["body"]["data"])
+        self.assertNotIn("output_file", request["body"]["data"])
         self.assertEqual(NATIVE_ARGS["request_id"], request["body"]["requestId"])
 
     async def test_flat_schema_requires_kind_operation_and_has_no_environment_parameter(self) -> None:

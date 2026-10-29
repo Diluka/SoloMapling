@@ -11,7 +11,7 @@
 | `operation_get` | 查询操作、当前角色会话、生命周期事件及已保留脚本输出 | 只读，返回成功不代表操作已成功 |
 | `operation_cancel` | 请求取消排队或进行中的操作 | 必须继续查询实际终态；必须有 request_id |
 | `game_act` | 在真实 actor 场景中排队已开放的聊天、NPC 及运行体基本动作，当前源码包含十三动作 | 写操作，可能消耗或移除物品；必须有 request_id 和实际 expected_context |
-| `script_run` | 按kind/operation执行北斗原脚本，实时发送输出并返回最终JSON结果 | 必须有request_id；可保留上下文并产生实际游戏副作用 |
+| `script_run` | 按kind/operation执行北斗原脚本，可选实时写入本地文件并返回最终JSON结果 | 必须有request_id；可保留上下文并产生实际游戏副作用 |
 | `game_command` | 对已登记在线调试角色执行完整原生命令文本 | 写操作；须有 request_id 和 expected_command_generation；不经过角色 lane |
 
 通用命令的配置、目标、调用事实与原 ID 恢复见[管理指令说明](../../docs/mcp-acceptance/commands.md)。新增工具不扩大 `game_act` 范围，后端未启用时不公告为可用能力。
@@ -101,9 +101,11 @@ enabled = true
 | `game_act(…, action="npc_cancel", parameters={"dialogue_version":123})` | 同一路由，版本必须来自当前实际 actor 对话 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":123,"kind":"select","selection":0})` | 同一路由，只能选择当前完整 offer 中已审查的项目 |
 | `game_act(…, action="npc_reply", parameters={"dialogue_version":124,"kind":"decline"})` | 同一路由，拒绝实际 type12 按钮，不带 selection |
-| `script_run(session_id="…", expected_generation=1, request_id="npc-start-unique-1", kind="npc", operation="start", options={"npc_id":1032110}, since_output=0)` | `POST /solo/acceptance/v1/script/stream?since_output=0`，data为角色目标及平铺kind/operation/context_id/options/entry/args/source/parameters/timeout_ms |
+| `script_run(session_id="…", expected_generation=1, request_id="npc-start-unique-1", kind="npc", operation="start", options={"npc_id":1032110})` | `POST /solo/acceptance/v1/script/run`；提供输出文件时改用 `/script/stream?since_output=0`。data为角色目标及平铺kind/operation/context_id/options/entry/args/source/parameters/timeout_ms |
 
-`script_run` 的中间输出经 MCP progress 通知交付，`message` 为带请求／操作ID的 JSON 事件。官方 SDK 调用 `client.call_tool(..., progress_callback=...)` 可在最终结果前接收 `started/output/gap`；完整事件字段和示例见[实时输出](../../docs/robot-runtime/script-execution.md#输出和结果)。`since_output` 默认0，恢复时使用原请求及已收到的最后输出序号；`operation_get.script_output` 提供保留窗口与缺失标记。
+`script_run` 可通过 `output_file` 将 `started/output/gap` 事件实时写入 MCP 所在机器的文件。只提供该路径时合并 stdout/stderr；另提供 `error_file` 可分流 stderr 事件，只提供 `error_file` 时仅记录 stderr。文件按 UTF-8 NDJSON 追加写入，每条立即刷新，执行期间可用 `tail -f` 读取。建议使用绝对路径，父目录须已存在；相对路径以 MCP 进程工作目录为基准。文件打开失败在脚本提交前返回，文件路径不发送给游戏后端，也不参与执行身份。
+
+未提供文件时只返回最终结果，所有调用均不发送 MCP progress 通知。完整事件字段和示例见[实时输出](../../docs/robot-runtime/script-execution.md#输出和结果)。`since_output` 默认0，恢复时使用原请求及已保存的最后输出序号；`operation_get.script_output` 提供保留窗口与缺失标记。文件采用追加模式，使用较早游标会追加重读片段。
 
 成功读取北斗 `{code:20000,data:{…}}` 后，返回原生 data 的 `structured_content` 和 JSON 文本。HTTP、业务或参数失败返回 `is_error=true` 与固定错误码，不回显后端错误正文、JWT 或凭据。
 

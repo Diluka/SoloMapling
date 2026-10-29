@@ -192,6 +192,7 @@ def validate_script_run(
     source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
     context_id: str | None = None, options: Any = _SCRIPT_DEFAULT,
     entry: str | None = None, args: Any = _SCRIPT_DEFAULT, since_output: int = 0,
+    output_file: str | None = None, error_file: str | None = None,
 ) -> None:
     validate_script_target(session_id, expected_generation)
     validate_identifier(request_id, "request_id", REQUEST_IDENTIFIER)
@@ -201,6 +202,10 @@ def validate_script_run(
         raise BridgeError("INVALID_ARGUMENTS", "source 必须是有界 Unicode 脚本。")
     validate_integer(timeout_ms, "timeout_ms", 1, SCRIPT_MAX_TIMEOUT_MS)
     validate_integer(since_output, "since_output", 0, MAX_LONG)
+    for label, path in (("output_file", output_file), ("error_file", error_file)):
+        if path is not None and (not isinstance(path, str) or not path or "\x00" in path
+                                 or any(0xD800 <= ord(char) <= 0xDFFF for char in path)):
+            raise BridgeError("INVALID_ARGUMENTS", label + " 必须是非空 Unicode 文件路径。")
     if (not isinstance(kind, str) or kind not in NATIVE_SCRIPT_KINDS
             or not isinstance(operation, str) or operation not in NATIVE_SCRIPT_OPERATIONS):
         raise BridgeError("INVALID_ARGUMENTS", "kind 或 operation 不受支持。")
@@ -478,7 +483,7 @@ class BridgeClient:
         options: dict[str, Any], args: list[Any], source: str = "",
         parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
         context_id: str | None = None, entry: str | None = None, since_output: int = 0,
-        on_event: Callable[[dict[str, Any]], Awaitable[None]],
+        on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         # Freeze the complete validated native invocation before run and cancel
         # cross independent HTTP connections. Defaults are explicit in both.
@@ -491,9 +496,10 @@ class BridgeClient:
         # Keep run + cleanup within the host tool's 45-second window even when
         # ordinary observation HTTP requests use the configurable 30 seconds.
         budget = timeout_ms / 1000 + SCRIPT_CLEANUP_SECONDS
-        request = asyncio.create_task(self._script_stream(
-            data, request_id, since_output, on_event, budget,
-        ))
+        request = asyncio.create_task(
+            self._mutation("/solo/acceptance/v1/script/run", data, request_id, timeout_seconds=budget)
+            if on_event is None else self._script_stream(data, request_id, since_output, on_event, budget)
+        )
         try:
             try:
                 return await asyncio.wait_for(asyncio.shield(request), timeout=budget)
@@ -591,7 +597,7 @@ class BridgeClient:
             code, message = "OPERATION_CONFLICT", "请求与当前角色会话或操作状态冲突。"
         elif failure.http_status == 410:
             code, message = "SESSION_EXPIRED", "角色会话或操作已失效。"
-        unknown = code in {"HTTP_TIMEOUT", "HTTP_UNAVAILABLE", "INVALID_RESPONSE"}
+        unknown = failure.outcome_unknown or code in {"HTTP_TIMEOUT", "HTTP_UNAVAILABLE", "INVALID_RESPONSE"}
         unknown |= failure.http_status is not None and failure.http_status >= 500
         raise BridgeError(code, message, http_status=failure.http_status, backend_code=failure.backend_code,
                           request_id=request_id, outcome_unknown=unknown) from None

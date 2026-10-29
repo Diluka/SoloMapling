@@ -59,20 +59,19 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 实时读取执行输出
 
-`script_run` 执行期间通过 MCP progress 通知发送 `started/output/gap`，`message` 是 JSON 文本。首条消息包含本次 `request_id` 和 `operation_id`；输出消息包含 `seq/channel/text/output_truncated`。官方 Python SDK 使用 `progress_callback` 接收：
+在 `script_run` 参数中提供 `output_file`，即可在执行期间读取该文件中的 `started/output/gap` 事件。首条消息包含本次 `request_id` 和 `operation_id`；输出消息包含 `seq/channel/text/output_truncated`。只提供 `output_file` 时合并 stdout/stderr；另提供 `error_file` 可单独记录 stderr 事件。只提供 `error_file` 时仅记录 stderr。
 
 ```python
-import json
-
-async def receive(progress, total, message):
-    event = json.loads(message)
-    if event["type"] == "output":
-        print(event["text"], end="", flush=True)
-
-result = await client.call_tool("script_run", invocation, progress_callback=receive)
+result = await client.call_tool("script_run", {
+    **invocation,
+    "output_file": "/absolute/debug/script-output.ndjson",
+    "error_file": "/absolute/debug/script-errors.ndjson",
+})
 ```
 
-保存最后收到的输出 `seq`。连接中断后，以原请求和完整执行参数、原 `request_id` 加 `since_output` 恢复读取；已知操作ID时，通过 `operation_get(operation_id, since_output=...)` 的 `script_output` 读取保留窗口。`gap/cursor_expired` 表明窗口缺失，`output_truncated` 表明输出达到预算。客户端的通知展示按实际宿主验证，最终响应继续提供 JSON 结果、错误和真实收尾状态。
+文件属于 MCP 进程所在机器，按 UTF-8 NDJSON 追加写入并逐条刷新。父目录须已存在，建议使用绝对路径；相对路径按 MCP 工作目录解析。调用前打开文件，打开失败时脚本尚未提交。执行期间可在另一终端运行 `tail -f /absolute/debug/script-output.ndjson`。未提供文件时只返回最终结果，调用不发送 MCP progress 通知。
+
+保存最后收到的输出 `seq`。连接中断后，以原请求和完整执行参数、原 `request_id` 加 `since_output` 恢复读取；文件路径可改，执行身份保持原参数。文件采用追加模式，使用较早游标会重复记录重读片段。已知操作ID时，通过 `operation_get(operation_id, since_output=...)` 的 `script_output` 读取保留窗口。`gap/cursor_expired` 表明窗口缺失，`output_truncated` 表明输出达到预算。最终响应继续提供 JSON 结果、错误和真实收尾状态。
 
 ## 判断结果与关闭
 
