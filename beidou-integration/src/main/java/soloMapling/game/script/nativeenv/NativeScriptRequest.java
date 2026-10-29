@@ -7,4 +7,6 @@ import java.util.Map;
 public record NativeScriptRequest(String kind, String operation, String contextId, Map<String, Object> options,
                                   String entry, List<Object> args, String source, Map<String, Object> parameters,
                                   long timeoutMs) {
+    public static final long DEFAULT_TIMEOUT_MS = 30_000;
+    public static final long MAX_TIMEOUT_MS = 120_000;
 }

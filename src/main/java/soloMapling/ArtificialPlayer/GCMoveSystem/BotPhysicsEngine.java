@@ -367,8 +367,8 @@ final class BotPhysicsEngine {
      * returns null. Movement must check for null and return early without applying ground actions.
      */
     static Foothold syncAndDetectGround(BotMovementState entry, Character bot) {
-        syncGroundPosition(entry, bot.getPosition().x);
-        Foothold fh = findGroundFoothold(bot.getMap(), bot.getPosition());
+        syncGroundPosition(entry, entry.position().x);
+        Foothold fh = findGroundFoothold(bot.getMap(), entry.position());
         if (fh == null) {
             beginFall(entry, bot, 0);
         }
@@ -686,7 +686,7 @@ final class BotPhysicsEngine {
     }
 
     static void teleportTo(BotMovementState entry, Character bot, Point position) {
-        bot.setPosition(position);
+        entry.position(position);
         clearMovementState(entry, position);
         syncCharacterState(entry);
     }
@@ -698,7 +698,7 @@ final class BotPhysicsEngine {
      * airborne tick lands it and broadcasts the fall. Use only when ground exists below spawn.
      */
     static void beginPortalDrop(BotMovementState entry, Character bot, Point spawn) {
-        bot.setPosition(spawn);
+        entry.position(spawn);
         clearMovementState(entry, spawn);
         entry.inAir = true;
         entry.velY = 0f;
@@ -707,12 +707,12 @@ final class BotPhysicsEngine {
     }
 
     static void markDead(BotMovementState entry, Character bot) {
-        clearMovementState(entry, bot.getPosition());
+        clearMovementState(entry, entry.position());
         syncCharacterState(entry);
     }
 
     static void idleOnGround(BotMovementState entry, Character bot) {
-        Point position = bot.getPosition();
+        Point position = entry.position();
         entry.inAir = false;
         entry.climbing = false;
         entry.climbRope = null;
@@ -766,7 +766,7 @@ final class BotPhysicsEngine {
             // Do not route this through launchAirborne's packet velocity
             // conversion: that path expects px/tick and emits a huge one-tick
             // velocity when given swim px/s.
-            Point position = bot.getPosition();
+            Point position = entry.position();
             entry.climbing = false;
             entry.climbRope = null;
             entry.inAir = true;
@@ -790,26 +790,26 @@ final class BotPhysicsEngine {
             syncCharacterState(entry);
             return;
         }
-        launchAirborne(entry, bot, bot.getPosition(), -jumpForcePerTick(entry.movementProfile), airVelX, false);
+        launchAirborne(entry, bot, entry.position(), -jumpForcePerTick(entry.movementProfile), airVelX, false);
     }
 
     static void beginClimbUpJump(BotMovementState entry, Character bot, int airVelX) {
         entry.blockedRopeGrab = null;
-        launchAirborne(entry, bot, bot.getPosition(), -jumpForcePerTick(entry.movementProfile), airVelX, true);
+        launchAirborne(entry, bot, entry.position(), -jumpForcePerTick(entry.movementProfile), airVelX, true);
     }
 
     static void beginJumpOffRope(BotMovementState entry, Character bot, int airVelX) {
         entry.blockedRopeGrab = null;
-        launchAirborne(entry, bot, bot.getPosition(), -ropeJumpForcePerTick(entry.movementProfile), airVelX, false);
+        launchAirborne(entry, bot, entry.position(), -ropeJumpForcePerTick(entry.movementProfile), airVelX, false);
     }
 
     static void beginRopeTransferJump(BotMovementState entry, Character bot, Rope sourceRope, int airVelX) {
         entry.blockedRopeGrab = sourceRope;
-        launchAirborne(entry, bot, bot.getPosition(), -ropeJumpForcePerTick(entry.movementProfile), airVelX, true);
+        launchAirborne(entry, bot, entry.position(), -ropeJumpForcePerTick(entry.movementProfile), airVelX, true);
     }
 
     static void beginDownJump(BotMovementState entry, Character bot) {
-        if (!canStartDownJump(bot.getMap(), bot.getPosition())) {
+        if (!canStartDownJump(bot.getMap(), entry.position())) {
             entry.downJumpPending = false;
             entry.downJumpGracePeriodMS = 0L;
             entry.crouching = false;
@@ -817,7 +817,7 @@ final class BotPhysicsEngine {
             return;
         }
         entry.blockedRopeGrab = null;
-        launchAirborne(entry, bot, bot.getPosition(), -downJumpForcePerTick(), 0, false);
+        launchAirborne(entry, bot, entry.position(), -downJumpForcePerTick(), 0, false);
         entry.downJumpGracePeriodMS = cfg.DOWN_JUMP_GRACE_MS;
     }
 
@@ -829,7 +829,7 @@ final class BotPhysicsEngine {
             syncCharacterState(entry);
             return;
         }
-        Point position = bot.getPosition();
+        Point position = entry.position();
         if (position == null || Math.abs(position.x - rope.x()) > cfg.ROPE_GRAB_X) {
             syncCharacterState(entry);
             return;
@@ -843,18 +843,18 @@ final class BotPhysicsEngine {
     }
 
     private static void beginFall(BotMovementState entry, Character bot, int airVelX) {
-        beginFall(entry, bot, bot.getPosition(), airVelX);
+        beginFall(entry, bot, entry.position(), airVelX);
     }
 
     private static void beginFall(BotMovementState entry, Character bot, Point position, int airVelX) {
         entry.blockedRopeGrab = null;
-        bot.setPosition(new Point(position));
+        entry.position(new Point(position));
         launchAirborne(entry, bot, position, 0f, airVelX, false);
     }
 
     static void beginKnockback(BotMovementState entry, Character bot, Point position, float initialVelY, int airVelX) {
         int preservedFacingDir = entry.facingDir;
-        bot.setPosition(position);
+        entry.position(position);
         entry.blockedRopeGrab = null;
         launchAirborne(entry, bot, position, initialVelY, airVelX, true);
         entry.facingDir = preservedFacingDir;
@@ -863,7 +863,7 @@ final class BotPhysicsEngine {
 
     static void applyAirKnockback(BotMovementState entry, Character bot, int airVelX) {
         int preservedFacingDir = entry.facingDir;
-        Point position = bot.getPosition();
+        Point position = entry.position();
         entry.inAir = true;
         entry.climbing = false;
         entry.climbRope = null;
@@ -897,7 +897,7 @@ final class BotPhysicsEngine {
         double fallDistance = Double.isFinite(entry.fallPeakPhysY)
                 ? Math.max(0.0, position.y - entry.fallPeakPhysY)
                 : 0.0;
-        bot.setPosition(position);
+        entry.position(position);
         entry.inAir = false;
         entry.climbing = false;
         entry.climbRope = null;
@@ -933,7 +933,7 @@ final class BotPhysicsEngine {
 
         // Contact-damage extension: render fall damage for the just-completed drop. Self-gates on LOD
         // and on the fall-distance threshold; must run before fallPeakPhysY resets below.
-        BotContactDamage.applyFallDamage(entry, bot, (float) fallDistance);
+        if (!entry.projectsMotion()) BotContactDamage.applyFallDamage(entry, bot, (float) fallDistance);
         entry.fallPeakPhysY = Double.POSITIVE_INFINITY;
     }
 
@@ -960,7 +960,7 @@ final class BotPhysicsEngine {
             return;
         }
 
-        int nextY = bot.getPosition().y + climbDir * climbStepPerTick();
+        int nextY = entry.position().y + climbDir * climbStepPerTick();
         if (resolveClimbBoundary(entry, bot, rope, nextY)) {
             return;
         }
@@ -974,7 +974,7 @@ final class BotPhysicsEngine {
             beginFall(entry, bot, 0);
             return;
         }
-        if (resolveClimbBoundary(entry, bot, rope, bot.getPosition().y)) {
+        if (resolveClimbBoundary(entry, bot, rope, entry.position().y)) {
             return;
         }
 
@@ -999,7 +999,7 @@ final class BotPhysicsEngine {
      */
     static GroundMotion applyGroundMotion(BotMovementState entry, Character bot, Foothold foothold) {
         MapleMap map = bot.getMap();
-        Point currentPos = bot.getPosition();
+        Point currentPos = entry.position();
         int desiredDir = entry.moveDir;
         if (desiredDir == 0) {
             // Standing intent while still sliding on slippery ground: glide like a player,
@@ -1023,7 +1023,7 @@ final class BotPhysicsEngine {
         }
 
         Point position = step.point();
-        bot.setPosition(position);
+        entry.position(position);
         entry.inAir = false;
         entry.climbing = false;
         entry.climbRope = null;
@@ -1219,7 +1219,7 @@ final class BotPhysicsEngine {
     static void applySwimMotion(BotMovementState entry) {
         Character bot = entry.bot;
         MapleMap map = bot.getMap();
-        Point pos = bot.getPosition();
+        Point pos = entry.position();
         double t = tickS();
 
         // First tick after entering swim mode: rebase the integrator on the bot's
@@ -1362,7 +1362,7 @@ final class BotPhysicsEngine {
         entry.swimming = true;
         entry.inAir = true;
 
-        bot.setPosition(new Point((int) Math.round(nextX), (int) Math.round(nextY)));
+        entry.position(new Point((int) Math.round(nextX), (int) Math.round(nextY)));
     }
 
     private static double clampMagnitude(double value, double maxAbs) {
@@ -1434,7 +1434,7 @@ final class BotPhysicsEngine {
     }
 
     private static void applyAirbornePosition(BotMovementState entry, Character bot, Point position) {
-        bot.setPosition(position);
+        entry.position(position);
         entry.inAir = true;
         entry.climbing = false;
         entry.climbRope = null;
@@ -1511,7 +1511,7 @@ final class BotPhysicsEngine {
         entry.fixedAirArc = false;
         entry.physX = collisionPoint.x;
         entry.physY = collisionPoint.y;
-        bot.setPosition(collisionPoint);
+        entry.position(collisionPoint);
         entry.inAir = true;
         entry.climbing = false;
         entry.climbRope = null;
@@ -1525,7 +1525,7 @@ final class BotPhysicsEngine {
         entry.fixedAirArc = false;
         entry.physX = collisionPoint.x;
         entry.physY = collisionPoint.y;
-        bot.setPosition(collisionPoint);
+        entry.position(collisionPoint);
         entry.inAir = true;
         entry.climbing = false;
         entry.climbRope = null;
@@ -1536,8 +1536,8 @@ final class BotPhysicsEngine {
 
     static MovementSnapshot movementSnapshot(BotMovementState entry) {
         int stance = resolveStance(entry);
-        if (entry.bot != null && entry.bot.getStance() != stance) {
-            entry.bot.setStance(stance);
+        if (entry.bot != null && entry.stance() != stance) {
+            entry.stance(stance);
         }
         // Broadcast-only alert substitution. The server-side Character.stance above keeps the
         // logical stance (STAND/WALK/etc.); only the wire byte gets ALERT when the alert timer
@@ -1609,7 +1609,7 @@ final class BotPhysicsEngine {
         if (bot == null) {
             return;
         }
-        bot.setStance(resolveStance(entry));
+        entry.stance(resolveStance(entry));
     }
 
     static float calculateMaxJumpHeight() {
@@ -1913,7 +1913,7 @@ final class BotPhysicsEngine {
 
     private static void setClimbPosition(BotMovementState entry, Character bot, Rope rope, int y) {
         Point position = new Point(rope.x(), y);
-        bot.setPosition(position);
+        entry.position(position);
         entry.climbing = true;
         entry.climbRope = rope;
         entry.inAir = false;

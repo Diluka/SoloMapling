@@ -59,6 +59,20 @@ public final class NativeMovementActions {
     public NativeMovementActions() {
         this((body, delay) -> TimerHolder.TIMER.schedule(body, delay, TimeUnit.MILLISECONDS), System::nanoTime);
     }
+
+    /** Apply one server-calculated navigation frame from the owning role lane. */
+    public static boolean dispatchNavigationFrame(Server server, GameContext.SceneRef scene,
+                                                   ExecutionScope.WorkHandle work, Point position,
+                                                   int velocityX, int velocityY, int stance,
+                                                   int footholdId, int durationMs) {
+        var context = new NativeBasicActions.Context(server, scene, work, "navigation");
+        ByteBuf packet = Unpooled.buffer(24).writeZero(9).writeByte(1).writeByte(0)
+                .writeShortLE(position.x).writeShortLE(position.y)
+                .writeShortLE(velocityX).writeShortLE(velocityY).writeShortLE(footholdId)
+                .writeByte(stance).writeShortLE(durationMs);
+        context.dispatch(new MovePlayerHandler(), packet);
+        return !context.handlerError();
+    }
     NativeMovementActions(Wakeups wakeups, LongSupplier nanos) {
         this.wakeups = Objects.requireNonNull(wakeups); this.nanos = Objects.requireNonNull(nanos);
     }

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import soloMapling.game.script.nativeenv.NativeScriptRequest;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -29,7 +30,7 @@ public record ActorScriptRequest(
         options = options == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(options));
         args = args == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(args));
         parameters = parameters == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(parameters));
-        timeoutMs = timeoutMs == null ? 1000L : timeoutMs;
+        timeoutMs = timeoutMs == null ? NativeScriptRequest.DEFAULT_TIMEOUT_MS : timeoutMs;
     }
 
     public static final class Deserializer extends JsonDeserializer<ActorScriptRequest> {

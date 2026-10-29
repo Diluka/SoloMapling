@@ -9,6 +9,7 @@ import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.env.StandardEnvironment;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
@@ -20,6 +21,7 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.population.RobotPopulationService;
 
 import java.time.Duration;
 import java.util.Map;
@@ -68,7 +70,9 @@ class AcceptanceActorExecutionTest {
         executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
                 Thread.ofVirtual().uncaughtExceptionHandler((thread, failure) -> { }).factory(),
                 new ThreadPoolExecutor.AbortPolicy());
-        execution = new AcceptanceActorExecution(backend, "helper-module", WorldEpoch.snapshot().token(), executor);
+        RobotPopulationService population = new RobotPopulationService(new StandardEnvironment());
+        population.onWorldStarted();
+        execution = new AcceptanceActorExecution(backend, "helper-module", WorldEpoch.snapshot().token(), executor, population);
     }
 
     @AfterEach

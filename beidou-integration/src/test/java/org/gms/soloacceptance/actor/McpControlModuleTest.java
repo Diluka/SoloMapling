@@ -62,7 +62,7 @@ class McpControlModuleTest {
     void theModuleDeclaresOnlyItsControlsAndCannotOperateBeforeHostActivation() {
         McpControlModule inactive = McpControlModule.DEFINITION.factory().apply(Map.of());
         assertEquals("mcp-control", McpControlModule.DEFINITION.typeId());
-        assertEquals(Set.of("chat", "interaction", "inventory", "movement", "combat"), McpControlModule.DEFINITION.controls());
+        assertEquals(Set.of("chat", "interaction", "inventory", "combat"), McpControlModule.DEFINITION.controls());
         assertEquals(new ExecutionScope.Limits(16, 2, 16, 2), McpControlModule.DEFINITION.limits());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::context).reason());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::acceptWork).reason());

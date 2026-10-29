@@ -102,7 +102,10 @@ public final class ActorControlController {
         // request's identity available when Spring completes the async streaming response.
         streamSecurityContext.saveContext(SecurityContextHolder.getContext(), servletRequest, servletResponse);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/x-ndjson"))
-                .header("Cache-Control", "no-store").header("X-Accel-Buffering", "no").body(stream);
+                .header("Cache-Control", "no-store").header("X-Accel-Buffering", "no").body(output -> {
+                    servletRequest.getAsyncContext().setTimeout(request.getData().timeoutMs() + 5_000);
+                    stream.writeTo(output);
+                });
     }
 
     @PostMapping("/script/cancel")

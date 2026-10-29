@@ -178,7 +178,7 @@ class BotMovementManager {
     }
 
     static void resetEntryState(BotMovementState entry) {
-        BotPhysicsEngine.resetMotion(entry, entry.bot.getPosition());
+        BotPhysicsEngine.resetMotion(entry, entry.position());
         clearTransientState(entry);
     }
 
@@ -213,7 +213,7 @@ class BotMovementManager {
             Character bot = entry.bot;
             // Null rope is handled inside advanceClimb/holdClimb — they call beginFall internally.
             BotPhysicsEngine.tickMotionTimers(entry);
-            Point botPos = bot.getPosition();
+            Point botPos = entry.position();
             int dy = targetPos.y - botPos.y;
             int dxOwner = targetPos.x - entry.climbRope.x();
 
@@ -331,7 +331,7 @@ class BotMovementManager {
             BotPhysicsEngine.tickMotionTimers(entry);
 
             Character bot = entry.bot;
-            Point botPos = bot.getPosition();
+            Point botPos = entry.position();
 
             if (successfullyGrabbedRope(entry, bot, botPos)) {
                 return;
@@ -357,7 +357,7 @@ class BotMovementManager {
 
             BotPhysicsEngine.AirborneStepResult result = BotPhysicsEngine.stepAirborne(entry, bot);
             if (result == BotPhysicsEngine.AirborneStepResult.WALL) {
-                if (successfullyGrabbedRope(entry, bot, bot.getPosition())) {
+                if (successfullyGrabbedRope(entry, bot, entry.position())) {
                     return;
                 }
                 broadcastMovement(entry);
@@ -374,13 +374,13 @@ class BotMovementManager {
             }
 
             // CONTINUE — position advanced, check for rope grab at new position
-            if (successfullyGrabbedRope(entry, bot, bot.getPosition())) {
+            if (successfullyGrabbedRope(entry, bot, entry.position())) {
                 return;
             }
             if (entry.flashJumpFired) {
                 // Apex tick of a flash jump: emit the type-6 "fj" dash frame in place of the normal
                 // move so observers see the dash animation. relDx/relDy = this tick's position delta.
-                Point now = bot.getPosition();
+                Point now = entry.position();
                 broadcastFlashJump(entry, now.x - botPos.x, now.y - botPos.y);
                 entry.flashJumpFired = false;
             } else {
@@ -482,7 +482,7 @@ class BotMovementManager {
             return;
         }
 
-        Point pos = entry.bot.getPosition();
+        Point pos = entry.position();
         int dx = targetPos.x - pos.x;
         int dy = targetPos.y - pos.y;
 
@@ -542,7 +542,7 @@ class BotMovementManager {
                 return;
             }
 
-            Point botPos = bot.getPosition();
+            Point botPos = entry.position();
             if (entry.ropeEntryPending) {
                 performTopRopeEntry(entry);
                 return;
@@ -598,7 +598,7 @@ class BotMovementManager {
             BotNavigationGraphProvider.warmGraphAsync(map, entry.movementProfile);
             return targetPos;
         }
-        Point botPos = entry.bot.getPosition();
+        Point botPos = entry.position();
         int currentRegionId = BotNavigationManager.resolveCurrentRegionId(graph, entry, map, botPos);
         int targetRegionId = BotNavigationManager.resolveTargetRegionId(graph, entry, map, targetPos);
         if (currentRegionId < 0 || currentRegionId != targetRegionId) {
@@ -850,6 +850,7 @@ class BotMovementManager {
     }
 
     static void broadcastMovement(BotMovementState entry) {
+        if (entry.projectsMotion()) return;
         if (!BotPerformanceMonitor.enabled()) {
             doBroadcastMovement(entry);
             return;
@@ -957,6 +958,7 @@ class BotMovementManager {
     // shorts are velocity slots, not a position delta — the dash ANIM is triggered by the fragment TYPE, so
     // the magnitude is cosmetic (real position comes from the surrounding cmd-0 ticks).
     static void broadcastFlashJump(BotMovementState entry, int relDx, int relDy) {
+        if (entry.projectsMotion()) return;
         Character bot = entry.bot;
         if (bot == null || bot.getMap() == null) {
             return;

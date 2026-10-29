@@ -543,7 +543,7 @@ class ActorControlControllerTest {
                  "args":[1,0,{"selection":2},null,"中文"]}
                 """, ActorScriptRequest.class);
         assertEquals("", request.source());
-        assertEquals(1000L, request.timeoutMs());
+        assertEquals(30_000L, request.timeoutMs());
         assertEquals(Map.of(), request.parameters());
         assertEquals("npc", request.kind());
         assertEquals("invoke", request.operation());

@@ -39,8 +39,8 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
     static final int PARTY_HASTE_THIEF_LEVEL = 60;             // a haste-thief party member at/above this grants party Haste
 
     BotMovementProfile {
-        totalSpeedStat = bucketStat(totalSpeedStat);
-        totalJumpStat = bucketStat(totalJumpStat);
+        totalSpeedStat = Math.max(1, totalSpeedStat);
+        totalJumpStat = Math.max(1, totalJumpStat);
         totalSpeedStat = Math.min(totalSpeedStat, MAX_EFFECTIVE_SPEED_STAT);
         totalJumpStat = Math.min(totalJumpStat, MAX_EFFECTIVE_JUMP_STAT);
     }
@@ -87,7 +87,7 @@ record BotMovementProfile(int totalSpeedStat, int totalJumpStat, boolean snowSho
 
         int totalSpeed = speedBaseline + (character.getTotalMoveSpeedStat() - BASE_TOTAL_STAT);
         int totalJump = jumpBaseline + (character.getTotalJumpStat() - BASE_TOTAL_STAT);
-        return new BotMovementProfile(totalSpeed, totalJump, wearsSnowShoes(character));
+        return new BotMovementProfile(bucketStat(totalSpeed), bucketStat(totalJump), wearsSnowShoes(character));
     }
 
     // Haste-thief lineage: Assassin→Hermit→Night Lord and Bandit→Chief Bandit→Shadower all learn Haste at

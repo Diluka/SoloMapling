@@ -165,7 +165,8 @@ REQUEST_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 NATIVE_SCRIPT_ENTRY = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]{0,127}")
 SCRIPT_MAX_SOURCE_UNITS = 65_536
 SCRIPT_MAX_JSON_NODES = 16_384
-SCRIPT_MAX_TIMEOUT_MS = 5_000
+SCRIPT_DEFAULT_TIMEOUT_MS = 30_000
+SCRIPT_MAX_TIMEOUT_MS = 120_000
 SCRIPT_CLEANUP_SECONDS = 5.0
 NATIVE_SCRIPT_KINDS = frozenset({"npc", "quest", "portal", "reactor", "event"})
 NATIVE_SCRIPT_OPERATIONS = frozenset({"start", "invoke", "close"})
@@ -189,7 +190,7 @@ def validate_script_target(session_id: str, expected_generation: int) -> None:
 
 def validate_script_run(
     session_id: str, expected_generation: int, request_id: str, kind: str, operation: str,
-    source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+    source: str = "", parameters: dict[str, Any] | None = None, timeout_ms: int = SCRIPT_DEFAULT_TIMEOUT_MS,
     context_id: str | None = None, options: Any = _SCRIPT_DEFAULT,
     entry: str | None = None, args: Any = _SCRIPT_DEFAULT, since_output: int = 0,
 ) -> None:
@@ -476,7 +477,7 @@ class BridgeClient:
     async def script_run(
         self, session_id: str, expected_generation: int, *, request_id: str, kind: str, operation: str,
         options: dict[str, Any], args: list[Any], source: str = "",
-        parameters: dict[str, Any] | None = None, timeout_ms: int = 1000,
+        parameters: dict[str, Any] | None = None, timeout_ms: int = SCRIPT_DEFAULT_TIMEOUT_MS,
         context_id: str | None = None, entry: str | None = None, since_output: int = 0,
         on_event: Callable[[dict[str, Any]], Awaitable[None]],
     ) -> dict[str, Any]:
@@ -488,8 +489,8 @@ class BridgeClient:
             "source": source, "parameters": parameters if parameters is not None else {},
             "timeout_ms": timeout_ms, "options": options, "entry": entry, "args": args,
         }, ensure_ascii=False))
-        # Keep run + cleanup within the host tool's 45-second window even when
-        # ordinary observation HTTP requests use the configurable 30 seconds.
+        # Script HTTP reads use this invocation's execution and cleanup budget;
+        # ordinary observation requests retain their configured timeout.
         budget = timeout_ms / 1000 + SCRIPT_CLEANUP_SECONDS
         request = asyncio.create_task(self._script_stream(
             data, request_id, since_output, on_event, budget,

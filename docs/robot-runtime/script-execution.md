@@ -19,7 +19,7 @@
 | `entry`、`args` | 原脚本入口及其参数；`args` 默认为 `[]`，按实际原生签名使用 |
 | `source` | 默认空字符串，最多 65,536 个 UTF-16 单元；非空时在同一北斗引擎中执行代码片段 |
 | `parameters` | JSON 对象，默认 `{}`，以同名对象供本次脚本读取 |
-| `timeout_ms` | 整数 1～5,000，默认 1,000；覆盖本次环境准备、执行和结果转换 |
+| `timeout_ms` | 整数 1～120,000，默认 30,000；覆盖本次环境准备、执行和结果转换 |
 | `since_output` | 输出游标，默认 0；同一原请求恢复时填写已收到的最后输出序号 |
 
 `options`、`args`、`parameters` 的输入预算由服务端统一裁决：按服务端规范化 JSON 的 UTF-8 编码计算，三根总量最多 16,384 字节，每个根的深度最多 16。客户端保留 JSON 类型、有限数值、有效 Unicode、节点数和深度检查，不再用自身重编码的字节数作第二次预算裁决。不同编码器可能将同一数值写为 `1e+20` 或 `1.0E20`，客户端编码长度不能用来推定服务端是否接受；超出服务端预算的请求明确拒绝，不进入原生执行。
@@ -98,9 +98,13 @@ JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字
 
 ## 模块函数命名空间
 
-当前受管北斗引擎提供 `modules.help()` 和 `modules.call(name, args)`，后者的 `args` 为 JSON 对象。Java `ModuleContext.help()` / `call()` 与它们消费同一目录，帮助来自实际装配的模块声明，调用按当前精确实例和执行代次解析。当前没有业务导出预装时，目录返回空列表；具体声明、返回和错误语义见[机器人模块参考](modules.md#共享函数声明与调用)。
+当前受管北斗引擎提供 `modules.help()` 和 `modules.call(name, args)`，后者的 `args` 为 JSON 对象。Java `ModuleContext.help()` / `call()` 与它们消费同一目录，帮助来自实际装配的模块声明，调用按当前精确实例和执行代次解析。默认 MCP 测试类型为 `mcp_test`，提供 [`navigation.moveTo`](navigation.md) 和 [`robots.create/remove`](population.md#脚本创建与移除)；具体声明、返回和错误语义见[机器人模块参考](modules.md#共享函数声明与调用)。
 
 `modules` 绑定在原 `kind/operation` 选定的北斗上下文中。`cm/qm/pi/rm/em` 的对象来源和适用范围，以及 `executeCommand` 的现有命令行为保持原契约。模块定义、装配与受管执行见[机器人模块参考](modules.md)。
+
+`robots.create(typeId)`、`robots.remove(instanceId)` 是同一目录对应函数的简写：成功时返回函数的 `result`，提供者缺失或不可用时保留原 `UNAVAILABLE` 结果。创建按已加载的类型生成完整环境机器人；移除按具体实例引用完成实际关闭。初始人口、来源及运行期数量约定见[人口配置](population.md)。
+
+同步模块函数在自己的提供者 scope 中执行，当前调用者 work 的取消及 scope 停止持续关联到提供者 work。脚本期限通过同一停止链生效；`navigation.moveTo` 在抵达或失败及本次收尾后返回，后续脚本据实际导航结果继续执行。
 
 ## 归属、取消和真实收尾
 

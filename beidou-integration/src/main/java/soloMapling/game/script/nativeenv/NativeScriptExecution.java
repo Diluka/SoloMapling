@@ -70,7 +70,7 @@ public final class NativeScriptExecution {
     static NativeScriptExecution callback(ExecutionScope.WorkHandle work, NativeScriptSession session,
                                            NativeScriptSession.GuestCall callback) {
         NativeScriptRequest request = new NativeScriptRequest(session.kind(), "invoke", session.contextId(),
-                Map.of(), null, List.of(), "", Map.of(), 5_000);
+                Map.of(), null, List.of(), "", Map.of(), NativeScriptRequest.DEFAULT_TIMEOUT_MS);
         return start(work, session, request, callback, ignored -> { });
     }
     public ExecutionScope.WorkHandle work() { return work; }
@@ -87,7 +87,9 @@ public final class NativeScriptExecution {
         } else if (System.nanoTime() - began >= TimeUnit.MILLISECONDS.toNanos(request.timeoutMs())) {
             stopping.compareAndSet(null, ScriptResult.Status.TIMED_OUT);
         }
-        return stopping.get() != null;
+        if (stopping.get() == null) return false;
+        if (!work.cancelRequested()) work.scope().requestCancel(work);
+        return true;
     }
     private void carry() {
         Thread guest = null;

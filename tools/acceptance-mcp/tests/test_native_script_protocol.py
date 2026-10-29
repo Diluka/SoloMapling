@@ -133,7 +133,7 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         data = next(request for request in self.stub.requests if request["path"] == RUN_PATH)["body"]["data"]
         self.assertEqual({"session_id": NATIVE_ARGS["session_id"], "expected_generation": 7,
                           "kind": "npc", "operation": "start", "context_id": None, "options": {}, "entry": None,
-                          "args": [], "source": "", "parameters": {}, "timeout_ms": 1000}, data)
+                          "args": [], "source": "", "parameters": {}, "timeout_ms": 30000}, data)
         self.assertFalse(response.structured_content["result"]["context_closed"])
         self.assertTrue(response.structured_content["result"]["invocation_settled"])
         self.assertEqual(response.structured_content, json.loads(response.content[0].text))

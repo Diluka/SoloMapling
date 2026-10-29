@@ -172,7 +172,9 @@ script_run(session_id="实际session_id", expected_generation=实际session_gene
            context_id="实际context_id")
 ```
 
-start不带context_id，invoke/close必须带；invoke的非空source与entry互斥。close使用source/options/args的空默认值，不得指定entry。source默认空字符串，parameters/options默认{}，args默认[]，timeout_ms默认1000、范围1～5000。三根JSON输入的16KiB预算按服务端规范化UTF-8编码统一裁决，客户端保留类型、有限数值、Unicode、节点数和深度检查，不重复裁决本地编码字节数。详细JSON额度、入口规则及五类选择见[公共执行契约](../../docs/robot-runtime/script-execution.md#请求)和[北斗上下文](../../docs/robot-runtime/beidou-script-environment.md)。
+start不带context_id，invoke/close必须带；invoke的非空source与entry互斥。close使用source/options/args的空默认值，不得指定entry。source默认空字符串，parameters/options默认{}，args默认[]，timeout_ms默认30000、范围1～120000。三根JSON输入的16KiB预算按服务端规范化UTF-8编码统一裁决，客户端保留类型、有限数值、Unicode、节点数和深度检查，不重复裁决本地编码字节数。详细JSON额度、入口规则及五类选择见[公共执行契约](../../docs/robot-runtime/script-execution.md#请求)和[北斗上下文](../../docs/robot-runtime/beidou-script-environment.md)。
+
+现有 MCP 专用普通角色固定按 `RobotPopulation.yaml` 的 `mcp_test` 类型装配，后续能力模块在该类型配置中维护。默认目录提供 `navigation.moveTo` 及人口创建/移除函数；脚本中可使用 `robots.create(typeId)`、`robots.remove(instanceId)` 简写。调用流程和结果分别见[导航参考](../../docs/robot-runtime/navigation.md)与[人口配置](../../docs/robot-runtime/population.md)，源码和实际部署状态按各自 Issue 核对。
 
 工具返回既有 `kind=SCRIPT` operation，result包含JSON结果、stdout/stderr、错误和上下文状态。成功调用可以保留 `context_state=OPEN,context_closed=false`；本次 `invocation_settled/work_settled` 与最终环境关闭分开核验。语法、运行、结果、期限、取消及清理状态分别表达，详见[结果参考](../../docs/robot-runtime/script-execution.md#输出和结果)。不为取得context_closed=true而盲目重放原入口。
 

@@ -380,6 +380,8 @@ MCP 成功响应只证明工具调用结束。R2a 操作状态为 `QUEUED/RUNNIN
 
 脚本沿CharacterRuntime当前模块代次和原scope/work执行，不占角色短lane。本次调用真实结算后可以保留OPEN Context，最终关闭及原生调度资源释放另核，不以Future或请求返回替代。调用流程见[工具用法](../../tools/acceptance-mcp/README.md#脚本基础调用)，公共约定见[脚本执行参考](../robot-runtime/script-execution.md)，真实来源见[北斗脚本上下文](../robot-runtime/beidou-script-environment.md)。各层验收按对应Issue分别留证。
 
+当前源码按 `RobotPopulation.yaml` 中的固定类型 `mcp_test` 装配现有专用普通角色，默认含 MCP 控制、导航和人口能力模块。后续新增非自主能力模块时更新这份显式配置；角色仍沿既有profile、原生来源与保存退出。#122 的 `navigation.moveTo` 同步完成当前场景目标导航，#263 的 `robots.create/remove` 创建或关闭完整环境实例，分别见[导航参考](../robot-runtime/navigation.md)和[人口配置](../robot-runtime/population.md)。源码、实际能力公告及各层交付证据分别确认。
+
 ## 螺旋迭代计划
 
 每轮按同一循环：**界定本轮能力与可观察结果→实现最小切片→协议/单测→隔离服务验证→已授权部署冒烟→记录证据与限制→决定下一轮**。基础方案与每轮Issue保持分开；失败时在本轮修复并重验，不继续叠功能隐藏问题。独立实验使用临时库或一致副本；部署冒烟沿现有授权使用真实库并保留备份。

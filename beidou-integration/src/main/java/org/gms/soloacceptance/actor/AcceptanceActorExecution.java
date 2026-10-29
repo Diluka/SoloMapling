@@ -8,13 +8,13 @@ import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.action.NativeInventoryActions;
 import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.action.NativeBasicActions;
-import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
-import soloMapling.game.runtime.ModuleSelection;
+import soloMapling.game.navigation.NavigationModule;
+import soloMapling.game.population.RobotPopulationService;
 import soloMapling.game.runtime.RuntimeEvents;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -32,16 +32,19 @@ import java.util.function.Consumer;
 final class AcceptanceActorExecution {
     private final NativeActorBackend backend;
     private final CharacterRuntime runtime;
-    private final String moduleInstance;
+    private final RobotPopulationService population;
+    private String moduleInstance;
     private volatile AcceptanceRuntimeOrigin origin;
     private volatile McpControlModule module;
+    private volatile NavigationModule navigation;
     private volatile Map<String, Object> cleanupEvidence;
     private volatile Map<String, Object> diagnostics = Map.of();
     private long moduleGeneration;
 
     AcceptanceActorExecution(NativeActorBackend backend, String moduleInstance, WorldEpoch.Token epoch,
-                             ExecutorService executor) {
+                             ExecutorService executor, RobotPopulationService population) {
         this.backend = backend;
+        this.population = population;
         this.moduleInstance = moduleInstance;
         runtime = new CharacterRuntime(epoch, new CharacterRuntime.Options(8, 1,
                 new ExecutionScope.Limits(16, 1, 16, 1)), executor);
@@ -51,6 +54,11 @@ final class AcceptanceActorExecution {
     ExecutionScope scope() { return runtime.lifecycleScope(); }
     ExecutionScope moduleScope() { return requireModule().context().scope(); }
     CharacterRuntime.ModuleContext moduleContext() { return requireModule().context(); }
+
+    CharacterRuntime.ModuleContext moduleContext(String action) {
+        return "move".equals(action) || "stop".equals(action)
+                ? requireNavigation().context() : moduleContext();
+    }
 
     ExecutionScope.WorkHandle acceptOpeningWork() {
         ExecutionScope.WorkHandle work = runtime.acceptOpeningWork();
@@ -65,8 +73,7 @@ final class AcceptanceActorExecution {
 
     void cancel(ExecutionScope.WorkHandle work) {
         if (work == null) return;
-        if (work.scope() == runtime.lifecycleScope()) runtime.lifecycleScope().requestCancel(work);
-        else requireModule().context().cancel(work);
+        work.scope().requestCancel(work);
     }
 
     NativeActorHandle adoptedHandle() {
@@ -89,10 +96,12 @@ final class AcceptanceActorExecution {
     void bindActor(NativeActorHandle exactHandle) {
         if (adoptedHandle() != exactHandle) throw unverified();
         runtime.bindAdoptedOrigin();
-        CharacterRuntime.MountedModule<McpControlModule> mounted = runtime.mount(
-                McpControlModule.DEFINITION, new ModuleSelection<>(moduleInstance, Map.of(), true));
+        var assembly = population.assemble("mcp_test", runtime);
+        var mounted = assembly.find(McpControlModule.class).orElseThrow();
         module = mounted.instance();
+        navigation = assembly.find(NavigationModule.class).map(CharacterRuntime.MountedModule::instance).orElse(null);
         CharacterRuntime.ModuleRef reference = mounted.reference();
+        moduleInstance = reference.instanceId();
         runtime.context(reference); // Mounting without an active context is not OPEN success.
         moduleGeneration = reference.generation();
         refreshDiagnostics();
@@ -129,7 +138,8 @@ final class AcceptanceActorExecution {
         if (adoptedHandle() != exactHandle) throw new ObservationException(HttpStatus.CONFLICT, "actor_session_stale");
         McpControlModule active = requireModule();
         if ("move".equals(action) || "stop".equals(action)) {
-            return backend.prepareMovement(exactHandle, active.movement(), active.context(), work,
+            var movement = requireNavigation();
+            return backend.prepareMovement(exactHandle, movement.movement(), movement.context(), work,
                     action, parameters, mcpPreflight);
         }
         return active.prepareBasic(ActorBasicRequests.control(action), work, mcpPreflight,
@@ -137,7 +147,7 @@ final class AcceptanceActorExecution {
     }
 
     NativeActionService.SubmissionReceipt submitBasic(NativeBasicActions.Handle action) {
-        return backend.submitBasic(action, requireModule().movement());
+        return backend.submitBasic(action, navigation == null ? null : navigation.movement());
     }
 
     void recordResult(ExecutionScope.WorkHandle work, NativeActionResult result) {
@@ -251,6 +261,12 @@ final class AcceptanceActorExecution {
         return attached;
     }
 
+    private NavigationModule requireNavigation() {
+        var attached = navigation;
+        if (attached == null) throw new ObservationException(HttpStatus.CONFLICT, "actor_movement_unavailable");
+        return attached;
+    }
+
     private ObservationException controlFailure(CharacterRuntime.Invalid failure) {
         WorldEpoch.State current = WorldEpoch.snapshot();
         if (!current.active() || current.token() != runtime.acceptedEpoch()) {
@@ -265,6 +281,25 @@ final class AcceptanceActorExecution {
         info.put("id", state.runtimeId()); info.put("epoch", state.epoch());
         info.put("state", state.state().name()); info.put("origin_kind", state.originKind());
         info.put("character_id", state.characterId());
+        info.put("type_id", "mcp_test");
+        info.put("modules", state.modules().stream().map(entry -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("type_id", entry.typeId());
+            item.put("instance_id", entry.instanceId());
+            item.put("generation", entry.generation());
+            item.put("enabled", entry.enabled());
+            item.put("state", entry.state().name());
+            item.put("controls", entry.controls());
+            item.put("reason", entry.reason());
+            if (entry.scope() != null) {
+                var scope = entry.scope();
+                item.put("scope", Map.of("state", scope.state().name(), "accepted_work", scope.acceptedWork(),
+                        "running_bodies", scope.runningBodies(), "pending_carriers", scope.pendingCarriers(),
+                        "outstanding_resources", scope.outstandingResources(), "pending_callbacks", scope.pendingCallbacks(),
+                        "unload_complete", scope.unloadComplete()));
+            }
+            return java.util.Collections.unmodifiableMap(item);
+        }).toList());
         Map<String, Object> attached = new LinkedHashMap<>();
         attached.put("type_id", "mcp-control"); attached.put("instance_id", moduleInstance);
         CharacterRuntime.ModuleSnapshot selected = state.modules().stream()

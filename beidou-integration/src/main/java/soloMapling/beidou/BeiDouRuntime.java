@@ -4,6 +4,8 @@ import org.gms.client.Character;
 import org.gms.manager.ServerManager;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.population.RobotPopulationService;
+import soloMapling.game.runtime.CharacterRuntime;
 import org.gms.soloacceptance.actor.ActorControlService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
@@ -40,8 +42,6 @@ public final class BeiDouRuntime {
         }
         try {
             WorldEpoch.onWorldStarted();
-            ActorControlService actors = actorControls();
-            if (actors != null) actors.onWorldStarted();
             Environment environment = ServerManager.getApplicationContext().getEnvironment();
             SoloMaplingLanguageConfig.configure(environment);
             SocialLlmService.configure(environment);
@@ -54,6 +54,10 @@ public final class BeiDouRuntime {
             // Manual GM bot creation must receive chat even when startup population
             // is disabled. Only this live lifecycle may restart message workers.
             MessageQueue.start();
+            RobotPopulationService population = robotPopulation();
+            if (population != null) population.onWorldStarted();
+            ActorControlService actors = actorControls();
+            if (actors != null) actors.onWorldStarted();
             boolean spawn = environment.getProperty("solomapling.spawn-bots-on-startup", Boolean.class, false);
             LOG.info("SoloMapling BeiDou integration ready; spawn-bots-on-startup={} language={} dialogue-pack={}",
                     spawn, SoloMaplingLanguageConfig.languageTag(), SoloMaplingLanguageConfig.dialoguePackDirectoryName());
@@ -74,11 +78,19 @@ public final class BeiDouRuntime {
         var stop = ExecutionScope.tryBeginWorldStop();
         ActorControlService actors = actorControls();
         if (actors != null) actors.onWorldStopping(stop);
+        RobotPopulationService population = robotPopulation();
+        if (population != null) {
+            try { population.onWorldStopping(stop); }
+            catch (RuntimeException failure) {
+                LOG.error("Module robot cleanup remains unverified; continuing native player saving and V1 shutdown", failure);
+            }
+        }
         if (!READY.getAndSet(false) && BotRegistry.snapshot().isEmpty()) {
             return;
         }
         BotTickService.stop();
-        List<Character> characters = BotRegistry.snapshot();
+        List<Character> characters = BotRegistry.snapshot().stream()
+                .filter(character -> !CharacterRuntime.ownsNativeRole(character)).toList();
         // First publish the non-blocking stop flag. Subclass cleanup can acquire
         // a bot monitor held by its callback, so unblock waits before taking it.
         for (Character character : characters) {
@@ -129,5 +141,12 @@ public final class BeiDouRuntime {
         if (ServerManager.getApplicationContext() == null) return null;
         ObjectProvider<ActorControlService> actors = ServerManager.getApplicationContext().getBeanProvider(ActorControlService.class);
         return actors == null ? null : actors.getIfAvailable();
+    }
+
+    private static RobotPopulationService robotPopulation() {
+        if (ServerManager.getApplicationContext() == null) return null;
+        ObjectProvider<RobotPopulationService> population = ServerManager.getApplicationContext()
+                .getBeanProvider(RobotPopulationService.class);
+        return population == null ? null : population.getIfAvailable();
     }
 }
