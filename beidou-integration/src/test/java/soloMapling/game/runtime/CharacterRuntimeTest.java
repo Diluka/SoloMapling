@@ -15,6 +15,8 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.population.RobotPopulationModule;
+import soloMapling.game.population.RobotPopulationService;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -199,8 +201,9 @@ class CharacterRuntimeTest {
         Fixture fixture = opened();
         var caller = fixture.runtime.context(fixture.mount("caller", Set.of()));
         CountDownLatch initializing = new CountDownLatch(1), initialized = new CountDownLatch(1);
-        var function = new ModuleFunction<RuntimeModule>("sample.ready", "Read initialized module state", List.of(),
-                "Returns ready after module initialization", (instance, context, work, arguments) -> "ready");
+        var function = new ModuleFunction<RuntimeModule, Void, String>("sample.ready", "Read initialized module state", List.of(),
+                "Returns ready after module initialization", "Provider initialization has completed",
+                (instance, arguments) -> null, (instance, context, work, input) -> "ready", value -> value);
         var definition = definition(() -> new RuntimeModule() {
             @Override public void onActivated(CharacterRuntime.ModuleContext context) {
                 initializing.countDown();
@@ -244,10 +247,11 @@ class CharacterRuntimeTest {
             int value;
             Counter(int initial) { value = initial; }
         }
-        var add = new ModuleFunction<Counter>("sample.add", "Advance this module's private progress",
+        var add = new ModuleFunction<Counter, Integer, Integer>("sample.add", "Advance this module's private progress",
                 List.of(new ModuleFunction.Parameter("amount", ModuleFunction.Type.INTEGER, true, "Progress increment")),
-                "Returns the updated private progress", (instance, context, work, arguments) ->
-                instance.value += ((Number) arguments.get("amount")).intValue());
+                "Returns the updated private progress", "The requested increment is applied",
+                (instance, arguments) -> ((Number) arguments.get("amount")).intValue(),
+                (instance, context, work, input) -> instance.value += input, value -> value);
         var definition = new ModuleDefinition<Integer, Counter>("counter", Set.of(),
                 new ExecutionScope.Limits(8, 2, 8, 2), Counter::new, List.of(add));
         var providerOne = first.runtime.mount(definition, new ModuleSelection<>("counter", 1, true));
@@ -276,16 +280,43 @@ class CharacterRuntimeTest {
     }
 
     @Test
+    void populationModuleKeepsCreateAndRemoveInputsAndResultsDistinctAcrossJavaAndJsonCalls() {
+        Fixture fixture = opened();
+        var population = mock(RobotPopulationService.class);
+        var created = new RobotPopulationService.CreatedRobot("instance-probe", "probe", "runtime-probe", 41);
+        var removed = new RobotPopulationService.RemovedRobot("instance-probe", "probe");
+        when(population.create("probe")).thenReturn(created);
+        when(population.remove("instance-probe")).thenReturn(removed);
+        var provider = fixture.runtime.mount(RobotPopulationModule.definition(population),
+                new ModuleSelection<>("population", null, true));
+        var caller = fixture.runtime.context(fixture.mount("caller", Set.of()));
+        var createdCall = caller.call(RobotPopulationModule.CREATE, new RobotPopulationModule.CreateRequest("probe"));
+        assertEquals(ModuleCall.Status.SUCCEEDED, createdCall.status());
+        assertEquals(created, createdCall.result());
+        assertEquals(Map.of("instance_id", "instance-probe", "type_id", "probe", "removed", true),
+                caller.call("robots.remove", Map.of("instance_id", "instance-probe")).get("result"));
+        assertEquals(Map.of("instance_id", "instance-probe", "type_id", "probe", "runtime_id", "runtime-probe", "character_id", 41),
+                caller.call("robots.create", Map.of("type_id", "probe")).get("result"));
+        assertEquals(removed, caller.call(RobotPopulationModule.REMOVE,
+                new RobotPopulationModule.RemoveRequest("instance-probe")).result());
+        assertEquals(0, fixture.runtime.context(provider.reference()).scope().snapshot().acceptedWork());
+        fixture.runtime.stop(provider.reference(), CharacterRuntime.StopMode.PAUSE).await(WAIT);
+        assertEquals(ModuleCall.Status.UNAVAILABLE, caller.call(RobotPopulationModule.CREATE,
+                new RobotPopulationModule.CreateRequest("probe")).status());
+    }
+
+    @Test
     void unloadingAnExportProviderWaitsForItsActualInvocationToExit() throws Exception {
         Fixture fixture = opened();
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
         AtomicBoolean unloaded = new AtomicBoolean();
-        var function = new ModuleFunction<RuntimeModule>("sample.wait", "Finish an accepted task", List.of(),
-                "Completes after the accepted task exits", (instance, context, work, arguments) -> {
+        var function = new ModuleFunction<RuntimeModule, Void, String>("sample.wait", "Finish an accepted task", List.of(),
+                "Completes after the accepted task exits", "The accepted task has left its body",
+                (instance, arguments) -> null, (instance, context, work, input) -> {
                     entered.countDown();
                     await(release);
                     return "finished";
-                });
+                }, value -> value);
         var provider = fixture.runtime.mount(definition(() -> new RuntimeModule() {
             @Override public void onUnloaded() { unloaded.set(true); }
         }, List.of(function)), new ModuleSelection<>("provider", null, true));
@@ -885,7 +916,7 @@ class CharacterRuntimeTest {
     }
     private Fixture opened() { Fixture fixture = manual(); fixture.open(); return fixture; }
     private static ModuleDefinition<Void, RuntimeModule> definition(
-            java.util.function.Supplier<RuntimeModule> factory, List<ModuleFunction<RuntimeModule>> functions) {
+            java.util.function.Supplier<RuntimeModule> factory, List<ModuleFunction<RuntimeModule, ?, ?>> functions) {
         return new ModuleDefinition<>("test-module", Set.of(), new ExecutionScope.Limits(16, 4, 16, 4),
                 ignored -> factory.get(), functions);
     }

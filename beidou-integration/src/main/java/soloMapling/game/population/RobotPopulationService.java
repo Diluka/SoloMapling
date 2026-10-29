@@ -7,8 +7,10 @@ import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.env.Environment;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.combat.CombatActionModule;
 import soloMapling.game.execution.ExecutionScope;
-import soloMapling.game.navigation.NavigationModule;
+import soloMapling.game.navigation.NavigationActionModule;
+import soloMapling.game.nativeaction.NativeActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeModule;
 
@@ -30,6 +32,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Owns complete environment robot instances; attaching an existing MCP role only applies its type. */
 public final class RobotPopulationService {
+    public record CreatedRobot(String instanceId, String typeId, String runtimeId, int characterId) { }
+    public record RemovedRobot(String instanceId, String typeId) { }
     private static final Logger LOG = LoggerFactory.getLogger(RobotPopulationService.class);
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(10);
     private final List<String> configPaths;
@@ -42,7 +46,9 @@ public final class RobotPopulationService {
         configPaths = Binder.get(environment).bind("solomapling.robot-population-config", Bindable.listOf(String.class))
                 .orElse(List.of());
         registry.register(McpControlModule.DEFINITION, Map::copyOf);
-        registry.register(NavigationModule.DEFINITION, NavigationModule::parseConfig);
+        registry.register(NavigationActionModule.DEFINITION, NavigationActionModule::parseConfig);
+        registry.register(CombatActionModule.DEFINITION, CombatActionModule::parseConfig);
+        registry.register(NativeActionModule.DEFINITION, NativeActionModule::parseConfig);
         registry.register(RobotPopulationModule.definition(this), ignored -> null);
     }
 
@@ -79,7 +85,7 @@ public final class RobotPopulationService {
         }
     }
 
-    public Map<String, Object> create(String typeId) {
+    public CreatedRobot create(String typeId) {
         final Instance instance;
         final RobotPopulationConfig.RobotType type;
         synchronized (instances) {
@@ -120,16 +126,16 @@ public final class RobotPopulationService {
             catch (RuntimeException cleanupFailure) { creationFailure.addSuppressed(cleanupFailure); }
             throw creationFailure;
         }
-        return Map.of("instance_id", instance.runtime().id(), "type_id", typeId,
-                "runtime_id", instance.runtime().id(), "character_id", instance.runtime().snapshot().characterId());
+        return new CreatedRobot(instance.runtime().id(), typeId,
+                instance.runtime().id(), instance.runtime().snapshot().characterId());
     }
 
-    public Map<String, Object> remove(String instanceId) {
+    public RemovedRobot remove(String instanceId) {
         Instance instance;
         synchronized (instances) { instance = instances.get(instanceId); }
         if (instance == null) throw new IllegalArgumentException("unknown_robot_instance:" + instanceId);
         close(instance, Optional.empty());
-        return Map.of("instance_id", instanceId, "type_id", instance.typeId(), "removed", true);
+        return new RemovedRobot(instanceId, instance.typeId());
     }
 
     public void onWorldStopping(Optional<ExecutionScope.WorldStopTicket> stop) {

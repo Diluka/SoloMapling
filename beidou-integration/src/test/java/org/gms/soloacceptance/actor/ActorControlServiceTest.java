@@ -86,6 +86,7 @@ class ActorControlServiceTest {
     @BeforeEach
     void prepare() {
         CharacterTestContext.install();
+        org.gms.client.Job.values();
         AcceptanceObservationRuntime.onWorldStarted();
         population = new RobotPopulationService(new StandardEnvironment());
         population.onWorldStarted();
@@ -118,8 +119,10 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void anAcceptedOpenIsNotReportedOnlineBeforeNativeEvidenceAndClosedRequestDoesNotReopen() {
+    void anAcceptedOpenIsNotReportedOnlineBeforeNativeEvidenceAndClosedRequestDoesNotReopen() throws Exception {
         assertFalse(population.configuration().types().containsKey("navigation_probe"));
+        assertTrue(population.configuration().types().get("mcp_test").modules().stream()
+                .anyMatch(module -> module.instanceId().equals("combat")));
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "open-one");
         assertEquals("QUEUED", opened.get("status"));
@@ -133,6 +136,8 @@ class ActorControlServiceTest {
         assertEquals("OPEN", session(completed).get("state"));
         assertEquals(true, actor(completed).get("logged_in_world"));
         assertEquals("native_actor_online", result(completed).get("observed_outcome"));
+        assertTrue(execution(service, completed).moduleContext().help().stream().anyMatch(function ->
+                function.get("name").equals("combat.engage") && Boolean.TRUE.equals(function.get("available"))));
         assertSame(handle, service.currentActor("admin", sessionId(opened), generation(opened)).orElseThrow());
 
         var closing = service.close("admin", "close-one", closeRequest(opened));
@@ -3096,6 +3101,7 @@ class ActorControlServiceTest {
         org.gms.net.server.world.World world = mock(org.gms.net.server.world.World.class);
         org.gms.net.server.channel.Channel channel = mock(org.gms.net.server.channel.Channel.class);
         when(character.getId()).thenReturn(characterId);
+        when(character.getJob()).thenReturn(org.gms.client.Job.BEGINNER);
         when(world.getId()).thenReturn(0);
         when(channel.getId()).thenReturn(1);
         when(result.client()).thenReturn(client);

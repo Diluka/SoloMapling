@@ -25,6 +25,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** One exact native role, one carrier lane, and preconfigured compiled modules. Internal ABI v0.1. */
 public final class CharacterRuntime {
@@ -232,7 +235,7 @@ public final class CharacterRuntime {
         synchronized (monitor) {
             require(state == State.BOUND, "runtime_not_bound");
             require(!modules.containsKey(selection.instanceId()), "module_instance_exists");
-            for (ModuleFunction<M> function : definition.exports()) {
+            for (ModuleFunction<M, ?, ?> function : definition.exports()) {
                 require(!functionOwners.containsKey(function.name()), "module_function_exists");
             }
             entry = new ModuleEntry(definition, selection.instanceId(), selection.config(), selection.enabled());
@@ -348,6 +351,12 @@ public final class CharacterRuntime {
         }
         public ModuleRef reference() { return ref; }
         public ExecutionScope scope() { return scope; }
+        /** Bound native facts for module initialization; this read does not admit an action. */
+        public GameContext.CharacterRef characterRef() {
+            synchronized (monitor) { requireActive(this, null); }
+            return requireBound().characterRef();
+        }
+
         /** One owned native environment per module; published before its first carrier can execute. */
         public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                       NativeScriptAdapter adapter) {
@@ -390,6 +399,21 @@ public final class CharacterRuntime {
         @Override public Map<String, Object> call(String name, Map<String, Object> arguments,
                                                  ExecutionScope.WorkHandle callerWork) {
             return invokeModuleFunction(this, name, arguments, callerWork);
+        }
+
+        public <I, R> ModuleCall<R> call(ModuleFunction<?, I, R> operation, I input) {
+            return call(operation, input, null);
+        }
+        public <I, R> ModuleCall<R> call(ModuleFunction<?, I, R> operation, I input,
+                                        ExecutionScope.WorkHandle callerWork) {
+            Objects.requireNonNull(operation);
+            return invokeModuleFunction(this, operation.name(), operation, bound -> {
+                // The directory checked exact declaration identity before this capture recovery.
+                // Every Bound<I,R> was created by that same ModuleFunction<M,I,R>.bind(instance).
+                @SuppressWarnings("unchecked")
+                var typed = (ModuleFunction.Bound<I, R>) bound;
+                return (context, work) -> typed.invoke(input, context, work);
+            }, callerWork);
         }
 
         public ExecutionScope.WorkHandle acceptWork() {
@@ -732,7 +756,7 @@ public final class CharacterRuntime {
     private List<Map<String, Object>> moduleFunctionHelp() {
         List<Map<String, Object>> help = new ArrayList<>();
         for (ModuleEntry entry : modules.values()) {
-            for (ModuleFunction<?> function : entry.definition.exports()) {
+            for (ModuleFunction<?, ?, ?> function : entry.definition.exports()) {
                 Map<String, Object> description = new LinkedHashMap<>(function.describe());
                 description.put("module_id", entry.instanceId);
                 description.put("module_generation", entry.ref.moduleGeneration);
@@ -757,38 +781,50 @@ public final class CharacterRuntime {
 
     private Map<String, Object> invokeModuleFunction(ModuleContext caller, String name, Map<String, Object> arguments,
                                                       ExecutionScope.WorkHandle callerWork) {
-        Objects.requireNonNull(name); Objects.requireNonNull(arguments);
+        Objects.requireNonNull(arguments);
+        var call = invokeModuleFunction(caller, name, null, bound -> bound.prepare(arguments), callerWork);
+        if (call.status() == ModuleCall.Status.UNAVAILABLE) return unavailableFunction(name, call.reason());
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", "SUCCEEDED");
+        response.put("result", call.result());
+        return Collections.unmodifiableMap(response);
+    }
+
+    private <R> ModuleCall<R> invokeModuleFunction(ModuleContext caller, String name, ModuleFunction<?, ?, ?> declaration,
+            Function<ModuleFunction.Bound<?, ?>, ModuleFunction.Invocation<R>> prepare,
+            ExecutionScope.WorkHandle callerWork) {
+        Objects.requireNonNull(name);
         ModuleEntry provider;
         ModuleContext context;
-        ModuleFunction.Bound function;
+        ModuleFunction.Invocation<R> invocation;
         ExecutionScope.WorkHandle work;
         synchronized (monitor) {
             requireActive(caller, null);
             provider = functionOwners.get(name);
-            if (provider == null) return unavailableFunction(name, "function_missing");
+            if (provider == null) return new ModuleCall<>(ModuleCall.Status.UNAVAILABLE, null, "function_missing");
             String reason = functionUnavailable(provider);
-            if (reason != null) return unavailableFunction(name, reason);
-            function = provider.functions.get(name);
-            function.validate(arguments);
+            if (reason != null) return new ModuleCall<>(ModuleCall.Status.UNAVAILABLE, null, reason);
+            var function = provider.functions.get(name);
+            if (declaration != null && function.declaration() != declaration) {
+                return new ModuleCall<>(ModuleCall.Status.UNAVAILABLE, null, "function_declaration_changed");
+            }
+            invocation = prepare.apply(function);
             context = provider.context;
             work = context.acceptWork(caller.scope, callerWork);
         }
-        Object[] result = new Object[1];
-        boolean[] invoked = new boolean[1];
+        var result = new AtomicReference<R>();
+        var invoked = new AtomicBoolean();
         context.scope.runTracked(work, () -> {
             synchronized (monitor) {
                 if (functionUnavailable(provider) != null || provider.context != context) return;
             }
-            invoked[0] = true;
-            try { result[0] = function.invoke(context, work, arguments); }
+            invoked.set(true);
+            try { result.set(invocation.invoke(context, work)); }
             catch (RuntimeException failure) { throw failure; }
             catch (Exception failure) { throw new IllegalStateException("module_function_failed", failure); }
         });
-        if (!invoked[0]) return unavailableFunction(name, "module_not_active");
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("status", "SUCCEEDED");
-        response.put("result", result[0]);
-        return Collections.unmodifiableMap(response);
+        if (!invoked.get()) return new ModuleCall<>(ModuleCall.Status.UNAVAILABLE, null, "module_not_active");
+        return new ModuleCall<>(ModuleCall.Status.SUCCEEDED, result.get(), null);
     }
 
     private static Map<String, Object> unavailableFunction(String name, String reason) {
@@ -874,7 +910,7 @@ public final class CharacterRuntime {
         final String instanceId;
         final Object configuration;
         RuntimeModule module;
-        Map<String, ModuleFunction.Bound> functions = Map.of();
+        Map<String, ModuleFunction.Bound<?, ?>> functions = Map.of();
         ModuleRef ref;
         boolean enabled;
         ModuleState state = ModuleState.INITIALIZING;

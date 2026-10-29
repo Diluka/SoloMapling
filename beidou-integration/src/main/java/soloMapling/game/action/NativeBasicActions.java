@@ -1,11 +1,8 @@
 package soloMapling.game.action;
 
 import io.netty.buffer.ByteBuf;
-import org.gms.client.Client;
 import org.gms.net.PacketHandler;
-import org.gms.net.packet.ByteBufInPacket;
 import org.gms.net.server.Server;
-import org.gms.util.ThreadLocalUtil;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.context.WorldEpoch;
@@ -178,20 +175,8 @@ public final class NativeBasicActions {
             NativeContextChecks.requireSceneCurrent(server, scene);
         }
         void dispatch(PacketHandler handler, ByteBuf packet) {
-            Client client = actor().client(), previous = ThreadLocalUtil.getCurrentClient();
-            try {
-                requireCurrent();
-                ThreadLocalUtil.setCurrentClient(client);
-                if (!handler.validateState(client)) throw new NativeActionService.Invalid("native_packet_state_rejected");
-                requireCurrent();
-                dispatched = true;
-                checkpoint.run();
-                try { handler.handlePacket(new ByteBufInPacket(packet), client); }
-                catch (Throwable failure) { handlerError = true; }
-            } finally {
-                if (previous == null) ThreadLocalUtil.removeCurrentClient(); else ThreadLocalUtil.setCurrentClient(previous);
-                packet.release();
-            }
+            handlerError |= NativePacketDispatch.dispatch(actor().client(), handler, packet, this::requireCurrent,
+                    () -> { dispatched = true; checkpoint.run(); });
         }
         NativeBasicResult result(NativeActionResult.Outcome outcome, String fixedReason, Map<String, Object> facts) {
             return new NativeBasicResult(action, outcome, dispatched ? STARTED : NOT_STARTED,

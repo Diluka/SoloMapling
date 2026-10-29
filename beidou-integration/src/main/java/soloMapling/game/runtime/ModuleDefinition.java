@@ -13,14 +13,14 @@ import java.util.function.Function;
 
 /**
  * Reusable module implementation, assembly declarations and configuration contract.
- * The factory constructs private state; runtime work and resources belong to lifecycle hooks.
+ * The factory constructs private state; lifecycle hooks and managed operations own runtime work and resources.
  */
 public record ModuleDefinition<C, M extends RuntimeModule>(
         String typeId,
         Set<String> controls,
         ExecutionScope.Limits limits,
         Function<C, M> factory,
-        List<ModuleFunction<M>> exports) {
+        List<ModuleFunction<M, ?, ?>> exports) {
 
     public ModuleDefinition {
         requireIdentifier(typeId);
@@ -30,7 +30,7 @@ public record ModuleDefinition<C, M extends RuntimeModule>(
         Objects.requireNonNull(factory);
         exports = List.copyOf(exports);
         Set<String> names = new HashSet<>();
-        for (ModuleFunction<M> function : exports) {
+        for (ModuleFunction<M, ?, ?> function : exports) {
             if (!names.add(function.name())) {
                 throw new IllegalArgumentException("duplicate_module_function");
             }
@@ -38,9 +38,9 @@ public record ModuleDefinition<C, M extends RuntimeModule>(
     }
 
     /** Bind validated declarations to one actual instance while retaining its concrete type. */
-    public Map<String, ModuleFunction.Bound> bind(M instance) {
-        Map<String, ModuleFunction.Bound> bound = new LinkedHashMap<>();
-        for (ModuleFunction<M> function : exports) {
+    public Map<String, ModuleFunction.Bound<?, ?>> bind(M instance) {
+        Map<String, ModuleFunction.Bound<?, ?>> bound = new LinkedHashMap<>();
+        for (ModuleFunction<M, ?, ?> function : exports) {
             bound.put(function.name(), function.bind(instance));
         }
         return Collections.unmodifiableMap(bound);

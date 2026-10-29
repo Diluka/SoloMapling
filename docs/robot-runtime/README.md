@@ -3,13 +3,17 @@
 本文描述当前源码 API。#205 在既有运行体上补充模块定义、实例装配和受管导出；
 候选实现、源码测试、隔离验收及实际部署分别以对应 Issue 的记录为准。
 类型及初始人口配置见 [#263 的人口参考](population.md)，当前场景目标导航见
-[#122 的导航参考](navigation.md)。
+[#122 的导航参考](navigation.md)，指定目标持续交战及职业范围见
+[#271 的战斗参考](combat.md)，普通复活见[#275 的原生动作参考](native-actions.md)。
 阶段入口为 [M1 #79](https://github.com/Diluka/SoloMapling/issues/79)，MCP 首环与次环分别为
 [#139](https://github.com/Diluka/SoloMapling/issues/139)、[#140](https://github.com/Diluka/SoloMapling/issues/140)。
 
-当前包含通用角色壳、MCP 控制接入、配置装配、环境实例创建/移除和导航模块。生产自主练级、巡逻、刷怪、
+当前包含通用角色壳、MCP 控制接入、配置装配、环境实例创建/移除、导航、战斗和原生动作候选模块。生产自主练级、巡逻、刷怪、
 跟随及其策略按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
-其中的最小示例仅说明协议接线。
+其中的最小示例仅说明协议接线。`RuntimeModule` 统一可装载模块生命周期；
+`ActionModule` 承担既定目标内的动作能力，`StrategyModule` 选择任务目标、约束及继续或中断。
+动作可持续执行、组织步骤及组合其他动作；每项 `ModuleFunction<M, I, R>` 操作分别定义具体输入、结果和完成条件，同一模块可提供多项异构操作。
+`NavigationActionModule` 使用 `MoveToRequest → NavigationResult`，共享目录保留 `navigation.moveTo`。
 
 ## 分工与迭代
 
@@ -73,7 +77,7 @@ SELF_WAIT、未证实创建/释放和失败债务不能当作关闭成功。
 机器人正常工作周期内保持该组合，已有模块的任务、状态和能力可用性随运行变化。
 
 MCP 来源绑定现有专用角色后，按固定类型名 `mcp_test` 从 `RobotPopulation.yaml` 装配。
-默认组合为 MCP 控制、导航和人口能力模块；新增非自主能力模块时更新该类型配置。
+当前源码的默认组合为 MCP 控制、导航、战斗、原生动作和人口能力模块；新增非自主能力模块时更新该类型配置。
 `initial_population` 只用于本轮启动时创建环境实例，脚本通过 `robots.create/remove` 增减完整实例。
 已有 MCP 角色的账号、profile、当前位置和保存退出继续由其原来源管理。
 

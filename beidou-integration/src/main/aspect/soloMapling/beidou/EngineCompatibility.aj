@@ -9,6 +9,7 @@ import org.gms.client.inventory.Item;
 import org.gms.constants.inventory.ItemConstants;
 import org.gms.net.server.channel.Channel;
 import org.gms.server.StatEffect;
+import org.gms.scripting.event.EventInstanceManager;
 import org.gms.server.maps.Foothold;
 import org.gms.server.maps.FootholdTree;
 import org.gms.server.maps.HiredMerchant;
@@ -21,7 +22,6 @@ import org.gms.server.maps.Reactor;
 import org.gms.server.maps.MapObject;
 import org.gms.server.life.SpawnPoint;
 import soloMapling.ArtificialPlayer.BotTier;
-import soloMapling.server.MethodScheduler;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -68,6 +68,9 @@ public privileged aspect EngineCompatibility {
 
     public void Character.soloSetChair(int chairId) { setChair(chairId); }
     public void Character.soloUnsitChair() { unsitChairInternal(); }
+    public void Character.respawn(EventInstanceManager event, MapleMap returnMap) {
+        respawn(event, returnMap.getId());
+    }
 
     public boolean StatEffect.applyToTarget(Character caster, Character target) {
         return applyTo(caster, target, false, null, false, 1);
@@ -163,12 +166,12 @@ public privileged aspect EngineCompatibility {
     public void MapleMap.setSwim(boolean value) { soloSwim = value; }
     public void MapleMap.moveBot(Character character, Point point) { character.setPosition(point); }
     public void MapleMap.dropFromReactor(Character character, Reactor reactor, Item item, Point point, short questId, short delay) {
-        if (delay > 0) MethodScheduler.runAfterDelay(() -> dropFromReactor(character, reactor, item, point, questId), delay);
+        if (delay > 0) DelayedMapDrops.fromReactor(this, character, reactor, item, point, questId, delay);
         else dropFromReactor(character, reactor, item, point, questId);
     }
     public void MapleMap.spawnMesoDrop(int meso, Point point, MapObject dropper, Character owner,
             boolean playerDrop, byte dropType, short delay) {
-        if (delay > 0) MethodScheduler.runAfterDelay(() -> spawnMesoDrop(meso, point, dropper, owner, playerDrop, dropType), delay);
+        if (delay > 0) DelayedMapDrops.meso(this, meso, point, dropper, owner, playerDrop, dropType, delay);
         else spawnMesoDrop(meso, point, dropper, owner, playerDrop, dropType);
     }
     public List<PlayerShop> MapleMap.getAllPlayerShops() {

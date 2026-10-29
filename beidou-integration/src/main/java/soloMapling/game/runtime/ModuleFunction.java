@@ -9,20 +9,25 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
-/** One export declaration supplies both its help and argument checks, then binds an exact instance. */
-public record ModuleFunction<M extends RuntimeModule>(String name, String description, List<Parameter> parameters,
-                                                      String resultDescription, Handler<M> handler) {
+/** One typed operation supplies its JSON boundary, business invocation, help and completion contract. */
+public record ModuleFunction<M extends RuntimeModule, I, R>(String name, String description, List<Parameter> parameters,
+        String resultDescription, String completionCondition, Input<M, I> input,
+        Handler<M, I, R> handler, Function<R, ?> output) {
     public ModuleFunction {
         requireName(name);
         requireDescription(description);
         requireDescription(resultDescription);
+        requireDescription(completionCondition);
         parameters = List.copyOf(parameters);
         Set<String> names = new HashSet<>();
         for (Parameter parameter : parameters) {
             if (!names.add(parameter.name())) throw new IllegalArgumentException("duplicate_module_function_parameter");
         }
+        Objects.requireNonNull(input);
         Objects.requireNonNull(handler);
+        Objects.requireNonNull(output);
     }
 
     public enum Type { STRING, NUMBER, INTEGER, BOOLEAN, OBJECT, ARRAY }
@@ -36,29 +41,44 @@ public record ModuleFunction<M extends RuntimeModule>(String name, String descri
     }
 
     @FunctionalInterface
-    public interface Handler<M extends RuntimeModule> {
-        Object invoke(M instance, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work,
-                      Map<String, Object> arguments) throws Exception;
+    public interface Input<M extends RuntimeModule, I> {
+        I decode(M instance, Map<String, Object> arguments);
     }
 
-    public interface Bound {
+    @FunctionalInterface
+    public interface Handler<M extends RuntimeModule, I, R> {
+        R invoke(M instance, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, I input) throws Exception;
+    }
+
+    @FunctionalInterface
+    public interface Invocation<R> {
+        R invoke(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) throws Exception;
+    }
+
+    public interface Bound<I, R> {
+        ModuleFunction<?, I, R> declaration();
         String name();
         Map<String, Object> describe();
-        void validate(Map<String, Object> arguments);
-        /** The runtime has checked availability and validated the arguments before accepting this work. */
-        Object invoke(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work,
-                      Map<String, Object> arguments) throws Exception;
+        /** Schema validation and JSON decoding happen once, before the runtime accepts invocation work. */
+        Invocation<Object> prepare(Map<String, Object> arguments);
+        /** Uses an already-typed input and the provider's already-running invocation work. */
+        R invoke(I input, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) throws Exception;
     }
 
-    public Bound bind(M instance) {
+    public Bound<I, R> bind(M instance) {
         Objects.requireNonNull(instance);
-        return new Bound() {
+        return new Bound<>() {
+            @Override public ModuleFunction<M, I, R> declaration() { return ModuleFunction.this; }
             @Override public String name() { return name; }
             @Override public Map<String, Object> describe() { return ModuleFunction.this.describe(); }
-            @Override public void validate(Map<String, Object> arguments) { validateArguments(arguments); }
-            @Override public Object invoke(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work,
-                                           Map<String, Object> arguments) throws Exception {
-                return handler.invoke(instance, context, work, arguments);
+            @Override public Invocation<Object> prepare(Map<String, Object> arguments) {
+                validateArguments(arguments);
+                I decoded = input.decode(instance, arguments);
+                return (context, work) -> output.apply(invoke(decoded, context, work));
+            }
+            @Override public R invoke(I value, CharacterRuntime.ModuleContext context,
+                                       ExecutionScope.WorkHandle work) throws Exception {
+                return handler.invoke(instance, context, work, value);
             }
         };
     }
@@ -71,6 +91,7 @@ public record ModuleFunction<M extends RuntimeModule>(String name, String descri
                 "name", parameter.name(), "type", parameter.type().name().toLowerCase(Locale.ROOT),
                 "required", parameter.required(), "description", parameter.description())).toList());
         description.put("result_description", resultDescription);
+        description.put("completion_condition", completionCondition);
         return Map.copyOf(description);
     }
 
