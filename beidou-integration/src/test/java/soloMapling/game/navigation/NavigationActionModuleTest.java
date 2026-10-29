@@ -6,6 +6,9 @@ import org.gms.client.Disease;
 import org.gms.client.BuffStat;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
+import org.gms.constants.inventory.ItemConstants;
+import org.gms.server.ItemInformationProvider;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -20,6 +23,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.beidou.InventoryMetadataTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -37,6 +41,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -57,11 +62,27 @@ import static org.mockito.Mockito.*;
 class NavigationActionModuleTest {
     private final List<Fixture> fixtures = new ArrayList<>();
 
-    @BeforeEach void startWorld() { CharacterTestContext.install(); WorldEpoch.onWorldStarted(); }
+    private Map<Integer, Map<String, Integer>> equipmentStats;
+    private final Map<Integer, Map<String, Integer>> savedEquipmentStats = new HashMap<>();
+
+    @BeforeEach @SuppressWarnings("unchecked") void startWorld() throws Exception {
+        InventoryMetadataTestContext.install();
+        WorldEpoch.onWorldStarted();
+        var field = ItemInformationProvider.class.getDeclaredField("equipStatsCache");
+        field.setAccessible(true);
+        equipmentStats = (Map<Integer, Map<String, Integer>>) field.get(ItemInformationProvider.getInstance());
+        for (int item : List.of(1072001, 1072239)) {
+            savedEquipmentStats.put(item, equipmentStats.get(item));
+            equipmentStats.put(item, item == 1072239 ? Map.of("fs", 10) : Map.of());
+        }
+    }
     @AfterEach void closeWorld() throws Exception {
         for (var fixture : fixtures) fixture.close();
         ThreadLocalUtil.removeCurrentClient();
         ExecutionScope.tryBeginWorldStop();
+        savedEquipmentStats.forEach((item, stats) -> {
+            if (stats == null) equipmentStats.remove(item); else equipmentStats.put(item, stats);
+        });
     }
 
     @Test void nativeWalkingJumpingDroppingAndClimbingArriveThroughTheSharedModuleEntry() {
@@ -87,6 +108,83 @@ class NavigationActionModuleTest {
         assertEquals(0, fixture.module.context().scope().snapshot().acceptedWork());
         verify(fixture.map, atLeastOnce()).movePlayer(eq(fixture.character), any());
         assertEquals(4, fixture.stance.get() & ~1);
+    }
+
+    @Test void iceAndBothNativeShoeEffectsShareTheOrdinaryGroundProfileWhenProtected() {
+        var ordinary = fixture(98_982_121, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
+        var ice = fixture(98_982_122, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
+        var natural = fixture(98_982_123, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
+        var scrolled = fixture(98_982_124, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
+        for (var fixture : List.of(ice, natural, scrolled)) when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
+        natural.shoe.set(shoe(1072239, 0));
+        scrolled.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+        for (var fixture : List.of(ordinary, ice, natural, scrolled)) {
+            var result = fixture.moveTo(new Point(120, 0));
+            assertEquals("ARRIVED", result.get("outcome"), result.toString());
+            assertEquals(true, result.get("stable"));
+            assertTrue(fixture.position.get().distance(new Point(120, 0)) <= 8);
+            assertEquals(0, fixture.module.context().scope().snapshot().acceptedWork());
+            assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
+        }
+        assertEquals(ordinary.movements.subList(0, 4), natural.movements.subList(0, 4));
+        assertEquals(ordinary.movements.subList(0, 4), scrolled.movements.subList(0, 4));
+        assertTrue(ice.movements.get(3).x < ordinary.movements.get(3).x,
+                "ordinary shoes accelerate more slowly on ice at the same speed/jump stats");
+    }
+
+    @Test void effectiveShoeChangeStopsTheIcePlanWhileOrdinaryGroundKeepsTheSamePlan() {
+        var ice = fixture(98_982_125, new Point(0, 0), List.of(foothold(-300, 0, 450, 0, 1)), List.of());
+        when(ice.map.getFootholdSpeed()).thenReturn(0.2f);
+        var changedAt = new AtomicReference<Point>();
+        doAnswer(call -> {
+            if (ice.movements.size() == 8) {
+                changedAt.set(new Point(ice.position.get()));
+                ice.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+            }
+            return null;
+        }).when(ice.map).movePlayer(eq(ice.character), any());
+        var changed = ice.moveTo(new Point(300, 0));
+        assertEquals("BLOCKED", changed.get("outcome"), changed.toString());
+        assertEquals("attributes_changed", changed.get("reason"));
+        assertEquals(true, changed.get("stable"));
+        assertNotNull(changedAt.get());
+        assertTrue(ice.position.get().x > changedAt.get().x, "cleanup integrates retained momentum with the new shoe rule");
+        assertEquals(0, ice.module.context().scope().resources().snapshot().outstanding());
+        assertEquals("ARRIVED", ice.moveTo(new Point(0, 0)).get("outcome"));
+
+        var ordinary = fixture(98_982_126, new Point(0, 0), List.of(foothold(-300, 0, 450, 0, 1)), List.of());
+        doAnswer(call -> {
+            if (ordinary.movements.size() == 8) ordinary.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+            return null;
+        }).when(ordinary.map).movePlayer(eq(ordinary.character), any());
+        assertEquals("ARRIVED", ordinary.moveTo(new Point(160, 0)).get("outcome"),
+                "a pure anti-slip change on ordinary ground does not change the effective profile");
+    }
+
+    @Test void iceGroundTransitionsRetainJumpDropAndRopeExecution() {
+        for (int shape = 0; shape < 3; shape++) {
+            var from = shape == 0 ? new Point(-50, 0) : shape == 1 ? new Point(0, -80) : new Point(0, 0);
+            var target = shape == 0 ? new Point(150, -40) : shape == 1 ? new Point(0, 0) : new Point(0, -180);
+            var footholds = shape == 0
+                    ? List.of(foothold(-200, 0, 0, 0, 1), foothold(20, -40, 230, -40, 2))
+                    : shape == 1 ? List.of(foothold(-150, -80, 150, -80, 1), foothold(-250, 0, 250, 0, 2))
+                    : List.of(foothold(-200, -180, 200, -180, 1), foothold(-200, 0, 200, 0, 2));
+            var fixture = fixture(98_982_127 + shape, from, footholds,
+                    shape == 2 ? List.of(new Rope(0, -180, 0, true)) : List.of());
+            when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
+            var result = fixture.moveTo(target);
+            assertEquals("ARRIVED", result.get("outcome"), result.toString());
+            assertEquals(true, result.get("stable"));
+            assertTrue(fixture.position.get().distance(target) <= 8);
+            assertTrue(((List<?>) result.get("edge_types")).contains(List.of("JUMP", "DROP", "CLIMB").get(shape)));
+        }
+    }
+
+    private static Item shoe(int id, int flag) {
+        var shoe = mock(Item.class);
+        when(shoe.getItemId()).thenReturn(id);
+        when(shoe.getFlag()).thenReturn((short) flag);
+        return shoe;
     }
 
     @Test void javaActionEntryReturnsTypedResultAfterNativeMovementAndWorkSettlement() throws Exception {
@@ -163,7 +261,9 @@ class NavigationActionModuleTest {
         assertTrue(maximumStep.get() <= 7, "the map forces native base movement despite speed equipment/buffs");
         assertNotNull(stoppedAt.get());
         assertTrue(stoppedAt.get().x > 0);
-        assertEquals(stoppedAt.get(), fixture.position.get());
+        assertTrue(fixture.position.get().x >= stoppedAt.get().x);
+        assertTrue(fixture.position.get().x - stoppedAt.get().x <= 8,
+                "stopping retains and settles the previous physical momentum");
         assertEquals(true, result.get("stable"));
         assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
     }
@@ -204,6 +304,8 @@ class NavigationActionModuleTest {
         final MapleMap map = mock(MapleMap.class);
         final AtomicReference<Point> position;
         final AtomicInteger stance = new AtomicInteger(4);
+        final AtomicReference<Item> shoe = new AtomicReference<>();
+        final List<Point> movements = new ArrayList<>();
         final CharacterRuntime runtime;
         final NavigationActionModule module;
         final CharacterRuntime.ModuleContext caller;
@@ -232,7 +334,9 @@ class NavigationActionModuleTest {
             when(character.getTotalMoveSpeedStat()).thenReturn(100);
             when(character.getTotalJumpStat()).thenReturn(100);
             when(character.getBuffedValue(BuffStat.MONSTER_RIDING)).thenReturn(null);
-            when(character.getInventory(InventoryType.EQUIPPED)).thenReturn(mock(Inventory.class));
+            var equipped = mock(Inventory.class);
+            when(equipped.getItem((short) -7)).thenAnswer(call -> shoe.get());
+            when(character.getInventory(InventoryType.EQUIPPED)).thenReturn(equipped);
             when(character.getMap()).thenReturn(map);
             when(map.getCharacterById(41)).thenReturn(character);
             when(map.getId()).thenReturn(mapId);
@@ -244,7 +348,7 @@ class NavigationActionModuleTest {
             when(map.getFootholds()).thenReturn(tree);
             when(character.getPosition()).thenAnswer(call -> new Point(position.get()));
             when(character.getStance()).thenAnswer(call -> stance.get());
-            doAnswer(call -> { position.set(new Point(call.getArgument(0))); return null; }).when(character).setPosition(any());
+            doAnswer(call -> { position.set(new Point(call.getArgument(0))); movements.add(new Point(position.get())); return null; }).when(character).setPosition(any());
             doAnswer(call -> { stance.set(call.getArgument(0)); return null; }).when(character).setStance(anyInt());
             var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8, 1,

@@ -164,10 +164,7 @@ final class BotNavigationGraphProvider {
     /* Snowshoes only change physics on slippery ground (fs < 1): strip the flag everywhere
      *  else so a snowshoe-wearing bot shares the normal map graphs instead of duplicating them. */
     private static BotMovementProfile canonicalProfile(MapleMap map, BotMovementProfile profile) {
-        if (profile == null || !profile.snowShoes() || BotPhysicsEngine.slipperyGround(map)) {
-            return profile;
-        }
-        return new BotMovementProfile(profile.totalSpeedStat(), profile.totalJumpStat(), false);
+        return profile == null ? null : profile.forGround(map);
     }
 
     static final class GraphBuildReport {
@@ -544,6 +541,7 @@ final class BotNavigationGraphProvider {
     }
 
     static BotNavigationGraph rebuildGraph(MapleMap map, BotMovementProfile movementProfile) {
+        movementProfile = canonicalProfile(map, movementProfile);
         GraphCacheKey key = GraphCacheKey.from(map.getId(), movementProfile);
         BotNavigationGraph rebuilt = buildGraph(map, movementProfile);
         GRAPHS.put(key, rebuilt);
@@ -670,7 +668,8 @@ final class BotNavigationGraphProvider {
             if (graph.version != GRAPH_VERSION
                     || graph.mapId != key.mapId()
                     || graph.movementProfile.totalSpeedStat() != key.totalSpeedStat()
-                    || graph.movementProfile.totalJumpStat() != key.totalJumpStat()) {
+                    || graph.movementProfile.totalJumpStat() != key.totalJumpStat()
+                    || graph.movementProfile.snowShoes() != key.snowShoes()) {
                 return null;
             }
             seedCachedFootholdCollisionIds(graph);
@@ -694,7 +693,8 @@ final class BotNavigationGraphProvider {
     }
 
     private static Path graphFile(GraphCacheKey key) {
-        return CACHE_DIR.resolve(key.mapId() + "-s" + key.totalSpeedStat() + "-j" + key.totalJumpStat() + ".bin");
+        return CACHE_DIR.resolve(key.mapId() + "-s" + key.totalSpeedStat() + "-j" + key.totalJumpStat()
+                + (key.snowShoes() ? "-snow" : "") + ".bin");
     }
 
     private static BotNavigationGraph buildGraph(MapleMap map, BotMovementProfile movementProfile) {
