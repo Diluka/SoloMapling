@@ -11,6 +11,7 @@ import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Portal;
 import org.gms.server.maps.PortalFactory;
 import org.gms.server.maps.Rope;
+import soloMapling.beidou.MapGeometryHooks;
 
 import java.awt.*;
 import java.util.LinkedList;
@@ -51,7 +52,7 @@ final class BotNavigationMapLoader {
 
         Data footholdSpeedData = infoData.getChildByPath("fs");
         if (footholdSpeedData != null) {
-            map.setFootholdSpeed(DataTool.getFloat(footholdSpeedData));
+            map.setFootholdSpeed(MapGeometryHooks.readGroundSlip(footholdSpeedData));
         }
         return map;
     }
