@@ -3,7 +3,7 @@
 本文描述当前源码 API。#205 在既有运行体上补充模块定义、实例装配和受管导出；
 候选实现、源码测试、隔离验收及实际部署分别以对应 Issue 的记录为准。
 类型及初始人口配置见 [#263 的人口参考](population.md)，当前场景目标导航见
-[#122 的导航参考](navigation.md)，指定目标持续交战及首批候选范围见
+[#122 的导航参考](navigation.md)，指定目标持续交战及职业范围见
 [#271 的战斗参考](combat.md)，普通复活见[#275 的原生动作参考](native-actions.md)。
 阶段入口为 [M1 #79](https://github.com/Diluka/SoloMapling/issues/79)，MCP 首环与次环分别为
 [#139](https://github.com/Diluka/SoloMapling/issues/139)、[#140](https://github.com/Diluka/SoloMapling/issues/140)。

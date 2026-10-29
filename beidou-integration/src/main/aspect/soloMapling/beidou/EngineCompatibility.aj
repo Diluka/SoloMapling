@@ -9,6 +9,7 @@ import org.gms.client.inventory.Item;
 import org.gms.constants.inventory.ItemConstants;
 import org.gms.net.server.channel.Channel;
 import org.gms.server.StatEffect;
+import org.gms.scripting.event.EventInstanceManager;
 import org.gms.server.maps.Foothold;
 import org.gms.server.maps.FootholdTree;
 import org.gms.server.maps.HiredMerchant;
@@ -67,6 +68,9 @@ public privileged aspect EngineCompatibility {
 
     public void Character.soloSetChair(int chairId) { setChair(chairId); }
     public void Character.soloUnsitChair() { unsitChairInternal(); }
+    public void Character.respawn(EventInstanceManager event, MapleMap returnMap) {
+        respawn(event, returnMap.getId());
+    }
 
     public boolean StatEffect.applyToTarget(Character caster, Character target) {
         return applyTo(caster, target, false, null, false, 1);

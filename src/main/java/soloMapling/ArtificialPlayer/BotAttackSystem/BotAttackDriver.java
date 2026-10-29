@@ -5,7 +5,6 @@ import org.gms.client.Job;
 import org.gms.client.Skill;
 import org.gms.client.SkillFactory;
 import org.gms.client.inventory.WeaponType;
-import org.gms.constants.skills.Cleric;
 import org.gms.constants.skills.Hermit;
 import org.gms.server.StatEffect;
 import org.gms.server.life.Monster;
@@ -61,11 +60,6 @@ public final class BotAttackDriver {
     // Two horizontal extents count as "centred on the bot" (a surround attack) when they match
     // within this slack (px).
     private static final int SYMMETRY_SLACK = 24;
-
-    // Cleric Heal (2301002) damages undead as an AoE in v83 (client-authoritative). A cleric-line bot
-    // casts it at an undead pack instead of its normal bolt; the MAGIC route renders the heal and applies
-    // real damage like any bot magic attack. Heal is not a charge skill, so magicChargeFor(-1) already fits.
-    private static final BotAttackProfile HEAL_PROFILE = BotAttackProfile.magicAoe(Cleric.HEAL, 1);
 
     private BotAttackDriver() {}
 
@@ -198,7 +192,7 @@ public final class BotAttackDriver {
         } else if (choice == Choice.ULTIMATE) {
             profile = ultimate;
         } else if (isClericVsUndead(bot, nearest)) {
-            profile = HEAL_PROFILE; // Heal-as-damage on the undead pack
+            profile = BotAttackConfig.healUndead(); // Heal-as-damage on the undead pack
             healUndead = true;
         } else {
             // The AoE we'd throw at a pack: the full-map ultimate when it's off its long separate

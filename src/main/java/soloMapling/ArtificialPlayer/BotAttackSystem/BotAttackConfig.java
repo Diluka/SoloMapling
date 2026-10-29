@@ -70,6 +70,7 @@ public final class BotAttackConfig {
     // 1st-job rogue basics - chosen by weapon, since the Thief job alone is ambiguous.
     private static final BotAttackProfile ROGUE_CLAW = ranged(Rogue.LUCKY_SEVEN, 2);
     private static final BotAttackProfile ROGUE_DAGGER = melee(Rogue.DOUBLE_STAB, 2);
+    private static final BotAttackProfile HEAL_UNDEAD = magicAoe(Cleric.HEAL, 1);
 
     // Dragon/Dark Knight's main attack (spear or pole-arm form), used as both single and mob swing.
     private static final BotAttackProfile CRUSHER = meleeMultiVar(DragonKnight.SPEAR_CRUSHER, DragonKnight.POLE_ARM_CRUSHER, 3, 3);
@@ -174,6 +175,9 @@ public final class BotAttackConfig {
         }
         return BY_JOB.getOrDefault(job, new JobAttacks(null, null, null));
     }
+
+    /** Cleric-line AUTO renders Heal through MAGIC and applies the original simulated undead damage. */
+    public static BotAttackProfile healUndead() { return HEAL_UNDEAD; }
 
     /*
      * The bot's effective {single, aoe, ultimate} attacks: the most advanced of each across its

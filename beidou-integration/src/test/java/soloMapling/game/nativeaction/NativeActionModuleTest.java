@@ -1,5 +1,8 @@
 package soloMapling.game.nativeaction;
 
+import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.HostAccess;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.client.Job;
@@ -29,6 +32,9 @@ import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 
 import java.awt.Point;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -129,6 +135,36 @@ class NativeActionModuleTest {
         }
     }
 
+    @Test void originalRockSpiritCallbackCanTakeOverWithItsNativeMapRespawnSignature() throws Exception {
+        try (var fixture = new Fixture(0);
+             var engine = GraalJSScriptEngine.create(null, Context.newBuilder("js").allowHostAccess(HostAccess.ALL))) {
+            engine.eval(Files.readString(Path.of("upstream/BeiDou-Server/gms-server/scripts/event/RockSpirit.js"),
+                    StandardCharsets.UTF_8));
+            engine.put("exitMap", fixture.returnMap);
+            var event = fixture.event(false, false);
+            doAnswer(call -> {
+                assertSame(event, call.getArgument(1));
+                assertSame(fixture.actor, call.getArgument(2));
+                return engine.invokeFunction("playerRevive", event, fixture.actor);
+            }).when(event).invokeScriptFunction(eq("playerRevive"), any(), any());
+            doAnswer(call -> { fixture.currentEvent.set(null); return null; })
+                    .when(event).unregisterPlayer(fixture.actor);
+
+            var result = fixture.revive();
+
+            assertEquals(ReviveResult.Outcome.REVIVED, result.outcome());
+            assertEquals(ReviveResult.EventRoute.TAKEN_OVER, result.event().route());
+            assertEquals(50, result.after().hp());
+            assertEquals(fixture.returnMap.getId(), result.after().mapId());
+            assertTrue(result.event().respawnReturned());
+            assertFalse(result.event().standardRespawnStarted());
+            verify(event).unregisterPlayer(fixture.actor);
+            verify(fixture.actor).respawn(event, fixture.returnMap.getId());
+            verify(fixture.actor).cancelAllBuffs(false);
+            fixture.assertDrained();
+        }
+    }
+
     @Test void eventTakeoverWithoutAReviveReportsTheCurrentDeadStateAndKeepsEventOwnership() throws Exception {
         try (var fixture = new Fixture(0)) {
             var event = fixture.event(false, false);
@@ -220,7 +256,8 @@ class NativeActionModuleTest {
     }
 
     private static final class Fixture implements AutoCloseable {
-        final Character actor = mock(Character.class);
+        final Character actor = mock(Character.class, invocation -> invocation.getMethod().getName().equals("respawn")
+                ? invocation.callRealMethod() : RETURNS_DEFAULTS.answer(invocation));
         final Client client = mock(Client.class);
         final Client previousClient = mock(Client.class);
         final MapleMap initialMap = mock(MapleMap.class);

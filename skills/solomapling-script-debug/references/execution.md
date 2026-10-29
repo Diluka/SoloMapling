@@ -91,7 +91,7 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 该次调用在允许范围内接敌、选招并持续攻击，等待本次交战与组合导航收尾。`allowed_target_oids` 最多32个不同 ID，必须包含指定目标，省略时仅允许指定目标。目录返回 `SUCCEEDED` 后检查 `result.outcome`、`attacks` 和 `hits`；`buff_skill_ids` 是当前路径声明，`buffs_cast` 是本次派发记录。调用的攻击使用旧模拟规则，仍可能产生真实怪物扣血、经验和掉落，按实际后态核对。
 
-当前候选首批为 HERO 与 IL_ARCHMAGE 两链，其他职业沿通用普攻兜底；完整范围继续按同一契约迁移。参数、结果、模块实例冷却及取消语义见[战斗参考](../../../docs/robot-runtime/combat.md)，职业清单见[职业能力](../../../docs/robot-runtime/combat-jobs.md)。临时职业测试类型和材料放在 `RobotPopulation.local.yaml`，沿[人口配置](../../../docs/robot-runtime/population.md#本地临时类型)加载。
+当前完整候选覆盖旧表约定的冒险家职业链；未配置专属技能的职业沿通用普攻兜底。参数、结果、模块实例冷却及取消语义见[战斗参考](../../../docs/robot-runtime/combat.md)，职业清单见[职业能力](../../../docs/robot-runtime/combat-jobs.md)。临时职业测试类型和材料放在 `RobotPopulation.local.yaml`，沿[人口配置](../../../docs/robot-runtime/population.md#本地临时类型)加载。
 
 ## 请求原生普通复活
 

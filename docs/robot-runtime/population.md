@@ -43,7 +43,7 @@ solomapling:
 
 `mcp_test` 的默认初始数量为 `0`，MCP 角色仍由 `actor_open` 打开。
 
-当前源码的 `combat` 模块默认 `config.timeout_ms: 30000`，通过 `combat.engage` 接受一次指定目标的持续交战。首批候选职业、参数与结果见[战斗参考](combat.md)，实际目录和部署状态按当前环境核对。
+当前源码的 `combat` 模块默认 `config.timeout_ms: 30000`，通过 `combat.engage` 接受一次指定目标的持续交战。当前职业范围、参数与结果见[战斗参考](combat.md)，实际目录和部署状态按当前环境核对。
 
 `native-actions` 模块使用空配置 `{}`，首环导出普通复活操作 `native.revive`。原生事件、标准回城及角色后态的结果契约见[原生动作参考](native-actions.md)。
 

@@ -6,6 +6,12 @@ import org.gms.client.Job;
 import org.gms.client.BuffStat;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
+import org.gms.net.packet.Packet;
+import org.gms.net.opcodes.SendOpcode;
+import org.gms.constants.skills.Rogue;
+import org.gms.constants.skills.Cleric;
+import org.gms.constants.skills.Bishop;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -19,6 +25,7 @@ import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import soloMapling.beidou.CharacterTestContext;
+import soloMapling.beidou.InventoryMetadataTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -38,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,7 +56,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class CombatActionModuleTest {
-    @BeforeEach void installNativeContext() { CharacterTestContext.install(); Job.values(); }
+    @BeforeEach void installNativeContext() throws Exception {
+        CharacterTestContext.install(); InventoryMetadataTestContext.install(); Job.values();
+    }
     @Test void sharedEntryHitsOnlyTheRequestedTargetAndWaitsForTheLegacyStrike() throws Exception {
         try (var fixture = new Fixture()) {
             var call = fixture.caller.call(CombatActionModule.ENGAGE,
@@ -107,6 +117,52 @@ class CombatActionModuleTest {
         }
     }
 
+    @Test void thiefWeaponBranchAndInheritedShadowPartnerReachTheRealAttackPacket() throws Exception {
+        try (var claw = new Fixture(Job.THIEF, 1472000)) {
+            var result = claw.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 30_000), null).result();
+            assertEquals(Rogue.LUCKY_SEVEN, result.attacks().getFirst().skillId());
+            assertEquals("RANGED", result.attacks().getFirst().route());
+            assertEquals(2, claw.attackPackets(SendOpcode.RANGED_ATTACK).getFirst()[6] & 0x0F);
+        }
+        try (var dagger = new Fixture(Job.THIEF, 1332000)) {
+            var result = dagger.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 30_000), null).result();
+            assertEquals(Rogue.DOUBLE_STAB, result.attacks().getFirst().skillId());
+            assertEquals("CLOSE", result.attacks().getFirst().route());
+        }
+        try (var hermit = new Fixture(Job.HERMIT, 1472000)) {
+            var result = hermit.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.SINGLE, 30_000), null).result();
+            assertEquals(Rogue.LUCKY_SEVEN, result.attacks().getFirst().skillId());
+            assertEquals(Job.THIEF.getId(), result.attacks().getFirst().providerJob());
+            assertEquals(List.of(411, 410, 400), result.activePath());
+            assertEquals(4, hermit.attackPackets(SendOpcode.RANGED_ATTACK).getFirst()[6] & 0x0F);
+        }
+    }
+
+    @Test void clericLineAutoHealsOnlyTheUndeadAndKeepsNormalSkillsForLivingTargets() throws Exception {
+        for (Job job : List.of(Job.CLERIC, Job.PRIEST, Job.BISHOP)) {
+            try (var fixture = new Fixture(job, 1372000)) {
+                when(fixture.target.getStats().isUndead()).thenReturn(true);
+                when(fixture.outside.getStats()).thenReturn(mock(MonsterStats.class));
+                var result = fixture.caller.call(CombatActionModule.ENGAGE,
+                        new CombatRequest(91, Set.of(91, 92), CombatRequest.Choice.AUTO, 30_000), null).result();
+                assertEquals(CombatResult.Outcome.TARGET_DEAD, result.outcome());
+                assertEquals(Cleric.HEAL, result.attacks().getFirst().skillId());
+                assertEquals(Job.CLERIC.getId(), result.attacks().getFirst().providerJob());
+                assertEquals(List.of(91), result.hits().stream().map(CombatResult.Hit::objectId).toList());
+                verify(fixture.outside, never()).damage(any(), anyInt(), anyBoolean());
+            }
+        }
+        try (var fixture = new Fixture(Job.BISHOP, 1372000)) {
+            var result = fixture.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 30_000), null).result();
+            assertEquals(Bishop.ANGEL_RAY, result.attacks().getFirst().skillId());
+            assertEquals(Job.BISHOP.getId(), result.attacks().getFirst().providerJob());
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         final Character actor = mock(Character.class);
         final Monster target = mock(Monster.class);
@@ -118,10 +174,13 @@ class CombatActionModuleTest {
         final AtomicReference<Point> position = new AtomicReference<>(new Point(0, 0));
         final AtomicInteger stance = new AtomicInteger(4);
         final AtomicInteger exp = new AtomicInteger();
+        final List<Packet> packets = new CopyOnWriteArrayList<>();
 
-        Fixture() { this(false); }
+        Fixture() { this(false, Job.BEGINNER, 0); }
+        Fixture(boolean navigation) { this(navigation, Job.BEGINNER, 0); }
+        Fixture(Job job, int weaponId) { this(false, job, weaponId); }
 
-        Fixture(boolean navigation) {
+        Fixture(boolean navigation, Job job, int weaponId) {
             WorldEpoch.onWorldStarted();
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -159,9 +218,16 @@ class CombatActionModuleTest {
             var footholds = new FootholdTree(new Point(-500, -500), new Point(1000, 500));
             footholds.insert(new Foothold(new Point(-500, 0), new Point(1000, 0), 1));
             when(map.getFootholds()).thenReturn(footholds);
-            when(actor.getJob()).thenReturn(Job.BEGINNER);
+            when(actor.getJob()).thenReturn(job);
             when(actor.getLevel()).thenReturn(1);
-            when(actor.getInventory(InventoryType.EQUIPPED)).thenReturn(mock(Inventory.class));
+            Inventory equipment = mock(Inventory.class);
+            if (weaponId != 0) {
+                var weapon = new Item(weaponId, (short) -11, (short) 1);
+                when(equipment.getItem((short) -11)).thenReturn(weapon);
+            }
+            when(actor.getInventory(InventoryType.EQUIPPED)).thenReturn(equipment);
+            doAnswer(invocation -> { packets.add(invocation.getArgument(1)); return null; }).when(map)
+                    .broadcastMessage(eq(actor), any(Packet.class), eq(false));
             var hp = new AtomicInteger(100);
             when(target.getObjectId()).thenReturn(91);
             when(target.getId()).thenReturn(100100);
@@ -215,6 +281,11 @@ class CombatActionModuleTest {
             var controller = new ModuleDefinition<Void, RuntimeModule>("test-controller", Set.of(),
                     new ExecutionScope.Limits(8, 2, 4, 2), config -> new RuntimeModule() {}, List.of());
             caller = runtime.context(runtime.mount(controller, new ModuleSelection<>("controller", null, true)).reference());
+        }
+
+        List<byte[]> attackPackets(SendOpcode opcode) {
+            return packets.stream().map(Packet::getBytes).filter(bytes ->
+                    ((bytes[0] & 0xFF) | (bytes[1] & 0xFF) << 8) == opcode.getValue()).toList();
         }
 
         @Override public void close() throws Exception {
