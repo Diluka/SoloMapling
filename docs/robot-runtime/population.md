@@ -4,7 +4,18 @@
 
 ## 配置来源与类型
 
-`solomapling.robot-population-config` 指定 `RobotPopulation.yaml` 的路径。未指定路径时读取随程序分发的[默认配置](../../beidou-integration/src/main/resources/soloMapling/game/population/RobotPopulation.yaml)。部署继续通过 `application.yml` 指定本地只读配置文件；每轮世界启动时读取一次，并将模块配置转换成可供创建入口直接使用的装配计划。
+`solomapling.robot-population-config` 指定一个路径或有序路径列表。未指定时读取随程序分发的[默认配置](../../beidou-integration/src/main/resources/soloMapling/game/population/RobotPopulation.yaml)。部署通过 `application.yml` 指定本地只读文件，例如：
+
+```yaml
+solomapling:
+  robot-population-config:
+    - /opt/config/RobotPopulation.yaml
+    - /opt/config/RobotPopulation.local.yaml
+```
+
+每轮世界启动时按列表顺序读取并合并：`types` 按类型名合并，后文件的同名类型完整替换前面的定义；`initial_population` 按类型名覆盖，`0` 也是有效覆盖值。文件可以只提供其中一部分。全部合并完成后，再一次转换模块装配计划并核对初始化数量引用。
+
+列出的文件须存在。只使用默认配置时列出第一个文件即可；路径未指定时仅加载内置默认文件。`RobotPopulation.local.yaml` 用于本地临时测试，已由 Git 忽略，按需要创建并加入加载列表。
 
 文件先定义 `types`，再定义 `initial_population`：
 
@@ -29,11 +40,31 @@
 | 类型 | 装配与用途 |
 |---|---|
 | `mcp_test` | `mcp-control`、`navigation`、`robot-population`；为已有 MCP 专用角色提供测试能力，不声明新建角色来源 |
-| `navigation_probe` | `fmbot` 来源及导航模块；用于通过人口服务创建、移除独立环境机器人 |
 
-两种类型的默认初始数量均为 `0`。MCP 角色仍由 `actor_open` 打开；`navigation_probe` 可由脚本创建，或在专用配置中设置启动数量。
+`mcp_test` 的默认初始数量为 `0`，MCP 角色仍由 `actor_open` 打开。
 
 后续新增非自主能力模块时，将其加入 `mcp_test.modules` 并随模块共同验收。自主控制模块保留在其业务类型中。MCP 接入代码只引用固定类型名，模块组合在这份配置中维护。
+
+## 本地临时类型
+
+测试类型放在 `RobotPopulation.local.yaml`，例如：
+
+```yaml
+types:
+  navigation_probe:
+    character:
+      template: fmbot
+      spawn: {world: 0, channel: 1, map: 100000000}
+    modules:
+      navigation:
+        type: navigation
+        config: {}
+
+initial_population:
+  navigation_probe: 0
+```
+
+加载默认文件和这个临时文件后，同时获得 `mcp_test` 与 `navigation_probe`。临时文件按自己的测试需要维护，默认分发文件只保存长期使用的类型。
 
 ## 初始化与实例生命周期
 

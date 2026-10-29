@@ -3,6 +3,8 @@ package soloMapling.game.population;
 import org.gms.soloacceptance.actor.McpControlModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.env.Environment;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -13,6 +15,7 @@ import soloMapling.game.runtime.RuntimeModule;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -29,14 +32,15 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class RobotPopulationService {
     private static final Logger LOG = LoggerFactory.getLogger(RobotPopulationService.class);
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(10);
-    private final String configPath;
+    private final List<String> configPaths;
     private final RobotModuleRegistry registry = new RobotModuleRegistry();
     private final Map<String, Instance> instances = new LinkedHashMap<>();
     private volatile RobotPopulationConfig configuration;
     private WorldEpoch.Token epoch;
 
     public RobotPopulationService(Environment environment) {
-        configPath = environment.getProperty("solomapling.robot-population-config", "");
+        configPaths = Binder.get(environment).bind("solomapling.robot-population-config", Bindable.listOf(String.class))
+                .orElse(List.of());
         registry.register(McpControlModule.DEFINITION, Map::copyOf);
         registry.register(NavigationModule.DEFINITION, NavigationModule::parseConfig);
         registry.register(RobotPopulationModule.definition(this), ignored -> null);
@@ -45,7 +49,7 @@ public final class RobotPopulationService {
     public RobotPopulationConfig configuration() { return configuration; }
 
     public void onWorldStarted() {
-        var loaded = RobotPopulationConfig.load(configPath, registry);
+        var loaded = RobotPopulationConfig.load(configPaths, registry);
         synchronized (instances) {
             configuration = loaded;
             epoch = WorldEpoch.snapshot().token();
