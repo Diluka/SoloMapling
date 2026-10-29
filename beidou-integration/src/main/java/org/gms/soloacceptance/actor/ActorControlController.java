@@ -8,7 +8,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -23,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.context.request.async.WebAsyncTask;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.util.Map;
@@ -91,7 +91,7 @@ public final class ActorControlController {
     }
 
     @PostMapping(value = "/script/stream", produces = "application/x-ndjson")
-    public ResponseEntity<StreamingResponseBody> scriptStream(
+    public WebAsyncTask<Void> scriptStream(
             @RequestBody(required = false) SubmitBody<ActorScriptRequest> request,
             @RequestParam(name = "since_output", defaultValue = "0") long sinceOutput,
             HttpServletRequest servletRequest, HttpServletResponse servletResponse) {
@@ -101,11 +101,14 @@ public final class ActorControlController {
         // The native JWT filter authenticates only the initial dispatch. Keep that same
         // request's identity available when Spring completes the async streaming response.
         streamSecurityContext.saveContext(SecurityContextHolder.getContext(), servletRequest, servletResponse);
-        return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/x-ndjson"))
-                .header("Cache-Control", "no-store").header("X-Accel-Buffering", "no").body(output -> {
-                    servletRequest.getAsyncContext().setTimeout(request.getData().timeoutMs() + 5_000);
-                    stream.writeTo(output);
-                });
+        servletResponse.setContentType("application/x-ndjson");
+        servletResponse.setHeader("Cache-Control", "no-store");
+        servletResponse.setHeader("X-Accel-Buffering", "no");
+        // Spring applies this invocation's timeout before starting Servlet async processing.
+        return new WebAsyncTask<>(request.getData().timeoutMs() + 5_000, () -> {
+            stream.writeTo(servletResponse.getOutputStream());
+            return null;
+        });
     }
 
     @PostMapping("/script/cancel")

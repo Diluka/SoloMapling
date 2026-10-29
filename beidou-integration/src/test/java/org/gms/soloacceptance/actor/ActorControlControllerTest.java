@@ -7,8 +7,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.gms.model.dto.SubmitBody;
 import org.gms.soloacceptance.ObservationException;
 import org.gms.soloacceptance.AcceptanceAccess;
-import jakarta.servlet.AsyncContext;
 import jakarta.servlet.DispatcherType;
+import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -481,15 +481,21 @@ class ActorControlControllerTest {
         StreamingResponseBody stream = output -> output.write("{\"type\":\"started\"}\n".getBytes(StandardCharsets.UTF_8));
         when(service.scriptStream("script-admin", "script-id", script, 3)).thenReturn(stream);
         HttpServletRequest request = mock(HttpServletRequest.class);
-        AsyncContext async = mock(AsyncContext.class);
-        when(request.getAsyncContext()).thenReturn(async);
-        var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3,
-                request, mock(HttpServletResponse.class));
+        HttpServletResponse response = mock(HttpServletResponse.class);
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        streamed.getBody().writeTo(output);
+        ServletOutputStream responseOutput = mock(ServletOutputStream.class);
+        when(response.getOutputStream()).thenReturn(responseOutput);
+        doAnswer(write -> {
+            output.write(write.getArgument(0, byte[].class));
+            return null;
+        }).when(responseOutput).write(any(byte[].class));
+        var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3, request, response);
+        assertEquals(125000L, streamed.getTimeout());
+        assertNull(streamed.getCallable().call());
         assertEquals("{\"type\":\"started\"}\n", output.toString(StandardCharsets.UTF_8));
-        verify(async).setTimeout(125000L);
-        assertEquals("application/x-ndjson", streamed.getHeaders().getContentType().toString());
+        verify(response).setContentType("application/x-ndjson");
+        verify(response).setHeader("Cache-Control", "no-store");
+        verify(response).setHeader("X-Accel-Buffering", "no");
         var cancel = new ActorScriptCancelRequest("session", 7L, "script-id", script.kind(), script.operation(),
                 script.contextId(), script.options(), script.entry(), script.args(), script.source(), script.parameters(), script.timeoutMs());
         when(service.scriptCancel("script-admin", "cancel-id", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
