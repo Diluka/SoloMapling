@@ -26,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.beidou.InventoryMetadataTestContext;
+import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackDriver;
+import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackProfile;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -69,9 +71,25 @@ class CombatActionModuleTest {
             assertEquals(1, result.hits().size());
             assertEquals(91, result.hits().getFirst().objectId());
             assertEquals(0, result.hits().getFirst().hpAfter());
-            verify(fixture.target, atLeastOnce()).damage(eq(fixture.actor), anyInt(), eq(false));
+            int attacks = result.attacks().stream().mapToInt(CombatResult.AttackUse::count).sum();
+            verify(fixture.map, times(attacks)).damageMonster(eq(fixture.actor), eq(fixture.target), anyInt());
+            verify(fixture.map, times(1)).killMonster(fixture.target, fixture.actor, true);
+            verify(fixture.map, never()).killMonster(eq(fixture.target), eq(fixture.actor), eq(false), anyInt());
+            verify(fixture.map, never()).damageMonster(eq(fixture.actor), eq(fixture.outside), anyInt());
             verify(fixture.outside, never()).damage(any(), anyInt(), anyBoolean());
             assertEquals(0, fixture.runtime.snapshot().lane().pending());
+        }
+    }
+
+    @Test void theLegacyStrikeKeepsItsExistingSettlementEntry() throws Exception {
+        try (var fixture = new Fixture()) {
+            fixture.hp.set(1);
+            var result = BotAttackDriver.strike(fixture.actor, List.of(fixture.target),
+                    BotAttackProfile.basicSwing(), null, false, false);
+            assertTrue(result.anyKilled());
+            verify(fixture.target).damage(eq(fixture.actor), anyInt(), eq(false));
+            verify(fixture.map, never()).damageMonster(any(), any(), anyInt());
+            verify(fixture.map).killMonster(eq(fixture.target), eq(fixture.actor), eq(false), eq(300));
         }
     }
 
@@ -90,7 +108,7 @@ class CombatActionModuleTest {
         try (var fixture = new Fixture()) {
             var failure = new NoSuchMethodError("native_drop_linkage_failure");
             doAnswer(invocation -> { fixture.exp.set(500); throw failure; }).when(fixture.map)
-                    .killMonster(eq(fixture.target), eq(fixture.actor), eq(false), anyInt());
+                    .killMonster(fixture.target, fixture.actor, true);
             assertSame(failure, assertThrows(NoSuchMethodError.class,
                     () -> fixture.caller.call("combat.engage", Map.of("target_oid", 91))));
             assertEquals(0, fixture.target.getHp());
@@ -174,6 +192,7 @@ class CombatActionModuleTest {
         final AtomicReference<Point> position = new AtomicReference<>(new Point(0, 0));
         final AtomicInteger stance = new AtomicInteger(4);
         final AtomicInteger exp = new AtomicInteger();
+        final AtomicInteger hp = new AtomicInteger(100);
         final List<Packet> packets = new CopyOnWriteArrayList<>();
 
         Fixture() { this(false, Job.BEGINNER, 0); }
@@ -228,7 +247,6 @@ class CombatActionModuleTest {
             when(actor.getInventory(InventoryType.EQUIPPED)).thenReturn(equipment);
             doAnswer(invocation -> { packets.add(invocation.getArgument(1)); return null; }).when(map)
                     .broadcastMessage(eq(actor), any(Packet.class), eq(false));
-            var hp = new AtomicInteger(100);
             when(target.getObjectId()).thenReturn(91);
             when(target.getId()).thenReturn(100100);
             when(target.getPosition()).thenReturn(new Point(40, 0));
@@ -240,6 +258,7 @@ class CombatActionModuleTest {
                 hp.updateAndGet(value -> Math.max(0, value - (int) invocation.getArgument(1)));
                 return hp.get() == 0;
             });
+            when(map.damageMonster(eq(actor), eq(target), anyInt())).thenCallRealMethod();
             when(target.dropsDisabled()).thenReturn(true);
             when(map.getMonsterByOid(91)).thenReturn(target);
             when(outside.getObjectId()).thenReturn(92);

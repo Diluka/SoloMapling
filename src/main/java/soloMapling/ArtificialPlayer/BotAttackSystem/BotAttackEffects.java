@@ -31,11 +31,9 @@ import java.util.Map;
  * vanilla applyAttack path, which is keyed off stats a bot lacks. The bot is always passed
  * explicitly (never the shared client).
  *
- * On a kill we credit EXP + death via monster.damage + killMonster(withDrops=false), then
- * drop loot ourselves: the vanilla path only drops for damagers passing isLoggedinWorld(),
- * which a headless bot fails, so a bot kill would otherwise drop nothing. Loot keeps
- * vanilla ownership (owner = bot; party-shared if grouped, else owner ~15s then FFA) at
- * world drop rates.
+ * The legacy entry keeps its existing monster.damage / custom-drop settlement. The V2
+ * runtime entry shares this attack broadcast, then delegates the target's summed damage to
+ * MapleMap.damageMonster so native death, rewards, quest eligibility and loot rules apply.
  */
 public final class BotAttackEffects {
 
@@ -57,24 +55,36 @@ public final class BotAttackEffects {
      */
     public static boolean meleeStrike(Character bot, Map<Monster, List<Integer>> hits, int skillId,
                                       int skillLevel, int bodyActionId, int facingMask, int speed, short hitDelay) {
+        return meleeStrike(bot, hits, skillId, skillLevel, bodyActionId, facingMask, speed, hitDelay, false);
+    }
+
+    static boolean meleeStrike(Character bot, Map<Monster, List<Integer>> hits, int skillId,
+                               int skillLevel, int bodyActionId, int facingMask, int speed, short hitDelay,
+                               boolean nativeSettlement) {
         if (notReady(bot, hits)) {
             return false;
         }
         Packet packet = PacketCreator.closeRangeAttack(bot, skillId, skillLevel, facingMask,
                 numAttackedAndDamage(hits), toTargets(hits, hitDelay), speed, bodyActionId, 0);
-        return broadcastAndApply(bot, packet, hits, hitDelay);
+        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement);
     }
 
     /* Ranged version (bow/crossbow/gun/claw): like melee, plus the flying projectile. */
     public static boolean rangedStrike(Character bot, Map<Monster, List<Integer>> hits, int skillId,
                                        int skillLevel, int projectile, int bodyActionId, int facingMask,
                                        int speed, short hitDelay) {
+        return rangedStrike(bot, hits, skillId, skillLevel, projectile, bodyActionId, facingMask, speed, hitDelay, false);
+    }
+
+    static boolean rangedStrike(Character bot, Map<Monster, List<Integer>> hits, int skillId,
+                                int skillLevel, int projectile, int bodyActionId, int facingMask,
+                                int speed, short hitDelay, boolean nativeSettlement) {
         if (notReady(bot, hits)) {
             return false;
         }
         Packet packet = PacketCreator.rangedAttack(bot, skillId, skillLevel, facingMask,
                 numAttackedAndDamage(hits), projectile, toTargets(hits, hitDelay), speed, bodyActionId, 0);
-        return broadcastAndApply(bot, packet, hits, hitDelay);
+        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement);
     }
 
     /*
@@ -84,13 +94,19 @@ public final class BotAttackEffects {
      */
     public static boolean magicStrike(Character bot, Map<Monster, List<Integer>> hits, int skillId,
                                       int skillLevel, int bodyActionId, int facingMask, int speed, short hitDelay) {
+        return magicStrike(bot, hits, skillId, skillLevel, bodyActionId, facingMask, speed, hitDelay, false);
+    }
+
+    static boolean magicStrike(Character bot, Map<Monster, List<Integer>> hits, int skillId,
+                               int skillLevel, int bodyActionId, int facingMask, int speed, short hitDelay,
+                               boolean nativeSettlement) {
         if (notReady(bot, hits)) {
             return false;
         }
         Packet packet = PacketCreator.magicAttack(bot, skillId, skillLevel, facingMask,
                 numAttackedAndDamage(hits), toTargets(hits, hitDelay),
                 BotAttackData.magicChargeFor(skillId), speed, bodyActionId, 0);
-        return broadcastAndApply(bot, packet, hits, hitDelay);
+        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement);
     }
 
     private static boolean notReady(Character bot, Map<Monster, List<Integer>> hits) {
@@ -114,7 +130,7 @@ public final class BotAttackEffects {
 
     /* Broadcast once, then apply each mob's summed damage + loot. True if any mob died. */
     private static boolean broadcastAndApply(Character bot, Packet packet,
-                                             Map<Monster, List<Integer>> hits, short hitDelay) {
+                                             Map<Monster, List<Integer>> hits, short hitDelay, boolean nativeSettlement) {
         bot.getMap().broadcastMessage(bot, packet, /* repeatToSource */ false);
         GCMovement.markAlerted(bot); // hold the 5s ALERT pose so the bot's own idle/move broadcasts don't cancel it
         boolean anyKilled = false;
@@ -123,7 +139,11 @@ public final class BotAttackEffects {
             for (int line : hit.getValue()) {
                 total += BotAttackData.decodeDamageLine(line); // crit lines arrive negative-encoded
             }
-            if (applyDamageAndLoot(bot, hit.getKey(), total, hitDelay)) {
+            if (nativeSettlement) {
+                // V2 delegates the complete native death/reward/drop path once per selected target.
+                bot.getMap().damageMonster(bot, hit.getKey(), total);
+                anyKilled |= !hit.getKey().isAlive();
+            } else if (applyDamageAndLoot(bot, hit.getKey(), total, hitDelay)) {
                 anyKilled = true;
             }
         }

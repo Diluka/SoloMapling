@@ -66,6 +66,9 @@ class RobotPopulationOriginTest {
         when(server.getChannel(0, 1)).thenReturn(channel);
         when(server.getChannel(0, 2)).thenReturn(channel);
         when(world.getId()).thenReturn(0);
+        when(world.getExpRate()).thenReturn(4f);
+        when(world.getDropRate()).thenReturn(3f);
+        when(world.getMesoRate()).thenReturn(2f);
         when(world.getChannel(2)).thenReturn(channel);
         when(world.getPlayerStorage()).thenReturn(worldPlayers);
         when(channel.getId()).thenReturn(2);
@@ -153,6 +156,9 @@ class RobotPopulationOriginTest {
         assertSame(character, map.getCharacterById(character.getId()));
         assertEquals(2, runtime.observeOrigin().get("channel_id"));
         assertFalse(character.isLoggedIn());
+        assertEquals(4, character.getExpRate());
+        assertEquals(3, character.getDropRate());
+        assertEquals(2, character.getMesoRate());
 
         close();
         assertEquals(CharacterRuntime.State.CLOSED, runtime.snapshot().state());
