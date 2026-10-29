@@ -3,6 +3,7 @@ package org.gms.soloscripting;
 import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.gms.client.Character;
 import org.gms.client.Client;
+import org.gms.scripting.AbstractScriptManager;
 import org.gms.scripting.npc.NPCConversationManager;
 import org.gms.scripting.npc.NPCScriptManager;
 import org.gms.scripting.quest.QuestActionManager;
@@ -167,10 +168,16 @@ public final class NativeDialogueScripts implements NativeScriptAdapter {
         return Map.copyOf(value);
     }
 
-    /** Called by the Solo loader advice before the first source evaluation, not after it may loop. */
-    public static void captureEngine(GraalJSScriptEngine engine, String path) {
+    /** Captures only the original loader selected by the current managed environment. */
+    public static void captureEngine(AbstractScriptManager manager, GraalJSScriptEngine engine, String path) {
         NativeScriptSession session = NativeScriptSession.current();
         if (session == null) return;
+        boolean owned = switch (session.kind()) {
+            case "npc" -> manager == NPCScriptManager.getInstance();
+            case "quest" -> manager == QuestScriptManager.getInstance();
+            default -> manager instanceof NativeScriptLoader;
+        };
+        if (!owned) return;
         session.captureEngine(engine, path);
         if (session.attachment() instanceof Dialogue binding) binding.path = path;
     }

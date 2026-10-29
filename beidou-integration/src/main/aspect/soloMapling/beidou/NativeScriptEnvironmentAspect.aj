@@ -26,11 +26,11 @@ public aspect NativeScriptEnvironmentAspect {
         NativeDialogueScripts.captureConversation(conversation);
     }
 
-    before(ScriptEngine engine, Reader reader, String path):
-            call(Object ScriptEngine.eval(Reader)) && target(engine) && args(reader)
+    before(AbstractScriptManager manager, ScriptEngine engine, Reader reader, String path):
+            call(Object ScriptEngine.eval(Reader)) && this(manager) && target(engine) && args(reader)
             && withincode(ScriptEngine AbstractScriptManager.getInvocableScriptEngine(String))
             && cflow(execution(ScriptEngine AbstractScriptManager.getInvocableScriptEngine(String)) && args(path)) {
-        if (engine instanceof GraalJSScriptEngine graal) NativeDialogueScripts.captureEngine(graal, path);
+        if (engine instanceof GraalJSScriptEngine graal) NativeDialogueScripts.captureEngine(manager, graal, path);
     }
 
     after(ScriptEngine engine) throwing(Throwable failure):
