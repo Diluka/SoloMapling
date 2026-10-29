@@ -239,11 +239,23 @@ public final class BotAttackDriver {
 
     /**
      * Execute a resolved plan once against the caller's nonempty, ordered target set.
-     * Both the legacy driver and managed combat module use the same rolls, packet and effects.
+     * This legacy entry keeps its existing settlement; strikeNative shares the rolls and packet.
      * The caller owns target admission, facing, profile selection and attack cadence.
      */
     public static StrikeResult strike(Character bot, List<Monster> targets, BotAttackProfile profile,
                                        WeaponType weapon, boolean facingLeft, boolean shadowPartner) {
+        return strike(bot, targets, profile, weapon, facingLeft, shadowPartner, false);
+    }
+
+    /** V2 keeps the shared attack input and delegates settlement to the native map entry. */
+    public static StrikeResult strikeNative(Character bot, List<Monster> targets, BotAttackProfile profile,
+                                             WeaponType weapon, boolean facingLeft, boolean shadowPartner) {
+        return strike(bot, targets, profile, weapon, facingLeft, shadowPartner, true);
+    }
+
+    private static StrikeResult strike(Character bot, List<Monster> targets, BotAttackProfile profile,
+                                       WeaponType weapon, boolean facingLeft, boolean shadowPartner,
+                                       boolean nativeSettlement) {
         int facingMask = facingLeft ? BotAttackData.FACING_LEFT_MASK : BotAttackData.FACING_RIGHT_MASK;
         int skillId = profile.skillFor(weapon);
         int bodyActionId = BotAttackData.actionFor(skillId, weapon);
@@ -271,11 +283,11 @@ public final class BotAttackDriver {
 
         boolean killed = switch (profile.route) {
             case CLOSE -> BotAttackEffects.meleeStrike(bot, hits, skillId, profile.skillLevel,
-                    bodyActionId, facingMask, profile.speed, profile.hitDelayMs);
+                    bodyActionId, facingMask, profile.speed, profile.hitDelayMs, nativeSettlement);
             case RANGED -> BotAttackEffects.rangedStrike(bot, hits, skillId, profile.skillLevel,
-                    BotAttackData.projectileFor(weapon, bot), bodyActionId, facingMask, profile.speed, profile.hitDelayMs);
+                    BotAttackData.projectileFor(weapon, bot), bodyActionId, facingMask, profile.speed, profile.hitDelayMs, nativeSettlement);
             case MAGIC -> BotAttackEffects.magicStrike(bot, hits, skillId, profile.skillLevel,
-                    bodyActionId, facingMask, profile.speed, profile.hitDelayMs);
+                    bodyActionId, facingMask, profile.speed, profile.hitDelayMs, nativeSettlement);
         };
         var facts = hits.entrySet().stream().map(hit -> new HitFact(
                 hit.getKey().getObjectId(), hit.getKey().getId(),

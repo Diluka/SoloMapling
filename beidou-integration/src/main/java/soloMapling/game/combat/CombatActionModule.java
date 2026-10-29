@@ -248,7 +248,7 @@ public final class CombatActionModule implements ActionModule {
                 if (now < nextAttack || plan.kind() == AttackKind.ULTIMATE && now < nextUltimate) {
                     value.set(new Tick(null, null, null)); return;
                 }
-                var strike = BotAttackDriver.strike(actor, targets, plan.profile(), weapon, facingLeft,
+                var strike = BotAttackDriver.strikeNative(actor, targets, plan.profile(), weapon, facingLeft,
                         tree.buffs().contains(Hermit.SHADOW_PARTNER));
                 nextAttack = now + TimeUnit.MILLISECONDS.toNanos(plan.profile().cooldownMs);
                 if (plan.kind() == AttackKind.ULTIMATE) nextUltimate = now + TimeUnit.SECONDS.toNanos(25);
