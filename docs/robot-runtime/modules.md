@@ -8,11 +8,11 @@
 
 | 对象 | 职责 |
 |---|---|
-| `ModuleDefinition<C, M extends RuntimeModule>` | 复用的类型标识、控制资源、scope 额度、配置验证器、工厂和导出声明 |
+| `ModuleDefinition<C, M extends RuntimeModule>` | 复用的类型标识、控制资源、scope 额度、工厂和导出声明 |
 | `ModuleSelection<C>` | 本运行体内的 `instanceId`、模块自有配置 `config` 和启用标志 `enabled` |
 | `CharacterRuntime.MountedModule<M>` | 挂载结果；`reference()` 是当前模块引用，`instance()` 是本次工厂创建的实际模块 |
 
-`CharacterRuntime.mount(definition, selection)` 调用模块配置验证器，检查当前宿主状态并登记实例与导出名称，随后调用工厂创建实例并绑定导出；启用实例随后激活。实例标识与共享函数名称在同一运行体中唯一。
+`CharacterRuntime.mount(definition, selection)` 检查当前宿主状态并登记实例与导出名称，随后将模块自有配置交给工厂创建实例并绑定导出；启用实例随后激活。实例标识与共享函数名称在同一运行体中唯一。
 
 工厂只构造模块私有状态。实际任务、原生调用和受管资源在生命周期 hook 中通过提供的 `ModuleContext` 接入。框架保存模块自己的配置及进度；角色、背包、任务等事实继续读取北斗真实来源。
 
@@ -84,7 +84,7 @@ ModuleFunction<CounterModule> next = new ModuleFunction<>(
 ModuleDefinition<CounterConfig, CounterModule> definition = new ModuleDefinition<>(
         "counter-example", Set.of(),
         new ExecutionScope.Limits(4, 1, 4, 1),
-        java.util.Objects::requireNonNull, CounterModule::new, List.of(next));
+        CounterModule::new, List.of(next));
 
 CharacterRuntime.MountedModule<CounterModule> mounted = runtime.mount(
         definition, new ModuleSelection<>("counter-one", new CounterConfig(0), true));

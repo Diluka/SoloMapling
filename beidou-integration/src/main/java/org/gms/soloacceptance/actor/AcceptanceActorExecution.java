@@ -44,7 +44,7 @@ final class AcceptanceActorExecution {
         this.backend = backend;
         this.moduleInstance = moduleInstance;
         runtime = new CharacterRuntime(epoch, new CharacterRuntime.Options(8, 1,
-                new ExecutionScope.Limits(16, 1, 16, 1), 1), executor);
+                new ExecutionScope.Limits(16, 1, 16, 1)), executor);
         refreshDiagnostics();
     }
 

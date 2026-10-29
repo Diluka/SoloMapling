@@ -249,7 +249,7 @@ class CharacterRuntimeTest {
                 "Returns the updated private progress", (instance, context, work, arguments) ->
                 instance.value += ((Number) arguments.get("amount")).intValue());
         var definition = new ModuleDefinition<Integer, Counter>("counter", Set.of(),
-                new ExecutionScope.Limits(8, 2, 8, 2), initial -> {}, Counter::new, List.of(add));
+                new ExecutionScope.Limits(8, 2, 8, 2), Counter::new, List.of(add));
         var providerOne = first.runtime.mount(definition, new ModuleSelection<>("counter", 1, true));
         second.runtime.mount(definition, new ModuleSelection<>("counter", 10, true));
         var callerOne = first.runtime.context(first.mount("caller", Set.of()));
@@ -887,7 +887,7 @@ class CharacterRuntimeTest {
     private static ModuleDefinition<Void, RuntimeModule> definition(
             java.util.function.Supplier<RuntimeModule> factory, List<ModuleFunction<RuntimeModule>> functions) {
         return new ModuleDefinition<>("test-module", Set.of(), new ExecutionScope.Limits(16, 4, 16, 4),
-                ignored -> {}, ignored -> factory.get(), functions);
+                ignored -> factory.get(), functions);
     }
 
     private static void await(CountDownLatch latch) {
@@ -909,7 +909,7 @@ class CharacterRuntimeTest {
             this.executor = executor;
             manual = executor instanceof ManualExecutor value ? value : null;
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                    new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
+                    new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4)), executor);
             role = new TestRole(runtime.acceptedEpoch());
         }
         void open() {
@@ -932,7 +932,7 @@ class CharacterRuntimeTest {
         }
         CharacterRuntime.ModuleRef mount(String instance, Set<String> controls, RuntimeModule module, boolean enabled) {
             var definition = new ModuleDefinition<Void, RuntimeModule>("test-module", controls,
-                    new ExecutionScope.Limits(16, 4, 16, 4), ignored -> {}, ignored -> module, List.of());
+                    new ExecutionScope.Limits(16, 4, 16, 4), ignored -> module, List.of());
             return runtime.mount(definition, new ModuleSelection<>(instance, null, enabled)).reference();
         }
         CharacterRuntime.ModuleSnapshot module(String instance) {

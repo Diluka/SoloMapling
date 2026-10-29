@@ -99,7 +99,7 @@ python3 beidou-integration/scripts/build.py --help
 
 ## #205 机器人模块框架
 
-- 当前候选实现使用 `ModuleDefinition<C, M>` 声明类型、控制资源、scope 额度、配置验证器、工厂及导出；`ModuleSelection<C>` 选择实例 ID、配置及启用标志。挂载返回 `MountedModule<M>` 的精确引用和实际实例。配置内容由模块验证一次，工厂只构造私有状态；实际工作与资源通过生命周期 hook 和原模块 scope 管理。
+- 当前候选实现使用 `ModuleDefinition<C, M>` 声明类型、控制资源、scope 额度、工厂及导出；`ModuleSelection<C>` 选择实例 ID、配置及启用标志。挂载返回 `MountedModule<M>` 的精确引用和实际实例。工厂接收模块自有配置并构造私有状态；实际工作与资源通过生命周期 hook 和原模块 scope 管理。
 - 模块组合和配置属于源码中的装配方案，通过相应测试和验收。机器人正常工作周期内模块组合固定，变化的是已有模块的任务、状态和能力可用性。主控选择角色活动目标，能力模块完成既定任务及已启用服务的事件；具体职责和调用关系由装配方案确定。
 - 装配登记实例和导出名称，再创建及初始化模块。暂停保留实例、配置和导出声明，卸载真实完成后撤下导出。停止或卸载清理 hook 失败时保留 `FAILED`、失败原因和未完成的清理责任，根关闭继续等待实际收尾。
 - `ModuleFunction` 的说明、参数校验和精确实例绑定同源；调用按当前有效提供者及代次解析，工作归提供者 scope。Java `ModuleContext.help()` / `call()` 与北斗原生引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录；缺失、停用或未激活正常返回 `UNAVAILABLE`，参数及执行异常沿现有脚本错误语义报告。

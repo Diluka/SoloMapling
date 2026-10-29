@@ -58,11 +58,10 @@ public final class CharacterRuntime {
     private Integer characterId;
     private CharacterCommandLane.Snapshot closedLane;
 
-    public record Options(int commandCapacity, int cleanupReserve, ExecutionScope.Limits rootLimits,
-                          int maxModules) {
+    public record Options(int commandCapacity, int cleanupReserve, ExecutionScope.Limits rootLimits) {
         public Options {
             if (commandCapacity < 2 || cleanupReserve < 1 || cleanupReserve >= commandCapacity
-                    || maxModules < 1 || rootLimits == null || rootLimits.maxResources() < 1) {
+                    || rootLimits == null || rootLimits.maxResources() < 1) {
                 throw new IllegalArgumentException("invalid_runtime_options");
             }
         }
@@ -225,12 +224,10 @@ public final class CharacterRuntime {
     public <C, M extends RuntimeModule> MountedModule<M> mount(ModuleDefinition<C, M> definition,
                                                                ModuleSelection<C> selection) {
         Objects.requireNonNull(definition); Objects.requireNonNull(selection);
-        definition.validateConfig().accept(selection.config());
         ModuleEntry entry;
         synchronized (monitor) {
             require(state == State.BOUND, "runtime_not_bound");
             require(!modules.containsKey(selection.instanceId()), "module_instance_exists");
-            require(modules.size() < options.maxModules(), "runtime_module_capacity");
             for (ModuleFunction<M> function : definition.exports()) {
                 require(!functionOwners.containsKey(function.name()), "module_function_exists");
             }

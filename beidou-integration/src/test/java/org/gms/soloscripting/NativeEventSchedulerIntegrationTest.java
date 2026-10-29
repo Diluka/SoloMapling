@@ -209,7 +209,7 @@ class NativeEventSchedulerIntegrationTest {
     private static final class Fixture {
         final ExecutorService executor = new ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
         final CharacterRuntime runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
+                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4)), executor);
         final TestRole role = new TestRole(runtime.acceptedEpoch());
         final EventAdapter adapter = new EventAdapter(role.client, role.channel);
         CharacterRuntime.ModuleContext context;
@@ -218,7 +218,7 @@ class NativeEventSchedulerIntegrationTest {
             runtime.submitOpening(work, () -> { runtime.reserveOrigin(work).adopt(role); runtime.bindAdoptedOrigin(); }, () -> {});
             work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
             var definition = new ModuleDefinition<Void, RuntimeModule>("native-event-test", Set.of("event"),
-                    new ExecutionScope.Limits(16, 2, 16, 2), config -> {}, config -> new RuntimeModule() {}, List.of());
+                    new ExecutionScope.Limits(16, 2, 16, 2), config -> new RuntimeModule() {}, List.of());
             context = runtime.context(runtime.mount(definition, new ModuleSelection<>("event", null, true)).reference());
         }
         NativeScriptResult call(String operation, String id, String source, Map<String, Object> parameters) throws Exception {

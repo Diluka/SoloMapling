@@ -199,7 +199,7 @@ class McpControlModuleTest {
         executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
                 Thread.ofVirtual().factory());
         runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(
-                8, 1, new ExecutionScope.Limits(16, 1, 16, 1), 4), executor);
+                8, 1, new ExecutionScope.Limits(16, 1, 16, 1)), executor);
         role = new TestRole(runtime.acceptedEpoch());
         var open = runtime.acceptOpeningWork();
         runtime.submitOpening(open, () -> {

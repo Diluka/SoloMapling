@@ -22,9 +22,7 @@ public final class McpControlModule implements RuntimeModule {
     public static final ModuleDefinition<Map<String, Object>, McpControlModule> DEFINITION =
             new ModuleDefinition<>("mcp-control",
                     Set.of("chat", "interaction", "inventory", "movement", "combat"),
-                    new ExecutionScope.Limits(16, 2, 16, 2), config -> {
-                        if (!config.isEmpty()) throw new IllegalArgumentException("invalid_mcp_module_config");
-                    }, config -> new McpControlModule(), List.of());
+                    new ExecutionScope.Limits(16, 2, 16, 2), config -> new McpControlModule(), List.of());
 
     private volatile CharacterRuntime.ModuleContext context;
     private final NativeMovementActions movement = new NativeMovementActions();

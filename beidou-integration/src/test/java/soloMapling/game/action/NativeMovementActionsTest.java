@@ -91,7 +91,7 @@ class NativeMovementActionsTest {
         doAnswer(call -> { stance.set(((Number) call.getArgument(0)).intValue()); return null; }).when(character).setStance(anyInt());
         lane = new ManualExecutor(); clock = new ManualClock(); service = new NativeMovementActions(clock, clock.now::get);
         runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8,1,
-                new ExecutionScope.Limits(16,2,16,2),2),lane);
+                new ExecutionScope.Limits(16,2,16,2)),lane);
         GameContext.CharacterRef actor = new GameContext.CharacterRef(runtime.acceptedEpoch(), character,client,world,channel);
         RoleBinding binding = new RoleBinding() {
             public String kind() { return "movement-test"; }
@@ -105,7 +105,7 @@ class NativeMovementActionsTest {
         runtime.submitOpening(open, () -> { runtime.reserveOrigin(open).adopt(binding); runtime.bindAdoptedOrigin(); }, () -> { });
         lane.all();
         var definition = new ModuleDefinition<Void, RuntimeModule>("movement-test", Set.of("movement"),
-                new ExecutionScope.Limits(16, 2, 16, 2), config -> {}, config -> new RuntimeModule() {}, List.of());
+                new ExecutionScope.Limits(16, 2, 16, 2), config -> new RuntimeModule() {}, List.of());
         var ref = runtime.mount(definition, new ModuleSelection<>("move", null, true)).reference();
         context = runtime.context(ref); scene = new GameContext.SceneRef(actor,map,null,null);
     }
