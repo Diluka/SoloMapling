@@ -8,7 +8,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
-import org.gms.soloacceptance.actor.McpControlModule;
 import soloMapling.game.action.NativeActionFact;
 import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.context.GameContext;
@@ -170,40 +169,12 @@ class CharacterRuntimeTest {
     }
 
     @Test
-    void assemblyReservesAllDeclaredSlotsAndKeepsPausedMcpControlExclusive() {
-        Fixture fixture = opened();
-        var mcp = fixture.runtime.mount(McpControlModule.DEFINITION,
-                new ModuleSelection<>("mcp", Map.<String, Object>of(), true)).reference();
-        fixture.runtime.stop(mcp, CharacterRuntime.StopMode.PAUSE).await(WAIT);
-        AtomicInteger creations = new AtomicInteger();
-        var composite = definition(Set.of(ModuleSlots.CONTROLLER, ModuleSlots.NAVIGATION), () -> {
-            creations.incrementAndGet();
-            return new RuntimeModule() {};
-        }, List.of());
-        var conflict = assertThrows(CharacterRuntime.Invalid.class,
-                () -> fixture.runtime.mount(composite, new ModuleSelection<>("autonomous", null, true)));
-        assertEquals("module_slot_busy", conflict.reason());
-        assertEquals(0, creations.get());
-        assertTrue(fixture.slot(ModuleSlots.NAVIGATION).occupants().isEmpty());
-        assertEquals(List.of("mcp"), fixture.slot(ModuleSlots.CONTROLLER).occupants());
-
-        fixture.runtime.stop(mcp, CharacterRuntime.StopMode.UNLOAD).await(WAIT);
-        var mounted = fixture.runtime.mount(composite, new ModuleSelection<>("autonomous", null, true));
-        assertEquals(1, creations.get());
-        assertEquals(List.of("autonomous"), fixture.slot(ModuleSlots.CONTROLLER).occupants());
-        assertEquals(List.of("autonomous"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
-        fixture.runtime.stop(mounted.reference(), CharacterRuntime.StopMode.UNLOAD).await(WAIT);
-        assertTrue(fixture.slot(ModuleSlots.CONTROLLER).occupants().isEmpty());
-        assertTrue(fixture.slot(ModuleSlots.NAVIGATION).occupants().isEmpty());
-    }
-
-    @Test
-    void initializationFailureKeepsItsReservationUntilTheCreatedResourceReallyLeaves() {
+    void initializationFailureWaitsForItsCreatedResourceToReallyLeave() {
         Fixture fixture = opened();
         AtomicReference<CharacterRuntime.ModuleContext> context = new AtomicReference<>();
         AtomicReference<ScopeResources.Registration> subscription = new AtomicReference<>();
         Object listener = new Object();
-        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+        var definition = definition(() -> new RuntimeModule() {
             @Override public void onActivated(CharacterRuntime.ModuleContext active) {
                 context.set(active);
                 var resource = active.scope().resources().beginRegistration("module-listener");
@@ -214,16 +185,12 @@ class CharacterRuntimeTest {
         }, List.of());
         assertEquals("module_activation_failed", assertThrows(CharacterRuntime.Invalid.class,
                 () -> fixture.runtime.mount(definition, new ModuleSelection<>("broken", null, true))).reason());
-        assertEquals(List.of("broken"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
         assertEquals(CharacterRuntime.ModuleState.STOPPING, fixture.module("broken").state());
 
         var cleanup = subscription.get().acquireCleanup();
         context.get().submitCleanup(cleanup, () -> subscription.get().confirmReleased(cleanup.permit(), listener), () -> {});
         fixture.runQueued();
-        assertTrue(fixture.slot(ModuleSlots.NAVIGATION).occupants().isEmpty());
-        var replacement = fixture.runtime.mount(definition(Set.of(ModuleSlots.NAVIGATION),
-                () -> new RuntimeModule() {}, List.of()), new ModuleSelection<>("replacement", null, true));
-        assertNotNull(fixture.runtime.context(replacement.reference()));
+        assertTrue(fixture.runtime.snapshot().modules().isEmpty());
         assertTrue(fixture.role.online);
     }
 
@@ -234,7 +201,7 @@ class CharacterRuntimeTest {
         CountDownLatch initializing = new CountDownLatch(1), initialized = new CountDownLatch(1);
         var function = new ModuleFunction<RuntimeModule>("sample.ready", "Read initialized module state", List.of(),
                 "Returns ready after module initialization", (instance, context, work, arguments) -> "ready");
-        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+        var definition = definition(() -> new RuntimeModule() {
             @Override public void onActivated(CharacterRuntime.ModuleContext context) {
                 initializing.countDown();
                 await(initialized);
@@ -256,7 +223,7 @@ class CharacterRuntimeTest {
     @Test
     void failedInitializationCannotEraseItsCleanupFailureWhenUpgradingToUnload() {
         Fixture fixture = opened();
-        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+        var definition = definition(() -> new RuntimeModule() {
             @Override public void onActivated(CharacterRuntime.ModuleContext context) {
                 throw new IllegalStateException("initialization failed");
             }
@@ -268,9 +235,6 @@ class CharacterRuntimeTest {
                 () -> fixture.runtime.mount(definition, new ModuleSelection<>("broken", null, true)));
         assertEquals(CharacterRuntime.ModuleState.FAILED, fixture.module("broken").state());
         assertEquals("module_stop_hook_failed", fixture.module("broken").reason());
-        assertEquals(List.of("broken"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
-        assertEquals("module_slot_busy", assertThrows(CharacterRuntime.Invalid.class,
-                () -> fixture.runtime.mount(definition, new ModuleSelection<>("replacement", null, true))).reason());
     }
 
     @Test
@@ -284,8 +248,8 @@ class CharacterRuntimeTest {
                 List.of(new ModuleFunction.Parameter("amount", ModuleFunction.Type.INTEGER, true, "Progress increment")),
                 "Returns the updated private progress", (instance, context, work, arguments) ->
                 instance.value += ((Number) arguments.get("amount")).intValue());
-        var definition = new ModuleDefinition<Integer, Counter>("counter", Set.of(), Set.of(),
-                new ExecutionScope.Limits(8, 2, 8, 2), initial -> {}, Counter::new, List.of(add));
+        var definition = new ModuleDefinition<Integer, Counter>("counter", Set.of(),
+                new ExecutionScope.Limits(8, 2, 8, 2), Counter::new, List.of(add));
         var providerOne = first.runtime.mount(definition, new ModuleSelection<>("counter", 1, true));
         second.runtime.mount(definition, new ModuleSelection<>("counter", 10, true));
         var callerOne = first.runtime.context(first.mount("caller", Set.of()));
@@ -322,7 +286,7 @@ class CharacterRuntimeTest {
                     await(release);
                     return "finished";
                 });
-        var provider = fixture.runtime.mount(definition(Set.of(ModuleSlots.COMBAT), () -> new RuntimeModule() {
+        var provider = fixture.runtime.mount(definition(() -> new RuntimeModule() {
             @Override public void onUnloaded() { unloaded.set(true); }
         }, List.of(function)), new ModuleSelection<>("provider", null, true));
         var caller = fixture.runtime.context(fixture.mount("caller", Set.of()));
@@ -333,13 +297,11 @@ class CharacterRuntimeTest {
                 var stop = fixture.runtime.stop(provider.reference(), CharacterRuntime.StopMode.UNLOAD);
                 assertFalse(stop.complete());
                 assertFalse(unloaded.get());
-                assertEquals(List.of("provider"), fixture.slot(ModuleSlots.COMBAT).occupants());
                 assertEquals("UNAVAILABLE", caller.call("sample.wait", Map.of()).get("status"));
                 release.countDown();
                 assertEquals("finished", invocation.get(5, TimeUnit.SECONDS).get("result"));
                 assertEquals(ExecutionScope.DrainResult.DRAINED, stop.await(WAIT));
                 assertTrue(unloaded.get());
-                assertTrue(fixture.slot(ModuleSlots.COMBAT).occupants().isEmpty());
             } finally { release.countDown(); }
         }
     }
@@ -528,7 +490,7 @@ class CharacterRuntimeTest {
     @Test
     void unloadHookFailureKeepsTheFailedInstanceUntilItsCleanupIsVerified() {
         Fixture fixture = opened();
-        var definition = definition(Set.of(ModuleSlots.NAVIGATION), () -> new RuntimeModule() {
+        var definition = definition(() -> new RuntimeModule() {
             @Override public void onUnloaded() { throw new IllegalStateException("private hook text"); }
         }, List.of());
         var reference = fixture.runtime.mount(definition, new ModuleSelection<>("bad", null, true)).reference();
@@ -538,9 +500,6 @@ class CharacterRuntimeTest {
         assertEquals(CharacterRuntime.ModuleState.FAILED, fixture.module("bad").state());
         assertEquals("module_unload_hook_failed", fixture.runtime.snapshot().failure());
         assertTrue(fixture.role.online);
-        assertEquals(List.of("bad"), fixture.slot(ModuleSlots.NAVIGATION).occupants());
-        assertEquals("module_slot_busy", assertThrows(CharacterRuntime.Invalid.class,
-                () -> fixture.runtime.mount(definition, new ModuleSelection<>("replacement", null, true))).reason());
     }
 
     @Test
@@ -925,10 +884,10 @@ class CharacterRuntimeTest {
         return fixture;
     }
     private Fixture opened() { Fixture fixture = manual(); fixture.open(); return fixture; }
-    private static ModuleDefinition<Void, RuntimeModule> definition(Set<String> slots,
+    private static ModuleDefinition<Void, RuntimeModule> definition(
             java.util.function.Supplier<RuntimeModule> factory, List<ModuleFunction<RuntimeModule>> functions) {
-        return new ModuleDefinition<>("test-module", slots, Set.of(), new ExecutionScope.Limits(16, 4, 16, 4),
-                ignored -> {}, ignored -> factory.get(), functions);
+        return new ModuleDefinition<>("test-module", Set.of(), new ExecutionScope.Limits(16, 4, 16, 4),
+                ignored -> factory.get(), functions);
     }
 
     private static void await(CountDownLatch latch) {
@@ -950,7 +909,7 @@ class CharacterRuntimeTest {
             this.executor = executor;
             manual = executor instanceof ManualExecutor value ? value : null;
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                    new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
+                    new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4)), executor);
             role = new TestRole(runtime.acceptedEpoch());
         }
         void open() {
@@ -972,15 +931,12 @@ class CharacterRuntimeTest {
             return mount(instance, controls, new RuntimeModule() {}, true);
         }
         CharacterRuntime.ModuleRef mount(String instance, Set<String> controls, RuntimeModule module, boolean enabled) {
-            var definition = new ModuleDefinition<Void, RuntimeModule>("test-module", Set.of(), controls,
-                    new ExecutionScope.Limits(16, 4, 16, 4), ignored -> {}, ignored -> module, List.of());
+            var definition = new ModuleDefinition<Void, RuntimeModule>("test-module", controls,
+                    new ExecutionScope.Limits(16, 4, 16, 4), ignored -> module, List.of());
             return runtime.mount(definition, new ModuleSelection<>(instance, null, enabled)).reference();
         }
         CharacterRuntime.ModuleSnapshot module(String instance) {
             return runtime.snapshot().modules().stream().filter(module -> module.instanceId().equals(instance)).findFirst().orElseThrow();
-        }
-        CharacterRuntime.SlotSnapshot slot(String id) {
-            return runtime.snapshot().slots().stream().filter(slot -> slot.id().equals(id)).findFirst().orElseThrow();
         }
         ScopeResources.CleanupAttempt cleanupOrigin() {
             var attempt = runtime.acquireOriginCleanup();

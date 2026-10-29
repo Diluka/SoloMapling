@@ -93,8 +93,8 @@ class NativeScriptRuntimeTest {
                     return Map.of("title", instance.config.title(), "text", instance.lastNote,
                             "count", ++instance.count);
                 });
-        var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(), Set.of(),
-                new ExecutionScope.Limits(4, 1, 4, 1), config -> {}, NotesModule::new, List.of(record));
+        var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(),
+                new ExecutionScope.Limits(4, 1, 4, 1), NotesModule::new, List.of(record));
         var provider = fixture.runtime.mount(definition, new ModuleSelection<>("notes", new NotesConfig("角色日记"), true));
         Map<?, ?> advertisedHelp = fixture.context.help().getFirst();
         fixture.adapter.sourceDuringStart = "var initialModuleHelp = modules.help();"
@@ -634,7 +634,7 @@ class NativeScriptRuntimeTest {
     private static final class Fixture {
         final ExecutorService executor = new ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
         final CharacterRuntime runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4), 8), executor);
+                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 4, 16, 4)), executor);
         final TestRole role = new TestRole(runtime.acceptedEpoch());
         final NeutralAdapter adapter = new NeutralAdapter();
         CharacterRuntime.ModuleContext context;
@@ -645,8 +645,8 @@ class NativeScriptRuntimeTest {
                 runtime.reserveOrigin(opening).adopt(role); runtime.bindAdoptedOrigin();
             }, () -> {});
             opening.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            var definition = new ModuleDefinition<Void, RuntimeModule>("native-test", Set.of(), Set.of("test-control"),
-                    new ExecutionScope.Limits(16, 4, 16, 4), config -> {}, config -> new RuntimeModule() {}, List.of());
+            var definition = new ModuleDefinition<Void, RuntimeModule>("native-test", Set.of("test-control"),
+                    new ExecutionScope.Limits(16, 4, 16, 4), config -> new RuntimeModule() {}, List.of());
             context = runtime.context(runtime.mount(definition, new ModuleSelection<>("native", null, true)).reference());
         }
         NativeScriptExecution call(NativeScriptRequest request) {

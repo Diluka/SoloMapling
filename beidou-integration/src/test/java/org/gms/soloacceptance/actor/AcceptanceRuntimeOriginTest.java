@@ -58,7 +58,7 @@ class AcceptanceRuntimeOriginTest {
         handle = nativeHandle(world, channel);
         executor = new ManualExecutor();
         runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
-                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 1, 16, 1), 4), executor);
+                new CharacterRuntime.Options(8, 1, new ExecutionScope.Limits(16, 1, 16, 1)), executor);
         verifiedNativeClose();
     }
 

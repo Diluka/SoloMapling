@@ -162,7 +162,6 @@ class ActorControlServiceTest {
         assertEquals("mcp-control", module.get("type_id"));
         assertEquals(sessionId(opened), module.get("instance_id"));
         assertEquals("ACTIVE", module.get("state"));
-        assertEquals(List.of("controller"), module.get("slots"));
 
         ActorActRequest request = chatRequest(opened, "同一个runtime的聊天证据");
         var action = service.act("admin", "chat-one-host", request);
@@ -177,8 +176,6 @@ class ActorControlServiceTest {
         assertEquals(runtimeId, runtime.get("id"));
         assertEquals(opened.get("runtime_generation"), runtime.get("epoch"));
         assertEquals(73, runtime.get("character_id"));
-        assertTrue(((List<?>) runtime.get("slots")).contains(Map.of(
-                "id", "controller", "capacity", 1, "occupants", List.of(sessionId(opened)))));
         assertFalse(runtime.toString().contains(request.parameters().text()));
         Map<?, ?> events = (Map<?, ?>) runtime.get("events");
         assertEquals("runtime_event_sequence", events.get("cursor_scope"));

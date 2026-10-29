@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -18,21 +17,16 @@ import java.util.function.Function;
  */
 public record ModuleDefinition<C, M extends RuntimeModule>(
         String typeId,
-        Set<String> slots,
         Set<String> controls,
         ExecutionScope.Limits limits,
-        Consumer<C> validateConfig,
         Function<C, M> factory,
         List<ModuleFunction<M>> exports) {
 
     public ModuleDefinition {
         requireIdentifier(typeId);
-        slots = Set.copyOf(slots);
-        slots.forEach(ModuleDefinition::requireIdentifier);
         controls = Set.copyOf(controls);
         controls.forEach(ModuleDefinition::requireIdentifier);
         Objects.requireNonNull(limits);
-        Objects.requireNonNull(validateConfig);
         Objects.requireNonNull(factory);
         exports = List.copyOf(exports);
         Set<String> names = new HashSet<>();

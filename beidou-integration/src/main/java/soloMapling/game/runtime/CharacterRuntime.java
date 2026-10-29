@@ -16,19 +16,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
-/** One exact native role, one carrier lane, and replaceable compiled modules. Internal ABI v0.1. */
+/** One exact native role, one carrier lane, and preconfigured compiled modules. Internal ABI v0.1. */
 public final class CharacterRuntime {
     private static final Map<Object, CharacterRuntime> ROLE_OWNERS = new IdentityHashMap<>();
     private final Object monitor = new Object();
@@ -42,8 +40,6 @@ public final class CharacterRuntime {
     private final CompletableFuture<Void> modulesDrained = new CompletableFuture<>();
     private final Map<String, ModuleEntry> modules = new LinkedHashMap<>();
     private final Map<String, ModuleContext> controlOwners = new LinkedHashMap<>();
-    private final Map<String, SlotSpec> slotSpecs = ModuleSlots.standard();
-    private final Map<String, Set<String>> slotOwners = new LinkedHashMap<>();
     private final Map<String, ModuleEntry> functionOwners = new LinkedHashMap<>();
     private volatile CharacterCommandLane lane;
     private volatile State state = State.OPENING;
@@ -62,11 +58,10 @@ public final class CharacterRuntime {
     private Integer characterId;
     private CharacterCommandLane.Snapshot closedLane;
 
-    public record Options(int commandCapacity, int cleanupReserve, ExecutionScope.Limits rootLimits,
-                          int maxModules) {
+    public record Options(int commandCapacity, int cleanupReserve, ExecutionScope.Limits rootLimits) {
         public Options {
             if (commandCapacity < 2 || cleanupReserve < 1 || cleanupReserve >= commandCapacity
-                    || maxModules < 1 || rootLimits == null || rootLimits.maxResources() < 1) {
+                    || rootLimits == null || rootLimits.maxResources() < 1) {
                 throw new IllegalArgumentException("invalid_runtime_options");
             }
         }
@@ -77,12 +72,11 @@ public final class CharacterRuntime {
     public enum StopMode { PAUSE, UNLOAD }
     public record ModuleSnapshot(String typeId, String instanceId, long generation, boolean enabled,
                                  ModuleState state, List<String> controls, String reason,
-                                 ExecutionScope.ScopeSnapshot scope, int runningHooks, List<String> slots) { }
-    public record SlotSnapshot(String id, int capacity, List<String> occupants) { }
+                                 ExecutionScope.ScopeSnapshot scope, int runningHooks) { }
     public record MountedModule<M extends RuntimeModule>(ModuleRef reference, M instance) { }
     public record Snapshot(String runtimeId, String epoch, State state, String originKind, Integer characterId,
                            List<ModuleSnapshot> modules, ExecutionScope.ScopeSnapshot rootScope,
-                           CharacterCommandLane.Snapshot lane, String failure, List<SlotSnapshot> slots) { }
+                           CharacterCommandLane.Snapshot lane, String failure) { }
 
     public static final class Invalid extends RuntimeException {
         private final String reason;
@@ -230,23 +224,15 @@ public final class CharacterRuntime {
     public <C, M extends RuntimeModule> MountedModule<M> mount(ModuleDefinition<C, M> definition,
                                                                ModuleSelection<C> selection) {
         Objects.requireNonNull(definition); Objects.requireNonNull(selection);
-        definition.validateConfig().accept(selection.config());
         ModuleEntry entry;
         synchronized (monitor) {
             require(state == State.BOUND, "runtime_not_bound");
             require(!modules.containsKey(selection.instanceId()), "module_instance_exists");
-            require(modules.size() < options.maxModules(), "runtime_module_capacity");
-            for (String slot : definition.slots()) {
-                SlotSpec spec = slotSpecs.get(slot);
-                require(spec != null, "unknown_module_slot");
-                require(slotOwners.getOrDefault(slot, Set.of()).size() < spec.capacity(), "module_slot_busy");
-            }
             for (ModuleFunction<M> function : definition.exports()) {
                 require(!functionOwners.containsKey(function.name()), "module_function_exists");
             }
             entry = new ModuleEntry(definition, selection.instanceId(), selection.config(), selection.enabled());
             modules.put(entry.instanceId, entry);
-            definition.slots().forEach(slot -> slotOwners.computeIfAbsent(slot, ignored -> new LinkedHashSet<>()).add(entry.instanceId));
             definition.exports().forEach(function -> functionOwners.put(function.name(), entry));
             beginHookLocked(entry);
             event(RuntimeEvents.Kind.MODULE_MOUNTED, entry, null, null, null);
@@ -603,11 +589,6 @@ public final class CharacterRuntime {
                 entry, null, entry.stop.failure, null);
         if (remove) {
             modules.remove(entry.instanceId);
-            entry.definition.slots().forEach(slot -> {
-                Set<String> occupants = slotOwners.get(slot);
-                occupants.remove(entry.instanceId);
-                if (occupants.isEmpty()) slotOwners.remove(slot);
-            });
             functionOwners.entrySet().removeIf(function -> function.getValue() == entry);
         }
         monitor.notifyAll();
@@ -732,12 +713,9 @@ public final class CharacterRuntime {
             List<ModuleSnapshot> snapshots = modules.values().stream().map(entry -> new ModuleSnapshot(
                     entry.definition.typeId(), entry.instanceId, entry.ref.moduleGeneration, entry.enabled, entry.state,
                     entry.definition.controls().stream().sorted().toList(), entry.reason,
-                    entry.context == null ? null : entry.context.scope.snapshot(), entry.runningHooks,
-                    entry.definition.slots().stream().sorted().toList())).toList();
-            List<SlotSnapshot> slots = slotSpecs.values().stream().map(slot -> new SlotSnapshot(slot.id(), slot.capacity(),
-                    slotOwners.getOrDefault(slot.id(), Set.of()).stream().sorted().toList())).toList();
+                    entry.context == null ? null : entry.context.scope.snapshot(), entry.runningHooks)).toList();
             return new Snapshot(id, epoch.value(), state, originKind, characterId, snapshots, rootScope.snapshot(),
-                    lane == null ? closedLane : lane.snapshot(), lastFailure, slots);
+                    lane == null ? closedLane : lane.snapshot(), lastFailure);
         }
     }
 
