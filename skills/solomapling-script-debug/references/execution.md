@@ -76,7 +76,7 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 创建与移除具体环境机器人
 
-已装配人口能力的上下文可执行：
+先按[人口配置说明](../../../docs/robot-runtime/population.md#本地临时类型)在本地临时文件中定义并加载 `navigation_probe`。已装配人口能力的上下文可执行：
 
 ```javascript
 const robot = robots.create("navigation_probe");

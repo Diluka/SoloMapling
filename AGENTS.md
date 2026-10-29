@@ -107,8 +107,8 @@ python3 beidou-integration/scripts/build.py --help
 
 ## #263 类型配置与 #122 导航接入
 
-- 当前源码通过 `solomapling.robot-population-config` 读取 `RobotPopulation.yaml`；未指定路径时读取随程序分发的默认文件。`types` 定义模块组合和参数，加载时转换为装配计划；`initial_population` 仅在每轮世界启动时创建一次环境人口。运行期通过 `robots.create/remove` 增减完整实例，配置文件保持原样，实例内部组合保持固定。
-- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认显式装配 `mcp-control/navigation/robot-population`；后续新增非自主能力模块时同步这份类型配置和验收，自主控制模块放入对应业务类型。`mcp_test` 默认没有新建来源，`navigation_probe` 沿 `fmbot` 环境来源创建；默认初始数量均0，现有一代人口计划继续保留。
+- 当前源码通过 `solomapling.robot-population-config` 读取单个路径或有序文件列表；未指定时仅读取内置默认文件。后文件按类型名完整替换同名 `types`，按类型名覆盖 `initial_population`，合并后一次编译装配计划及核对引用。每轮世界启动只创建一次初始人口；运行期通过 `robots.create/remove` 增减完整实例，文件与实例模块组合保持固定。
+- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主控制放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
 - `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
 - 脚本默认期限30秒、最大120秒，调用者取消持续关联到提供者work。导航自身默认30秒、8px容差、3秒无进展；真实抵达、失败、已发生位移和实际停止分别核验。源码和部署结果以#122/#263证据为准，参考 `docs/robot-runtime/population.md`、`navigation.md` 及脚本调试技能。
 

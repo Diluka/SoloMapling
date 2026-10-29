@@ -7,6 +7,7 @@
 **/__pycache__/
 *.pyc
 /.serena/
+RobotPopulation.local.yaml
 
 # GCMoveSystem runtime-generated nav/world graph caches (CWD-relative)
 /cache/

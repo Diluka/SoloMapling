@@ -53,6 +53,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -118,6 +119,7 @@ class ActorControlServiceTest {
 
     @Test
     void anAcceptedOpenIsNotReportedOnlineBeforeNativeEvidenceAndClosedRequestDoesNotReopen() {
+        assertFalse(population.configuration().types().containsKey("navigation_probe"));
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "open-one");
         assertEquals("QUEUED", opened.get("status"));
@@ -153,27 +155,54 @@ class ActorControlServiceTest {
     }
 
     @Test
-    void mcpRoleUsesTheFixedConfiguredTypeAndBindsItsDeclaredModuleFunctions(@TempDir Path directory) throws Exception {
-        population = populationFromConfig(directory, """
+    void mcpRoleUsesTheMergedConfiguredTypeAndBindsOnlyItsReplacementModuleFunctions(@TempDir Path directory) throws Exception {
+        Path defaults = directory.resolve("RobotPopulation.yaml");
+        Files.writeString(defaults, """
+                types:
+                  mcp_test:
+                    modules:
+                      mcp: {type: mcp-control, config: {}}
+                      navigation: {type: navigation, config: {}}
+                  permanent_support:
+                    modules:
+                      population: {type: robot-population, config: {}}
+                initial_population: {mcp_test: 1, navigation_probe: 0}
+                """);
+        Path temporary = directory.resolve("RobotPopulation.local.yaml");
+        Files.writeString(temporary, """
                 types:
                   mcp_test:
                     modules:
                       input_from_file: {type: mcp-control, config: {}}
-                      path_from_file: {type: navigation, config: {}}
                       population_from_file: {type: robot-population, config: {}}
+                  navigation_probe:
+                    character:
+                      template: fmbot
+                      spawn: {world: 0, channel: 1, map: 10000}
+                    modules:
+                      navigation: {type: navigation, config: {}}
                 initial_population: {mcp_test: 0}
                 """);
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("robot-test-config",
+                Map.of("solomapling.robot-population-config[0]", defaults.toString(),
+                        "solomapling.robot-population-config[1]", temporary.toString())));
+        population = new RobotPopulationService(environment);
+        population.onWorldStarted();
+
         ActorControlService service = service(4, 20, 64);
         var opening = open(service, "configured-mcp-role");
         executors.getFirst().runNext();
         var opened = service.get("admin", id(opening), 0, 100);
         assertEquals("SUCCEEDED", opened.get("status"));
         assertEquals("input_from_file", ((Map<?, ?>) runtimeView(opened).get("module")).get("instance_id"));
+        assertEquals(Set.of("mcp_test", "permanent_support", "navigation_probe"),
+                population.configuration().types().keySet());
         var functions = execution(service, opened).moduleContext().help();
         assertTrue(functions.stream().allMatch(function -> Boolean.TRUE.equals(function.get("available"))));
-        assertEquals(Map.of("navigation.moveTo", "path_from_file", "robots.create", "population_from_file",
-                "robots.remove", "population_from_file"), functions.stream().collect(Collectors.toMap(
-                function -> (String) function.get("name"), function -> (String) function.get("module_id"))));
+        assertEquals(Map.of("robots.create", "population_from_file", "robots.remove", "population_from_file"),
+                functions.stream().collect(Collectors.toMap(function -> (String) function.get("name"),
+                        function -> (String) function.get("module_id"))));
     }
 
     @Test
