@@ -96,6 +96,24 @@ class NavigationModuleTest {
         verify(fixture.map, never()).movePlayer(any(), any());
     }
 
+    @Test void zeroToleranceSettlesAtNearbyTargetsThroughNativeMovement() {
+        var config = NavigationModule.parseConfig(Map.of("arrival_tolerance_px", 0));
+        var fixture = new Fixture(98_982_106, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), config);
+        fixtures.add(fixture);
+        for (var approach : List.of(Map.entry(new Point(3, 0), 100),
+                Map.entry(new Point(-2, 0), 20), Map.entry(new Point(120, 0), 200))) {
+            var target = approach.getKey();
+            when(fixture.character.getTotalMoveSpeedStat()).thenReturn(approach.getValue());
+            var result = fixture.moveTo(target);
+            assertEquals("ARRIVED", result.get("outcome"), result.toString());
+            assertEquals(target, fixture.position.get());
+            assertEquals(true, result.get("stable"));
+            assertEquals(0, fixture.module.context().scope().snapshot().acceptedWork());
+            assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
+        }
+    }
+
     @Test void nativeMapMovementRulesAndMidRouteStunStopFurtherNavigationInput() {
         var fixture = fixture(98_982_105, new Point(0, 0),
                 List.of(foothold(-200, 0, 400, 0, 1)), List.of());
@@ -148,7 +166,7 @@ class NavigationModuleTest {
     }
 
     private Fixture fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes) {
-        var fixture = new Fixture(mapId, from, footholds, ropes);
+        var fixture = new Fixture(mapId, from, footholds, ropes, NavigationModule.DEFAULT_CONFIG);
         fixtures.add(fixture);
         return fixture;
     }
@@ -168,7 +186,7 @@ class NavigationModuleTest {
         final NavigationModule module;
         final CharacterRuntime.ModuleContext caller;
 
-        Fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes) {
+        Fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes, NavigationModule.Config navigationConfig) {
             position = new AtomicReference<>(new Point(from));
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -231,7 +249,7 @@ class NavigationModuleTest {
                     NavigationModule.DEFINITION.typeId(), NavigationModule.DEFINITION.controls(),
                     NavigationModule.DEFINITION.limits(), config -> new NavigationModule(config, server),
                     NavigationModule.DEFINITION.exports());
-            module = runtime.mount(nav, new ModuleSelection<>("pathfinder", NavigationModule.DEFAULT_CONFIG, true)).instance();
+            module = runtime.mount(nav, new ModuleSelection<>("pathfinder", navigationConfig, true)).instance();
             var controller = new ModuleDefinition<Void, RuntimeModule>("test-controller", Set.of(),
                     new ExecutionScope.Limits(8, 2, 4, 2), config -> new RuntimeModule() {}, List.of());
             caller = runtime.context(runtime.mount(controller, new ModuleSelection<>("controller", null, true)).reference());

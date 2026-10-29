@@ -40,6 +40,7 @@ class BotMovementState {
     double physX = 0.0;
     double physY = 0.0;
     double groundPhysicsCarryMs = 0.0;
+    int groundTickMs = BotPhysicsEngine.cfg.TICK_MS;
     double fallPeakPhysY = Double.POSITIVE_INFINITY;
     boolean inAir = false;
     int jumpCooldownMs = 0;
@@ -170,6 +171,7 @@ class BotMovementState {
     int navJumpLaunchDelaySteps = Integer.MIN_VALUE;
     int navTargetRegionId = -1;
     boolean navPreciseTarget = false;
+    int navTargetStopDist = 4;
     int navBlockedPosTicks = 0;
     int navBlockedPosGiveUpTicks = 0;
     int navBlockedPosX = Integer.MIN_VALUE;

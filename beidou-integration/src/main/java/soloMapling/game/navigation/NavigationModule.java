@@ -92,7 +92,8 @@ public final class NavigationModule implements RuntimeModule {
             job.scene = NativeContextChecks.captureScene(server, actor);
             job.position = new Point(actor.character().getPosition());
             checkpoint(job);
-            job.engine = RuntimeNavigationEngine.plan(actor.character(), job.target, () -> checkpoint(job));
+            job.engine = RuntimeNavigationEngine.plan(actor.character(), job.target,
+                    config.arrivalTolerancePx(), () -> checkpoint(job));
             job.registration = context.scope().resources().beginOwnedResult(work, "navigation_motion");
             job.registration.attach(job, () -> job.stopRequested = true);
             long lastProgress = System.nanoTime();

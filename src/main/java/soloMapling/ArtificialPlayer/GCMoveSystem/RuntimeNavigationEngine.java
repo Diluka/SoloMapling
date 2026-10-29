@@ -31,7 +31,7 @@ public final class RuntimeNavigationEngine {
     }
 
     /** Planning runs on the managed caller, outside the role's short-command lane. */
-    public static Session plan(Character actor, Point target, Runnable checkpoint) {
+    public static Session plan(Character actor, Point target, int arrivalTolerancePx, Runnable checkpoint) {
         checkpoint.run();
         MapleMap map = actor.getMap();
         if (map.isSwim() || map.getFootholds() == null || BotPhysicsEngine.slipperyGround(map)) {
@@ -75,23 +75,25 @@ public final class RuntimeNavigationEngine {
         var route = BotNavigationManager.runSearch(graph, map, start, startRegion, targetRegion, target,
                 "runtime-navigation", true, false, 0, checkpoint).path();
         if (route.isEmpty() && startRegion != targetRegion) throw new Failure("NO_PATH");
-        return new Session(actor, target, graph, profile, route, onRope, floor);
+        return new Session(actor, target, arrivalTolerancePx, graph, profile, route, onRope, floor);
     }
 
     /** A session owns only predicted motion; the module dispatches every returned frame natively. */
     public static final class Session {
         private final Character actor;
         private final Point target;
+        private final int arrivalTolerancePx;
         private final BotNavigationGraph graph;
         private final List<BotNavigationGraph.Edge> route;
         private final BotMovementState motion;
         private int nextEdge;
 
-        private Session(Character actor, Point target, BotNavigationGraph graph,
+        private Session(Character actor, Point target, int arrivalTolerancePx, BotNavigationGraph graph,
                         BotMovementProfile profile, List<BotNavigationGraph.Edge> route,
                         boolean onRope, Point floor) {
             this.actor = actor;
             this.target = new Point(target);
+            this.arrivalTolerancePx = arrivalTolerancePx;
             this.graph = graph;
             this.route = List.copyOf(route);
             motion = new BotMovementState(actor, null);
@@ -101,6 +103,7 @@ public final class RuntimeNavigationEngine {
             BotPhysicsEngine.resetMotion(motion, motion.position());
             motion.navGraph = graph;
             motion.navPreciseTarget = true;
+            motion.navTargetStopDist = Math.min(4, arrivalTolerancePx);
             if (onRope) {
                 motion.climbing = true;
                 motion.climbRope = actor.getMap().getRopes().stream()
@@ -116,13 +119,14 @@ public final class RuntimeNavigationEngine {
         }
 
         public Point target() { return new Point(target); }
-        public int tickMs() { return BotPhysicsEngine.cfg.TICK_MS; }
+        public int tickMs() { return motion.groundTickMs; }
         public boolean attributesChanged() {
             return !motion.movementProfile.equals(BotMovementProfile.fromNativeCharacter(actor));
         }
 
         /** Called once per role-lane tick; no search, timer, native role write or broadcast occurs here. */
         public Frame nextFrame(boolean stopping) {
+            motion.groundTickMs = BotPhysicsEngine.cfg.TICK_MS;
             Mode mode = Mode.IDLE;
             if (stopping) {
                 motion.navEdge = null;
@@ -157,6 +161,18 @@ public final class RuntimeNavigationEngine {
                 } else {
                     motion.navPreciseTarget = true;
                     mode = motion.climbing ? Mode.CLIMB : Mode.WALK;
+                    if (!motion.inAir && !motion.climbing) {
+                        int dx = Math.abs(target.x - motion.position().x);
+                        int dy = Math.abs(target.y - motion.position().y);
+                        if (dx <= arrivalTolerancePx && dy <= arrivalTolerancePx) {
+                            BotPhysicsEngine.idleOnGround(motion, actor);
+                            consumed = true;
+                        } else if (arrivalTolerancePx < 4
+                                && dx <= BotPhysicsEngine.walkStep(actor.getMap(), motion.movementProfile)) {
+                            // Terminal control uses one client physics step, retaining subpixel progress.
+                            motion.groundTickMs = (int) BotPhysicsEngine.CLIENT_GROUND_STEP_MS;
+                        }
+                    }
                 }
                 if (!consumed) {
                     if (motion.climbing) BotMovementManager.tickClimbing(motion, waypoint, true);
