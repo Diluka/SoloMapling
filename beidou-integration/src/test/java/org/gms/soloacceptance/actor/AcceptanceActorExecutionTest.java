@@ -52,6 +52,7 @@ class AcceptanceActorExecutionTest {
     @BeforeEach
     void oneSessionAndOneRealSerialQueue() {
         CharacterTestContext.install();
+        org.gms.client.Job.values();
         WorldEpoch.onWorldStarted();
         backend = mock(NativeActorBackend.class);
         world = mock(World.class);
@@ -59,6 +60,7 @@ class AcceptanceActorExecutionTest {
         client = mock(AcceptanceClient.class);
         character = mock(Character.class);
         when(character.getId()).thenReturn(73);
+        when(character.getJob()).thenReturn(org.gms.client.Job.BEGINNER);
         handle = handleAtCurrentEpoch();
         when(backend.isCurrent(any())).thenReturn(true);
         doAnswer(invocation -> {

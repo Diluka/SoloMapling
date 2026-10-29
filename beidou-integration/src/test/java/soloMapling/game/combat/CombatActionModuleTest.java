@@ -14,6 +14,7 @@ import org.gms.server.life.MonsterStats;
 import org.gms.server.maps.MapObjectType;
 import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
@@ -41,6 +42,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class CombatActionModuleTest {
+    @BeforeEach void installNativeContext() { CharacterTestContext.install(); Job.values(); }
     @Test void sharedEntryHitsOnlyTheRequestedTargetAndWaitsForTheLegacyStrike() throws Exception {
         try (var fixture = new Fixture()) {
             var result = (Map<?, ?>) fixture.caller.call("combat.engage", Map.of("target_oid", 91)).get("result");
@@ -76,7 +78,6 @@ class CombatActionModuleTest {
         final CharacterRuntime.ModuleContext caller;
 
         Fixture() {
-            CharacterTestContext.install();
             WorldEpoch.onWorldStarted();
             var server = mock(Server.class);
             var world = mock(World.class);

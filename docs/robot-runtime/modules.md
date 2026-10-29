@@ -1,6 +1,6 @@
 # 机器人模块定义与共享函数
 
-本文面向接入模块的开发者，描述 #205 的模块契约、#270 的动作/策略入口及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航和世界人口能力模块；具体业务类型按配置选择模块。
+本文面向接入模块的开发者，描述 #205 的模块契约、#270 的动作/策略入口及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航、战斗和世界人口能力模块；具体业务类型按配置选择模块。#271 的持续交战请求、结果及首批候选范围见[战斗参考](combat.md)。
 
 ## 定义与实例配置
 
@@ -70,7 +70,7 @@ modules.call("example.counter.next", {label: "本次调用"});
 `UNAVAILABLE` 是该次模块函数调用的结果；脚本可以检查它并决定是否结束流程。调用者仍需具备当前有效的模块和脚本调用资格。
 导出调用的 `SUCCEEDED` 表示 handler 正常返回；具体游戏结果由函数自己的结果契约表达。
 
-Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。默认 `mcp_test` 导出 [`navigation.moveTo`](navigation.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP 通过 `script_run` 承接原生上下文中的脚本调用；北斗对象 API 的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
+Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。当前源码的默认 `mcp_test` 导出 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP 通过 `script_run` 承接原生上下文中的脚本调用；北斗对象 API 的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
 
 ## 最小协议示例
 

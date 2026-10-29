@@ -72,7 +72,7 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
         if (values.keySet().stream().anyMatch(key -> !key.equals("timeout_ms"))) {
             throw new IllegalArgumentException("unknown_combat_config");
         }
-        int timeout = integer(values.getOrDefault("timeout_ms", DEFAULT_CONFIG.timeoutMs()));
+        int timeout = Integer.parseInt(values.getOrDefault("timeout_ms", DEFAULT_CONFIG.timeoutMs()).toString());
         if (timeout < 1 || timeout > 120_000) throw new IllegalArgumentException("invalid_combat_timeout");
         return new Config(timeout);
     }

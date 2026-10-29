@@ -53,7 +53,7 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 模块共享函数
 
-在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。当前源码的 MCP 专用角色固定按 `RobotPopulation.yaml` 中的 `mcp_test` 类型装配，默认包含导航和人口能力。实际服务的源码身份及目录仍需与本次环境对应。
+在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。当前源码的 MCP 专用角色固定按 `RobotPopulation.yaml` 中的 `mcp_test` 类型装配，默认包含导航、战斗和人口能力。实际服务的源码身份及目录仍需与本次环境对应。
 
 函数缺失或提供者暂停、停用时正常返回 `UNAVAILABLE`；按实际结果选择后续流程。函数声明、装配与结果契约见[机器人模块参考](../../../docs/robot-runtime/modules.md#共享函数声明与调用)。北斗原有 `cm/qm/pi/rm/em` 方法继续按[源码导航](source-navigation.md)查阅。
 
@@ -73,6 +73,25 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 ```
 
 示意坐标替换为该实际场景内的可达目标。导航函数同步等待抵达或失败及本次收尾；目录外壳 `SUCCEEDED` 之后继续检查 `result.outcome`，只有 `ARRIVED` 表示实际抵达。参数、地形范围和结果见[导航参考](../../../docs/robot-runtime/navigation.md)。脚本默认期限为30秒、最大120秒，导航还有自身期限；执行中断沿同一调用关系传到导航提供者，真实停止及已发生位移分别核对。
+
+## 一次调用完成指定目标交战
+
+从当前实际场景取得怪物对象 ID，替换示例中的 `12345`，在同一 OPEN 上下文调用：
+
+```json
+{
+  "kind": "npc",
+  "operation": "invoke",
+  "context_id": "仍然OPEN的实际context_id",
+  "parameters": {"target_oid": 12345, "allowed_target_oids": [12345]},
+  "timeout_ms": 30000,
+  "source": "modules.call('combat.engage', {target_oid: parameters.target_oid, allowed_target_oids: parameters.allowed_target_oids, choice: 'AUTO', timeout_ms: 20000})"
+}
+```
+
+该次调用在允许范围内接敌、选招并持续攻击，等待本次交战与组合导航收尾。`allowed_target_oids` 最多32个不同 ID，必须包含指定目标，省略时仅允许指定目标。目录返回 `SUCCEEDED` 后检查 `result.outcome`、`attacks` 和 `hits`；`buff_skill_ids` 是当前路径声明，`buffs_cast` 是本次派发记录。调用的攻击使用旧模拟规则，仍可能产生真实怪物扣血、经验和掉落，按实际后态核对。
+
+当前候选首批为 HERO 与 IL_ARCHMAGE 两链，其他职业沿通用普攻兜底；完整范围继续按同一契约迁移。参数、结果、模块实例冷却及取消语义见[战斗参考](../../../docs/robot-runtime/combat.md)，职业清单见[职业能力](../../../docs/robot-runtime/combat-jobs.md)。临时职业测试类型和材料放在 `RobotPopulation.local.yaml`，沿[人口配置](../../../docs/robot-runtime/population.md#本地临时类型)加载。
 
 ## 创建与移除具体环境机器人
 
@@ -131,3 +150,5 @@ result = await client.call_tool("script_run", {
 提前取消尚未启动的 `invoke/close` 只结算本次调用，已有 Context 仍可能 OPEN。恢复结果中已确认 OPEN 时按需要显式关闭原上下文；UNKNOWN 保持未知，不重新 start 或假报关闭。停止 guest 循环也不证明正在执行的 Java 方法已返回，实际收尾标记与业务后态分别记录。
 
 调试服务端传送、任务入口、门户或机关回调时，记录这条原生入口实际发生的变化；普通玩家的距离、资格和客户端准入需要各自验证。
+
+导航组合调用可给 `navigation.moveTo` 增加 `timeout_ms`（1～120,000，默认120,000），实际取与导航模块配置期限的较小值；父动作可传自己的剩余预算，调用返回前会完成本次导航停止与收尾。
