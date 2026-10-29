@@ -18,7 +18,6 @@ import java.util.function.Function;
  */
 public record ModuleDefinition<C, M extends RuntimeModule>(
         String typeId,
-        Set<String> slots,
         Set<String> controls,
         ExecutionScope.Limits limits,
         Consumer<C> validateConfig,
@@ -27,8 +26,6 @@ public record ModuleDefinition<C, M extends RuntimeModule>(
 
     public ModuleDefinition {
         requireIdentifier(typeId);
-        slots = Set.copyOf(slots);
-        slots.forEach(ModuleDefinition::requireIdentifier);
         controls = Set.copyOf(controls);
         controls.forEach(ModuleDefinition::requireIdentifier);
         Objects.requireNonNull(limits);

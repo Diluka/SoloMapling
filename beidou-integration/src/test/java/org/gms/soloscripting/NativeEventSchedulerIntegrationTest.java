@@ -217,7 +217,7 @@ class NativeEventSchedulerIntegrationTest {
             var work = runtime.acceptOpeningWork();
             runtime.submitOpening(work, () -> { runtime.reserveOrigin(work).adopt(role); runtime.bindAdoptedOrigin(); }, () -> {});
             work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            var definition = new ModuleDefinition<Void, RuntimeModule>("native-event-test", Set.of(), Set.of("event"),
+            var definition = new ModuleDefinition<Void, RuntimeModule>("native-event-test", Set.of("event"),
                     new ExecutionScope.Limits(16, 2, 16, 2), config -> {}, config -> new RuntimeModule() {}, List.of());
             context = runtime.context(runtime.mount(definition, new ModuleSelection<>("event", null, true)).reference());
         }

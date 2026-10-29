@@ -93,7 +93,7 @@ class NativeScriptRuntimeTest {
                     return Map.of("title", instance.config.title(), "text", instance.lastNote,
                             "count", ++instance.count);
                 });
-        var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(), Set.of(),
+        var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(),
                 new ExecutionScope.Limits(4, 1, 4, 1), config -> {}, NotesModule::new, List.of(record));
         var provider = fixture.runtime.mount(definition, new ModuleSelection<>("notes", new NotesConfig("角色日记"), true));
         Map<?, ?> advertisedHelp = fixture.context.help().getFirst();
@@ -645,7 +645,7 @@ class NativeScriptRuntimeTest {
                 runtime.reserveOrigin(opening).adopt(role); runtime.bindAdoptedOrigin();
             }, () -> {});
             opening.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            var definition = new ModuleDefinition<Void, RuntimeModule>("native-test", Set.of(), Set.of("test-control"),
+            var definition = new ModuleDefinition<Void, RuntimeModule>("native-test", Set.of("test-control"),
                     new ExecutionScope.Limits(16, 4, 16, 4), config -> {}, config -> new RuntimeModule() {}, List.of());
             context = runtime.context(runtime.mount(definition, new ModuleSelection<>("native", null, true)).reference());
         }

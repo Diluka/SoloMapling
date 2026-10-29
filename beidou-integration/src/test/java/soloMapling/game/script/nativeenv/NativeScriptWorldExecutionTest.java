@@ -423,7 +423,7 @@ class NativeScriptWorldExecutionTest {
             var work = runtime.acceptOpeningWork();
             runtime.submitOpening(work, () -> { runtime.reserveOrigin(work).adopt(this); runtime.bindAdoptedOrigin(); }, () -> {});
             work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            var definition = new ModuleDefinition<Void, RuntimeModule>("script-world", Set.of(), Set.of("native-script"),
+            var definition = new ModuleDefinition<Void, RuntimeModule>("script-world", Set.of("native-script"),
                     new ExecutionScope.Limits(16, 4, 16, 4), config -> {}, config -> new RuntimeModule() {}, List.of());
             context = runtime.context(runtime.mount(definition, new ModuleSelection<>(kind, null, true)).reference());
         }

@@ -104,7 +104,7 @@ class NativeMovementActionsTest {
         var open = runtime.acceptOpeningWork();
         runtime.submitOpening(open, () -> { runtime.reserveOrigin(open).adopt(binding); runtime.bindAdoptedOrigin(); }, () -> { });
         lane.all();
-        var definition = new ModuleDefinition<Void, RuntimeModule>("movement-test", Set.of(), Set.of("movement"),
+        var definition = new ModuleDefinition<Void, RuntimeModule>("movement-test", Set.of("movement"),
                 new ExecutionScope.Limits(16, 2, 16, 2), config -> {}, config -> new RuntimeModule() {}, List.of());
         var ref = runtime.mount(definition, new ModuleSelection<>("move", null, true)).reference();
         context = runtime.context(ref); scene = new GameContext.SceneRef(actor,map,null,null);

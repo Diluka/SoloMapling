@@ -1,4 +1,4 @@
-# 机器人模块定义、槽位与共享函数
+# 机器人模块定义与共享函数
 
 本文面向接入模块的开发者，描述 #205 的当前源码契约。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前真实接入的是 MCP 控制模块；本轮没有预装导航、战斗策略、商贸或活动业务模块及其共享函数。
 
@@ -8,43 +8,24 @@
 
 | 对象 | 职责 |
 |---|---|
-| `ModuleDefinition<C, M extends RuntimeModule>` | 复用的类型标识、槽位、控制资源、scope 额度、配置验证器、工厂和导出声明 |
+| `ModuleDefinition<C, M extends RuntimeModule>` | 复用的类型标识、控制资源、scope 额度、配置验证器、工厂和导出声明 |
 | `ModuleSelection<C>` | 本运行体内的 `instanceId`、模块自有配置 `config` 和启用标志 `enabled` |
 | `CharacterRuntime.MountedModule<M>` | 挂载结果；`reference()` 是当前模块引用，`instance()` 是本次工厂创建的实际模块 |
 
-`CharacterRuntime.mount(definition, selection)` 先调用模块配置验证器一次，再检查宿主状态、实例标识、容量、全部槽位和导出名称。整体校验通过后，在同一装配临界区预约全部槽位与导出名称，再调用工厂创建实例并绑定导出；启用实例随后激活。
+`CharacterRuntime.mount(definition, selection)` 调用模块配置验证器，检查当前宿主状态并登记实例与导出名称，随后调用工厂创建实例并绑定导出；启用实例随后激活。实例标识与共享函数名称在同一运行体中唯一。
 
 工厂只构造模块私有状态。实际任务、原生调用和受管资源在生命周期 hook 中通过提供的 `ModuleContext` 接入。框架保存模块自己的配置及进度；角色、背包、任务等事实继续读取北斗真实来源。
 
-## 首版槽位
+## 装配方案与生命周期
 
-`ModuleSlots.standard()` 提供以下不可变规格，容量按同一角色运行体中的模块实例计算：
+机器人装配方案及配置随源码维护，通过对应测试和验收确认模块之间的组合。每个机器人按方案创建模块；正常工作周期内模块组合固定，模块的任务、状态和能力可用性随运行变化。
 
-| 标识 | 容量 | 职责 |
-|---|---:|---|
-| `controller` | 1 | 自主安排角色目标、日程和阶段，或承接 MCP 外部控制 |
-| `navigation` | 1 | 执行已确定目标的导航任务 |
-| `combat` | 1 | 执行已确定目标或范围内的战斗任务 |
-| `conversation` | 1 | 处理已启用会话服务中的消息 |
-| `party_coordination` | 1 | 队伍意图、招募应答、邀请和入队结果处理 |
-| `trade` | 1 | 面对面交易执行及结果处理 |
-| `shop_management` | 1 | 店铺执行能力与真实店铺会话关联 |
-| `shop_interaction` | 1 | 访问商店、浏览及采购能力 |
-| `interactive_service` | 1 | 已选定服务或交互活动的执行与参与者响应 |
+主控负责选择角色活动目标与顺序；能力模块完成已确定的任务或处理已启用服务的事件。具体职责和调用关系由装配方案确定，`controls` 声明模块执行原生动作所需的控制资源。队伍人数、店铺访客数、牌桌席位及模块内部任务数量由各自业务规则管理。
 
-自主主控与 `McpControlModule.DEFINITION` 都声明 `controller`，同一运行体最多挂载一个主控实例。能力模块可以持续完成既定任务或处理已启用服务的事件；新的角色活动目标与顺序由主控选择。
-
-模块兼有自主日程和业务能力时，同时声明 `controller` 与对应能力槽位。调用某个能力不增加调用者的占槽。没有独占装配职责的响应或函数扩展可以声明空槽位，例如既定结果触发的交付或已启用的迎宾响应。
-
-`slots` 约束模块装配；`controls` 仍表达原生执行所需的控制资源。队伍人数、店铺访客数、牌桌席位及实例内部任务数量由各自业务规则管理。
-
-## 生命周期与占用释放
-
-- 初始化预约也计入占用，其他挂载不能复用其中任何槽位或导出名称。
-- 工厂或首次激活失败时，运行体进入本实例的卸载收尾。生命周期 hook、scope 工作、资源和 Grant 真实结束后释放预约。
-- 暂停或停用保留实例、配置、槽位和导出声明；相关导出显示不可用。
+- 工厂或首次激活失败时，运行体进入本实例的卸载收尾。生命周期 hook、scope 工作、资源和 Grant 真实结束后撤下导出登记。
+- 暂停或停用保留实例、配置和导出声明；相关导出显示不可用。
 - 恢复生成新的 `ModuleRef` 和 `ModuleContext` 代次，原引用失去调用资格。
-- 卸载完成后撤下实例的导出登记并释放槽位。停止或卸载清理 hook 异常时保留 `FAILED`、失败原因和占用，根关闭也继续等待真实收尾。
+- 卸载完成后撤下实例的导出登记。停止或卸载清理 hook 异常时保留 `FAILED`、失败原因和未完成的清理责任，根关闭继续等待真实收尾。
 
 模块只清理自己拥有的工作与资源。角色最终退出、来源释放和唯一 lane 的关闭仍由 `CharacterRuntime` 管理。
 
@@ -101,7 +82,7 @@ ModuleFunction<CounterModule> next = new ModuleFunction<>(
                 "label", args.get("label"), "value", instance.next()));
 
 ModuleDefinition<CounterConfig, CounterModule> definition = new ModuleDefinition<>(
-        "counter-example", Set.of(), Set.of(),
+        "counter-example", Set.of(),
         new ExecutionScope.Limits(4, 1, 4, 1),
         java.util.Objects::requireNonNull, CounterModule::new, List.of(next));
 

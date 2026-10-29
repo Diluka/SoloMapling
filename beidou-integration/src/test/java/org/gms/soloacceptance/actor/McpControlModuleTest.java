@@ -17,7 +17,6 @@ import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleSelection;
-import soloMapling.game.runtime.ModuleSlots;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeEvents;
 
@@ -63,7 +62,6 @@ class McpControlModuleTest {
     void theModuleDeclaresOnlyItsControlsAndCannotOperateBeforeHostActivation() {
         McpControlModule inactive = McpControlModule.DEFINITION.factory().apply(Map.of());
         assertEquals("mcp-control", McpControlModule.DEFINITION.typeId());
-        assertEquals(Set.of(ModuleSlots.CONTROLLER), McpControlModule.DEFINITION.slots());
         assertEquals(Set.of("chat", "interaction", "inventory", "movement", "combat"), McpControlModule.DEFINITION.controls());
         assertEquals(new ExecutionScope.Limits(16, 2, 16, 2), McpControlModule.DEFINITION.limits());
         assertEquals("module_not_active", assertThrows(CharacterRuntime.Invalid.class, inactive::context).reason());
