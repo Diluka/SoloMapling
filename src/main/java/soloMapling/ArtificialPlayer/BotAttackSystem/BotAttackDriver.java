@@ -314,7 +314,7 @@ public final class BotAttackDriver {
         if (botPos == null) {
             return List.of();
         }
-        Rectangle box = reachBox(bot, profile, weapon, facingLeft);
+        Rectangle box = reachBox(bot.getPosition(), profile, weapon, facingLeft);
 
         List<Monster> found = new ArrayList<>();
         for (MapObject mo : bot.getMap().getMapObjectsInRange(botPos, SEEK_RANGE_SQ, List.of(MapObjectType.MONSTER))) {
@@ -326,20 +326,23 @@ public final class BotAttackDriver {
             if (mp == null) {
                 continue;
             }
-            // Bosses are big and multi-bodied: test their part positions against a vertically
-            // padded box so e.g. Zakum's elevated arms still register as in-reach.
-            Rectangle test = m.isBoss()
-                    ? new Rectangle(box.x, box.y - BOSS_Y_PAD, box.width, box.height + 2 * BOSS_Y_PAD)
-                    : box;
-            // The reach box is a flat rectangle with no terrain sense, so a tall box would let the bot
-            // hit a mob standing on a separate platform overhead/below. Drop mobs on a different ledge
-            // than the bot (bosses exempt). Cheap (peek-only) and only run for box-passing mobs.
-            if (test.contains(mp) && onAttackableSurface(bot.getMap(), botPos, m)) {
-                found.add(m);
-            }
+            if (isInReach(bot.getMap(), botPos, m, box)) found.add(m);
         }
         found.sort((a, b) -> Double.compare(botPos.distanceSq(a.getPosition()), botPos.distanceSq(b.getPosition())));
         return found;
+    }
+
+    /** Read-only candidate check using the same directional box and ledge rules as a real strike. */
+    public static boolean canHitFrom(Character actor, Monster target, BotAttackProfile profile,
+                                     WeaponType weapon, Point position) {
+        boolean facingLeft = target.getPosition().x < position.x;
+        return isInReach(actor.getMap(), position, target, reachBox(position, profile, weapon, facingLeft));
+    }
+
+    private static boolean isInReach(MapleMap map, Point position, Monster target, Rectangle box) {
+        Rectangle test = target.isBoss()
+                ? new Rectangle(box.x, box.y - BOSS_Y_PAD, box.width, box.height + 2 * BOSS_Y_PAD) : box;
+        return test.contains(target.getPosition()) && onAttackableSurface(map, position, target);
     }
 
     /*
@@ -356,8 +359,7 @@ public final class BotAttackDriver {
      * Forward attacks are clipped to the bot's facing side; surround attacks (a box centred on the
      * character - mage AoE, Dragon Roar, Heaven's Hammer) keep both sides.
      */
-    private static Rectangle reachBox(Character bot, BotAttackProfile profile, WeaponType weapon, boolean facingLeft) {
-        Point p = bot.getPosition();
+    private static Rectangle reachBox(Point p, BotAttackProfile profile, WeaponType weapon, boolean facingLeft) {
         int skillId = profile.skillFor(weapon);
         Rectangle wz = wzBox(skillId, profile.skillLevel, p, facingLeft);
 
@@ -489,7 +491,7 @@ public final class BotAttackDriver {
         if (nearest == null) {
             return "no targetable mobs within " + SEEK_RANGE + "px (none, or all on a separate ledge)";
         }
-        Rectangle box = reachBox(bot, profile, weapon, facingLeft);
+        Rectangle box = reachBox(bot.getPosition(), profile, weapon, facingLeft);
         Point np = nearest.getPosition();
         return "nearest '" + nearest.getName() + "' at dx=" + (np.x - botPos.x) + " dy=" + (np.y - botPos.y)
                 + " outside reach x[" + box.x + ".." + (box.x + box.width) + "] y[" + box.y + ".." + (box.y + box.height)

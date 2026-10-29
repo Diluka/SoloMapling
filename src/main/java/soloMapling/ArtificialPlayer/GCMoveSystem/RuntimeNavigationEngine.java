@@ -30,6 +30,11 @@ public final class RuntimeNavigationEngine {
         public String reason() { return reason; }
     }
 
+    /** Shared read-only projection onto the map's existing walkable ground geometry. */
+    public static Point groundPoint(MapleMap map, Point position) {
+        return BotPhysicsEngine.findGroundPoint(map, position);
+    }
+
     /** Planning runs on the managed caller, outside the role's short-command lane. */
     public static Session plan(Character actor, Point target, Runnable checkpoint) {
         checkpoint.run();
@@ -62,10 +67,10 @@ public final class RuntimeNavigationEngine {
                 source.regionsById, source.regionIdByFootholdId, landEdges,
                 source.collidableWallIds, source.collidableFromBelowIds);
         Point start = actor.getPosition();
-        Point floor = BotPhysicsEngine.findGroundPoint(map, start);
+        Point floor = groundPoint(map, start);
         boolean onRope = CharacterStance.isClimbing(actor.getStance());
         int startRegion = onRope ? graph.findRopeRegionId(start) : graph.findRegionId(map, start);
-        Point targetFloor = BotPhysicsEngine.findGroundPoint(map, target);
+        Point targetFloor = groundPoint(map, target);
         int targetRegion = targetFloor != null && Math.abs(targetFloor.y - target.y) <= 4
                 ? graph.findRegionId(map, target) : graph.findRopeRegionId(target);
         if (startRegion < 0 || targetRegion < 0) throw new Failure("NO_PATH");
@@ -165,7 +170,7 @@ public final class RuntimeNavigationEngine {
                 }
             }
             Point position = motion.position();
-            Point ground = BotPhysicsEngine.findGroundPoint(actor.getMap(), position);
+            Point ground = groundPoint(actor.getMap(), position);
             boolean grounded = !motion.inAir && !motion.climbing && ground != null && Math.abs(ground.y - position.y) <= 1;
             if (grounded) {
                 var foothold = BotPhysicsEngine.findGroundFoothold(actor.getMap(), position);

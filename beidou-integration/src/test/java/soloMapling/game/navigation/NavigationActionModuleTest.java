@@ -25,7 +25,7 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
-import soloMapling.game.runtime.ActionModule;
+import soloMapling.game.runtime.ModuleCall;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
@@ -92,14 +92,10 @@ class NavigationActionModuleTest {
     @Test void javaActionEntryReturnsTypedResultAfterNativeMovementAndWorkSettlement() throws Exception {
         var fixture = fixture(98_982_106, new Point(0, 0),
                 List.of(foothold(-200, 0, 300, 0, 1)), List.of());
-        ActionModule<MoveToRequest, NavigationResult> action = fixture.module;
+        var call = fixture.caller.call(NavigationActionModule.MOVE_TO, new MoveToRequest(120, 0));
+        assertEquals(ModuleCall.Status.SUCCEEDED, call.status());
         var context = fixture.module.context();
-        var work = context.acceptWork();
-        var result = new AtomicReference<NavigationResult>();
-        context.scope().runTracked(work,
-                () -> result.set(assertDoesNotThrow(() -> action.execute(new MoveToRequest(120, 0), context, work))));
-        work.completion().toCompletableFuture().join();
-        var facts = result.get();
+        var facts = call.result();
         assertEquals(NavigationResult.Outcome.ARRIVED, facts.outcome());
         assertTrue(facts.progress().stable());
         assertEquals(fixture.position.get().x, facts.progress().position().x());

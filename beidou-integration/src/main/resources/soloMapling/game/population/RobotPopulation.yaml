@@ -14,6 +14,9 @@ types:
         type: combat
         config:
           timeout_ms: 30000
+      native:
+        type: native-actions
+        config: {}
       population:
         type: robot-population
         config: {}

@@ -181,6 +181,6 @@ python3 beidou-integration/scripts/build.py --help
 
 ## #270 动作与策略调用契约
 
-- `RuntimeModule` 统一可装载模块的激活、停止与卸载生命周期。`ActionModule<I, R>.execute(input, context, work)` 完成既定目标的执行规划、推进、确认与收尾；`StrategyModule<I, R>.run(input, context, work)` 选择或切换目标及约束，并决定发起、继续或中断任务。具体类名分别使用 `<Name>ActionModule`、`<Name>StrategyModule`。MCP控制和世界人口入口继续使用通用生命周期协议。
-- `NavigationActionModule` 使用 `MoveToRequest → NavigationResult`；共享目录适配JSON参数与结果，Java/脚本消费同一受管入口。配置类型 `navigation`、导出 `navigation.moveTo`、`mcp_test` 和既有实例标识保持原契约。导出work执行一次，实际原生短命令使用提供者scope的新work进入角色唯一lane。
-- 父模块在构造或初始化阶段创建内部组合与私有状态，单次 `execute/run` 复用这些状态。内部子模块的工作、资源和最终收尾纳入父模块scope；目录中独立提供者保持自己的scope，沿调用链传递取消、期限并等待实际收尾。内部结果由父模块解释、业务结果由具体R表达、提供者可用性由共享目录表达。持续动作和动作组合按这一边界接入。源码、隔离及实际部署证据以对应Issue记录为准。
+- `RuntimeModule` 统一可装载模块的激活、停止与卸载生命周期。`ActionModule` 表达既定目标内的动作能力，`StrategyModule` 选择或切换目标及约束，并决定发起、继续或中断任务。两个职责接口不绑定模块级唯一输入和结果；每项 `ModuleFunction<M, I, R>` 操作分别声明业务输入、结果、完成条件及handler，同一模块可以提供多个异构操作。具体类名分别使用 `<Name>ActionModule`、`<Name>StrategyModule`。MCP控制和世界人口入口继续使用通用生命周期协议。
+- `NavigationActionModule.MOVE_TO` 使用 `MoveToRequest → NavigationResult`；共享目录适配JSON参数与结果，Java/脚本消费同一类型化handler。`RobotPopulationModule` 的创建、移除各自声明输入、结果及完成条件。目录通过Bound.prepare在受理前完成一次校验与解码；Bound.invoke保留Java强类型入口，导出集合保持异构操作。配置类型 `navigation`、导出 `navigation.moveTo`、`mcp_test` 和既有实例标识保持原契约。导出work执行一次，实际原生短命令使用提供者scope的新work进入角色唯一lane。
+- 父模块在构造或初始化阶段创建内部组合与私有状态，单项操作复用这些状态。内部子模块的工作、资源和最终收尾纳入父模块scope；目录中独立提供者保持自己的scope，沿调用链传递取消、期限并等待实际收尾。内部结果由父模块解释、业务结果由具体R表达、提供者可用性由共享目录表达。持续动作和动作组合按这一边界接入。源码、隔离及实际部署证据以对应Issue记录为准。

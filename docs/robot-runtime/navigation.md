@@ -4,7 +4,7 @@
 
 ## 配置与调用
 
-类型配置通过模块 `type: navigation` 选择 [NavigationActionModule](../../beidou-integration/src/main/java/soloMapling/game/navigation/NavigationActionModule.java)。模块实现 `ActionModule<MoveToRequest, NavigationResult>`，持有 `movement` 执行资源，实例同时处理一个导航任务。Java 动作入口 `execute(request, context, work)` 接收本次目标与当前提供者的受管工作；共享函数适配把 `x/y` 及可选 `timeout_ms` 转成 `MoveToRequest`，调用同一入口并投影既有 JSON 结果。配置类型、函数名与实例标识保持原契约。
+类型配置通过模块 `type: navigation` 选择 [NavigationActionModule](../../beidou-integration/src/main/java/soloMapling/game/navigation/NavigationActionModule.java)。模块实现 `ActionModule`，持有 `movement` 执行资源，实例同时处理一个导航任务。单项操作 `MOVE_TO` 使用 `ModuleFunction<NavigationActionModule, MoveToRequest, NavigationResult>` 声明；绑定后的强类型调用接收本次目标与当前提供者的受管工作。目录适配把 `x/y` 及可选 `timeout_ms` 一次转换为 `MoveToRequest`，调用同一handler并投影既有 JSON 结果。配置类型、函数名与实例标识保持原契约。
 
 | 模块配置 | 默认值 | 含义 |
 |---|---:|---|
@@ -47,7 +47,7 @@ navigation;
 
 ## 执行与收尾
 
-`execute` 在本次给定目标内完成路径规划、移动、抵达判断和收尾，复用实例的配置与状态。规划与同步等待在模块受管载体执行。每个实际移动帧从导航提供者接受新的短 work，再进入原角色 lane；导出 handler 的调用 work 仅跟踪这次导航调用。到达取决于真实位置与稳定状态，不由路径回调或广播请求单独确认。
+`navigation.moveTo` 操作在本次给定目标内完成路径规划、移动、抵达判断和收尾，复用实例的配置与状态。规划与同步等待在模块受管载体执行。每个实际移动帧从导航提供者接受新的短 work，再进入原角色 lane；导出 handler 的调用 work 仅跟踪这次导航调用。到达取决于真实位置与稳定状态，不由路径回调或广播请求单独确认。
 
 调用者脚本 work 的取消和 scope 停止持续关联到提供者 work。脚本期限沿现有取消入口停止本次导航，因此实际执行同时受脚本期限与模块自身期限约束。停止时保留已发生位移，并等待本次执行及资源真实收尾。外层脚本的最终状态和 `invocation_settled/work_settled` 仍按[脚本执行契约](script-execution.md)核对。
 

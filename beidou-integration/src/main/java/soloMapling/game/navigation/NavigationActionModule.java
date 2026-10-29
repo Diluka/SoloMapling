@@ -25,22 +25,24 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** One target-directed navigation task, using the role's original native lane and module scope. */
-public final class NavigationActionModule implements ActionModule<MoveToRequest, NavigationResult> {
+public final class NavigationActionModule implements ActionModule {
     public record Config(int arrivalTolerancePx, int timeoutMs, int stalledTimeoutMs) { }
     public static final Config DEFAULT_CONFIG = new Config(8, 30_000, 3_000);
-    public static final ModuleDefinition<Config, NavigationActionModule> DEFINITION = new ModuleDefinition<>(
-            "navigation", Set.of("movement"), new ExecutionScope.Limits(16, 2, 4, 2),
-            config -> new NavigationActionModule(config, Server.getInstance()), List.of(new ModuleFunction<>(
+    public static final ModuleFunction<NavigationActionModule, MoveToRequest, NavigationResult> MOVE_TO = new ModuleFunction<>(
             "navigation.moveTo", "在当前实际场景内规划并移动到指定坐标，等待抵达或失败及收尾。",
             List.of(new ModuleFunction.Parameter("x", ModuleFunction.Type.INTEGER, true, "目标横坐标"),
                     new ModuleFunction.Parameter("y", ModuleFunction.Type.INTEGER, true, "目标纵坐标"),
                     new ModuleFunction.Parameter("timeout_ms", ModuleFunction.Type.INTEGER, false,
                             "本次规划及移动预算1..120000ms，实际取与模块期限的较小值")),
             "返回outcome、实际末位置、稳定状态、执行步数和经过的基础边类型。",
-            (module, context, work, args) -> module.execute(new MoveToRequest(
-                    (int) ((Number) args.get("x")).doubleValue(), (int) ((Number) args.get("y")).doubleValue(),
+            "抵达、失败或请求停止后，等待本次移动、原生短work及导航资源实际结束。",
+            (module, args) -> new MoveToRequest((int) ((Number) args.get("x")).doubleValue(),
+                    (int) ((Number) args.get("y")).doubleValue(),
                     (int) ((Number) args.getOrDefault("timeout_ms", MoveToRequest.MAX_TIMEOUT_MS)).doubleValue()),
-                    context, work).toMap())));
+            (module, context, work, input) -> module.execute(input, context, work), NavigationResult::toMap);
+    public static final ModuleDefinition<Config, NavigationActionModule> DEFINITION = new ModuleDefinition<>(
+            "navigation", Set.of("movement"), new ExecutionScope.Limits(16, 2, 4, 2),
+            config -> new NavigationActionModule(config, Server.getInstance()), List.of(MOVE_TO));
 
     private final Config config;
     private final Server server;
@@ -74,7 +76,7 @@ public final class NavigationActionModule implements ActionModule<MoveToRequest,
     public NativeMovementActions movement() { return movement; }
 
     /** Java callers use the same target execution as the exported module function. */
-    @Override public NavigationResult execute(MoveToRequest input, CharacterRuntime.ModuleContext context,
+    public NavigationResult execute(MoveToRequest input, CharacterRuntime.ModuleContext context,
                                               ExecutionScope.WorkHandle work) {
         var job = new Job(context, work, new Point(input.x(), input.y()), Math.min(config.timeoutMs(), input.timeoutMs()));
         synchronized (this) {
@@ -167,7 +169,7 @@ public final class NavigationActionModule implements ActionModule<MoveToRequest,
 
     private RuntimeNavigationEngine.Frame step(Job job, boolean stopping) {
         var frame = new AtomicReference<RuntimeNavigationEngine.Frame>();
-        var failure = new AtomicReference<RuntimeException>();
+        var failure = new AtomicReference<Throwable>();
         ScopeResources.CleanupAttempt cleanup = stopping ? job.registration.acquireCleanup() : null;
         var step = cleanup == null ? job.context.acceptWork() : cleanup.work();
         Runnable body = () -> {
@@ -191,7 +193,7 @@ public final class NavigationActionModule implements ActionModule<MoveToRequest,
                 job.steps++;
                 if (next.mode() != RuntimeNavigationEngine.Mode.IDLE) job.modes.add(next.mode().name());
                 frame.set(next);
-            } catch (RuntimeException unavailable) { failure.set(unavailable); }
+            } catch (RuntimeException | Error unavailable) { failure.set(unavailable); }
         };
         try {
             if (cleanup == null) job.context.submit("movement", step, () -> {}, body, () -> {});
@@ -201,7 +203,8 @@ public final class NavigationActionModule implements ActionModule<MoveToRequest,
             throw rejected;
         }
         step.completion().toCompletableFuture().join();
-        if (failure.get() != null) throw failure.get();
+        if (failure.get() instanceof RuntimeException runtime) throw runtime;
+        if (failure.get() instanceof Error error) throw error;
         if (frame.get() == null) {
             if (!stopping) throw new Halt(Outcome.CANCELLED, "navigation_step_cancelled");
             throw new CancellationException("navigation_cleanup_not_entered");

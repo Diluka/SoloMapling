@@ -88,13 +88,14 @@ class NativeScriptRuntimeTest {
 
     @Test void nativeScriptsConsumeDeclaredModuleFunctionsAndObserveProviderAvailability() throws Exception {
         Fixture fixture = fixture();
-        var record = new ModuleFunction<NotesModule>("notes.record", "记录模块私有进度",
+        var record = new ModuleFunction<NotesModule, String, Map<String, Object>>("notes.record", "记录模块私有进度",
                 List.of(new ModuleFunction.Parameter("text", ModuleFunction.Type.STRING, true, "记录内容")),
-                "返回实例标题、记录内容和累计次数", (instance, context, work, arguments) -> {
-                    instance.lastNote = (String) arguments.get("text");
+                "返回实例标题、记录内容和累计次数", "本次记录已写入提供者私有进度",
+                (instance, arguments) -> (String) arguments.get("text"), (instance, context, work, input) -> {
+                    instance.lastNote = input;
                     return Map.of("title", instance.config.title(), "text", instance.lastNote,
                             "count", ++instance.count);
-                });
+                }, value -> value);
         var definition = new ModuleDefinition<NotesConfig, NotesModule>("notes", Set.of(),
                 new ExecutionScope.Limits(4, 1, 4, 1), NotesModule::new, List.of(record));
         var provider = fixture.runtime.mount(definition, new ModuleSelection<>("notes", new NotesConfig("角色日记"), true));
@@ -106,7 +107,7 @@ class NativeScriptRuntimeTest {
         assertOpen(opened);
         Map<?, ?> initial = (Map<?, ?>) opened.result();
         Map<?, ?> help = (Map<?, ?>) ((List<?>) initial.get("help")).getFirst();
-        for (String field : List.of("name", "description", "parameters", "result_description")) {
+        for (String field : List.of("name", "description", "parameters", "result_description", "completion_condition")) {
             assertEquals(advertisedHelp.get(field), help.get(field),
                     "native_guest_and_runtime_help_share_the_module_declaration:" + field);
         }
@@ -351,8 +352,9 @@ class NativeScriptRuntimeTest {
             var stopped = new CountDownLatch(1);
             var release = new CountDownLatch(1);
             var providerWork = new AtomicReference<ExecutionScope.WorkHandle>();
-            var function = new ModuleFunction<RuntimeModule>("test.await_stop", "Wait for this module call to stop",
-                    List.of(), "Returns after its owned cleanup exits", (instance, context, work, arguments) -> {
+            var function = new ModuleFunction<RuntimeModule, Void, Void>("test.await_stop", "Wait for this module call to stop",
+                    List.of(), "Returns after its owned cleanup exits", "Owned cleanup has actually left",
+                    (instance, arguments) -> null, (instance, context, work, input) -> {
                         providerWork.set(work);
                         entered.countDown();
                         while (!work.cancelRequested()) LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
@@ -363,7 +365,7 @@ class NativeScriptRuntimeTest {
                             catch (InterruptedException ignored) { /* Model native cleanup that still owns its body. */ }
                         }
                         return null;
-                    });
+                    }, value -> value);
             var definition = new ModuleDefinition<Void, RuntimeModule>("waiting-provider", Set.of(),
                     new ExecutionScope.Limits(4, 1, 4, 1), config -> new RuntimeModule() {}, List.of(function));
             var provider = fixture.runtime.mount(definition, new ModuleSelection<>("provider", null, true));

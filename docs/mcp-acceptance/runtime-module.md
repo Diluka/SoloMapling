@@ -113,4 +113,4 @@ MCP中断通过独立取消请求转发；取消先到时建立原请求检查�
 
 [#216北斗脚本上下文](../robot-runtime/beidou-script-environment.md)复用原管理器、原文件和真实对象，NPC/QM连续回调及事件原调度保持同一引擎。owned EIM实例创建尚未接入延迟地图清理，入口明确拒绝；完整共享能力目录、直接动作迁移及真实机器人交互不由基础执行通过推导完成。
 
-动作/策略共享函数适配把JSON参数转换为具体业务输入，将提供者原context和本次work交给 `ActionModule.execute` 或 `StrategyModule.run`，并投影具体业务结果。MCP控制模块继续实现通用 `RuntimeModule`，外部Agent或其脚本负责作出任务决策。公共契约及父模块私有组合的边界见[模块参考](../robot-runtime/modules.md)。
+动作/策略模块表达职责分类，每项 `ModuleFunction<M, I, R>` 单独声明强类型输入、结果和完成条件。共享目录在受理前一次转换JSON输入，再将提供者原context和本次work交给该操作handler；Java的绑定操作与脚本消费同一执行实现，并在JSON边界投影具体结果。MCP控制模块继续实现通用 `RuntimeModule`，外部Agent或其脚本负责作出任务决策。公共契约及父模块私有组合的边界见[模块参考](../robot-runtime/modules.md)。

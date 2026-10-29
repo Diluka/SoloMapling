@@ -53,7 +53,7 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 模块共享函数
 
-在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。当前源码的 MCP 专用角色固定按 `RobotPopulation.yaml` 中的 `mcp_test` 类型装配，默认包含导航、战斗和人口能力。实际服务的源码身份及目录仍需与本次环境对应。
+在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。当前源码的 MCP 专用角色固定按 `RobotPopulation.yaml` 中的 `mcp_test` 类型装配，默认包含导航、战斗、原生动作和人口能力。实际服务的源码身份及目录仍需与本次环境对应。
 
 函数缺失或提供者暂停、停用时正常返回 `UNAVAILABLE`；按实际结果选择后续流程。函数声明、装配与结果契约见[机器人模块参考](../../../docs/robot-runtime/modules.md#共享函数声明与调用)。北斗原有 `cm/qm/pi/rm/em` 方法继续按[源码导航](source-navigation.md)查阅。
 
@@ -92,6 +92,18 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 该次调用在允许范围内接敌、选招并持续攻击，等待本次交战与组合导航收尾。`allowed_target_oids` 最多32个不同 ID，必须包含指定目标，省略时仅允许指定目标。目录返回 `SUCCEEDED` 后检查 `result.outcome`、`attacks` 和 `hits`；`buff_skill_ids` 是当前路径声明，`buffs_cast` 是本次派发记录。调用的攻击使用旧模拟规则，仍可能产生真实怪物扣血、经验和掉落，按实际后态核对。
 
 当前候选首批为 HERO 与 IL_ARCHMAGE 两链，其他职业沿通用普攻兜底；完整范围继续按同一契约迁移。参数、结果、模块实例冷却及取消语义见[战斗参考](../../../docs/robot-runtime/combat.md)，职业清单见[职业能力](../../../docs/robot-runtime/combat-jobs.md)。临时职业测试类型和材料放在 `RobotPopulation.local.yaml`，沿[人口配置](../../../docs/robot-runtime/population.md#本地临时类型)加载。
+
+## 请求原生普通复活
+
+在角色死亡、脚本 Context 仍可调用时，以空参数提交：
+
+```javascript
+modules.call("native.revive", {});
+```
+
+原生普通点击流程先由当前事件裁决，再按原规则处理回城、HP/MP和Buff。目录 `SUCCEEDED` 后查看业务 `result.outcome`、`before/after`、`event_route` 和派发事实；存活角色返回 `ALREADY_ALIVE`。实际复活需要同一角色及原世界代次下的存活和HP后态。事件接管不自动表示已经复活，其后续工作标记为 `OWNER_MANAGED_UNOBSERVED`。
+
+普通复活可能合法换图，并结束当前 NPC Context。以实际脚本结果及最新角色观察决定后续步骤；当前 Context 仍 OPEN 时继续原上下文，已关闭时按需要新建环境。参数、强类型 Java 操作和取消/收尾契约见[原生动作参考](../../../docs/robot-runtime/native-actions.md)。死亡及事件场景放在专用隔离 fixture 准备，准备变化与复活效果分别留证。
 
 ## 创建与移除具体环境机器人
 

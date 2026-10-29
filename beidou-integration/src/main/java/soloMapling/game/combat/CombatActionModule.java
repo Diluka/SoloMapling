@@ -9,6 +9,7 @@ import org.gms.server.life.Monster;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackDriver;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotBuffEffects;
 import soloMapling.ArtificialPlayer.BotCommandsPack.BotAttack;
+import soloMapling.ArtificialPlayer.GCMoveSystem.RuntimeNavigationEngine;
 import soloMapling.game.combat.CombatJobTree.AttackKind;
 import soloMapling.game.combat.CombatJobTree.AttackPlan;
 import soloMapling.game.combat.CombatResult.Outcome;
@@ -19,6 +20,10 @@ import soloMapling.game.runtime.ActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleFunction;
+import soloMapling.game.runtime.ModuleCall;
+import soloMapling.game.navigation.NavigationActionModule;
+import soloMapling.game.navigation.NavigationResult;
+import soloMapling.game.navigation.MoveToRequest;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -33,12 +38,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** One continuous, target-constrained legacy combat task on the role's existing lane. */
-public final class CombatActionModule implements ActionModule<CombatRequest, CombatResult> {
+public final class CombatActionModule implements ActionModule {
     public record Config(int timeoutMs) { }
     public static final Config DEFAULT_CONFIG = new Config(30_000);
-    public static final ModuleDefinition<Config, CombatActionModule> DEFINITION = new ModuleDefinition<>(
-            "combat", Set.of("combat-action"), new ExecutionScope.Limits(16, 2, 4, 2),
-            config -> new CombatActionModule(config, Server.getInstance()), List.of(new ModuleFunction<>(
+    public static final ModuleFunction<CombatActionModule, CombatRequest, CombatResult> ENGAGE = new ModuleFunction<>(
             "combat.engage", "沿旧简化战斗规则持续攻击指定目标，必要时通过导航接敌，等待交战及实际收尾。",
             List.of(new ModuleFunction.Parameter("target_oid", ModuleFunction.Type.INTEGER, true, "指定怪物对象ID"),
                     new ModuleFunction.Parameter("allowed_target_oids", ModuleFunction.Type.ARRAY, false,
@@ -48,15 +51,19 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
                     new ModuleFunction.Parameter("timeout_ms", ModuleFunction.Type.INTEGER, false,
                             "本次期限1～120000ms，默认模块期限")),
             "返回实际outcome、初始化职业链、Buff声明、各技能提供节点与次数、目标HP前后、经验及收尾事实。",
-            (module, context, work, args) -> {
+            "指定目标死亡、失效或执行终止后，已受理的原生短命令全部结算，导航和交战停止。",
+            (module, args) -> {
                 int target = argumentInteger((Number) args.get("target_oid"));
                 Set<Integer> allowed = args.containsKey("allowed_target_oids")
                         ? ((List<?>) args.get("allowed_target_oids")).stream().map(CombatActionModule::integer)
                         .collect(java.util.stream.Collectors.toUnmodifiableSet()) : Set.of(target);
                 var choice = CombatRequest.Choice.valueOf((String) args.getOrDefault("choice", "AUTO"));
                 int timeout = args.containsKey("timeout_ms") ? argumentInteger((Number) args.get("timeout_ms")) : module.config.timeoutMs();
-                return module.execute(new CombatRequest(target, allowed, choice, timeout), context, work).toMap();
-            })));
+                return new CombatRequest(target, allowed, choice, timeout);
+            }, (module, context, work, input) -> module.execute(input, context, work), CombatResult::toMap);
+    public static final ModuleDefinition<Config, CombatActionModule> DEFINITION = new ModuleDefinition<>(
+            "combat", Set.of("combat-action"), new ExecutionScope.Limits(16, 2, 4, 2),
+            config -> new CombatActionModule(config, Server.getInstance()), List.of(ENGAGE));
 
     private final Config config;
     private final Server server;
@@ -103,7 +110,7 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
         if (active != null) active.stopRequested = true;
     }
 
-    @Override public CombatResult execute(CombatRequest input, CharacterRuntime.ModuleContext context,
+    public CombatResult execute(CombatRequest input, CharacterRuntime.ModuleContext context,
                                            ExecutionScope.WorkHandle work) {
         var actor = context.characterRef();
         var task = new Task(input, context, work, actor.character());
@@ -125,22 +132,23 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
                     if (tick.outcome() != null) { outcome = tick.outcome(); reason = tick.reason(); break; }
                     if (tick.approach() != null) {
                         task.navigationCalls++;
-                        var navigation = context.call("navigation.moveTo",
-                                Map.of("x", tick.approach().x, "y", tick.approach().y,
-                                        "timeout_ms", Math.max(1, task.input.timeoutMs() - (int) TimeUnit.NANOSECONDS.toMillis(
+                        var navigation = context.call(NavigationActionModule.MOVE_TO,
+                                new MoveToRequest(tick.approach().x, tick.approach().y,
+                                        Math.max(1, task.input.timeoutMs() - (int) TimeUnit.NANOSECONDS.toMillis(
                                                 System.nanoTime() - task.started))), work);
                         checkpoint(task);
-                        if (!navigation.get("status").equals("SUCCEEDED")) {
+                        if (navigation.status() == ModuleCall.Status.UNAVAILABLE) {
                             outcome = Outcome.UNAVAILABLE; reason = "navigation_unavailable"; break;
                         }
-                        var navigationResult = (Map<?, ?>) navigation.get("result");
-                        if (!navigationResult.get("outcome").equals("ARRIVED")) {
-                            outcome = switch (navigationResult.get("outcome").toString()) {
-                                case "CANCELLED" -> Outcome.CANCELLED;
-                                case "TIMED_OUT" -> Outcome.TIMED_OUT;
+                        var navigationResult = navigation.result();
+                        if (navigationResult.outcome() != NavigationResult.Outcome.ARRIVED) {
+                            outcome = switch (navigationResult.outcome()) {
+                                case CANCELLED -> Outcome.CANCELLED;
+                                case TIMED_OUT -> Outcome.TIMED_OUT;
                                 default -> Outcome.UNREACHABLE;
                             };
-                            reason = "navigation_" + navigationResult.get("outcome").toString().toLowerCase(java.util.Locale.ROOT);
+                            reason = "navigation_" + (navigationResult.reason() == null ? navigationResult.outcome().name()
+                                    : navigationResult.reason()).toLowerCase(java.util.Locale.ROOT);
                             break;
                         }
                     } else {
@@ -180,7 +188,7 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
     /** Every native observation, buff or strike executes as a new short work on this role's lane. */
     private Tick tick(Task task) {
         var value = new AtomicReference<Tick>();
-        var failure = new AtomicReference<RuntimeException>();
+        var failure = new AtomicReference<Throwable>();
         var step = task.context.acceptWork();
         Runnable body = () -> {
             try {
@@ -224,12 +232,17 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
                 if (!targets.contains(task.target)) {
                     int offset = Math.max(10, Math.min(plan.profile().reachX / 2, 160));
                     var targetPosition = task.target.getPosition();
-                    int x = targetPosition.x + (actor.getPosition().x > targetPosition.x ? offset : -offset);
-                    if (Math.abs(actor.getPosition().x - targetPosition.x) < 10
-                            && Math.abs(actor.getPosition().y - targetPosition.y) < 10) {
-                        value.set(new Tick(Outcome.UNREACHABLE, "target_outside_attack_geometry", null)); return;
+                    for (int distance : List.of(offset, 0)) {
+                        int x = targetPosition.x + (actor.getPosition().x > targetPosition.x ? distance : -distance);
+                        Point ground = RuntimeNavigationEngine.groundPoint(task.scene.map(), new Point(x, targetPosition.y));
+                        if (ground == null) ground = RuntimeNavigationEngine.groundPoint(task.scene.map(),
+                                new Point(x, targetPosition.y - plan.profile().reachY));
+                        if (ground != null && Math.abs(ground.y - targetPosition.y) <= plan.profile().reachY
+                                && BotAttackDriver.canHitFrom(actor, task.target, plan.profile(), weapon, ground)) {
+                            value.set(new Tick(null, null, ground)); return;
+                        }
                     }
-                    value.set(new Tick(null, null, new Point(x, targetPosition.y)));
+                    value.set(new Tick(Outcome.UNREACHABLE, "target_outside_attack_geometry", null));
                     return;
                 }
                 if (now < nextAttack || plan.kind() == AttackKind.ULTIMATE && now < nextUltimate) {
@@ -247,12 +260,13 @@ public final class CombatActionModule implements ActionModule<CombatRequest, Com
                     else { old.hpAfter = hit.hpAfter(); old.rolledDamage += hit.rolledDamage(); old.killed |= hit.killed(); }
                 }
                 value.set(new Tick(task.target.isAlive() ? null : Outcome.TARGET_DEAD, null, null));
-            } catch (RuntimeException stopped) { failure.set(stopped); }
+            } catch (RuntimeException | Error stopped) { failure.set(stopped); }
         };
         try { task.context.submit("combat-action", step, () -> {}, body, () -> {}); }
         catch (RuntimeException rejected) { step.reject(); throw rejected; }
         step.completion().toCompletableFuture().join();
-        if (failure.get() != null) throw failure.get();
+        if (failure.get() instanceof Error error) throw error;
+        if (failure.get() != null) throw (RuntimeException) failure.get();
         if (value.get() == null) throw new Halt(Outcome.CANCELLED, "combat_step_cancelled");
         return value.get();
     }

@@ -39,11 +39,13 @@ solomapling:
 
 | 类型 | 装配与用途 |
 |---|---|
-| `mcp_test` | `mcp-control`、`navigation`、`combat`、`robot-population`；为已有 MCP 专用角色提供测试能力，不声明新建角色来源 |
+| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`robot-population`；为已有 MCP 专用角色提供测试能力，不声明新建角色来源 |
 
 `mcp_test` 的默认初始数量为 `0`，MCP 角色仍由 `actor_open` 打开。
 
 当前源码的 `combat` 模块默认 `config.timeout_ms: 30000`，通过 `combat.engage` 接受一次指定目标的持续交战。首批候选职业、参数与结果见[战斗参考](combat.md)，实际目录和部署状态按当前环境核对。
+
+`native-actions` 模块使用空配置 `{}`，首环导出普通复活操作 `native.revive`。原生事件、标准回城及角色后态的结果契约见[原生动作参考](native-actions.md)。
 
 后续新增非自主动作模块时，将其加入 `mcp_test.modules` 并随模块共同验收。负责自主目标决策的策略模块保留在其业务类型中。MCP 接入代码只引用固定类型名，模块组合在这份配置中维护。
 

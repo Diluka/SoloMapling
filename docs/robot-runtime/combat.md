@@ -6,7 +6,9 @@
 
 ## 装配与调用
 
-模块类型为 `combat`，实现 `ActionModule<CombatRequest, CombatResult>`。Java 动作入口为 `CombatActionModule.execute(request, context, work)`；脚本通过同一 `ModuleFunction` 声明的 `combat.engage` 调用。用途、参数、结果说明和实际 handler 同源，当前可用性从 `modules.help()` 查看。
+模块类型为 `combat`，实现 `ActionModule` 职责标记与运行体生命周期协议。强类型输入输出归于操作 `CombatActionModule.ENGAGE`，其声明为 `ModuleFunction<CombatActionModule, CombatRequest, CombatResult>`；同一声明维护用途、参数、结果说明、完成条件和实际 handler。当前可用性从 `modules.help()` 查看。
+
+Java 通过 `context.call(CombatActionModule.ENGAGE, request, callerWork)` 获得 `ModuleCall<CombatResult>`。先检查 `status/reason` 表达的目录可用性，再读取具体业务 `result.outcome()`。脚本以 `modules.call("combat.engage", args)` 消费同一提供者和 handler，JSON 参数在目录边界转换为 `CombatRequest`。该操作在已受理原生短命令结算、导航及交战停止后返回。
 
 当前源码的长期 `mcp_test` 类型显式装配战斗、导航和人口能力。战斗模块只有一个配置项：
 
@@ -52,7 +54,7 @@ modules.call("combat.engage", {
 
 ## 接敌、取消与收尾
 
-交战循环使用战斗提供者的受管调用 work；每次原生观察、朝向、Buff 或攻击以新的短 work 进入该角色原有的唯一 lane。当前目标不在可攻击范围时，通过共享目录组合调用 `navigation.moveTo`，传入交战剩余期限；导航自己的配置期限仍适用，地形范围见[导航参考](navigation.md)。导航缺失或停用返回 `UNAVAILABLE`，无法完成接敌时返回相应的不可达、期限或取消结果。
+交战循环使用战斗提供者的受管调用 work；每次原生观察、朝向、Buff 或攻击以新的短 work 进入该角色原有的唯一 lane。当前目标不在可攻击范围时，通过 `context.call(NavigationActionModule.MOVE_TO, new MoveToRequest(...), work)` 组合调用导航，传入交战剩余期限；`ModuleCall<NavigationResult>` 区分导航可用性及其具体结果，导航自己的配置期限仍适用。地形范围见[导航参考](navigation.md)。导航缺失或停用返回 `UNAVAILABLE`，无法完成接敌时返回相应的不可达、期限或取消结果。
 
 目录将调用者取消关联到战斗 work，再关联到导航提供者 work。战斗停止、脚本取消、场景变化和根关闭都要求本次循环及在途短命令真实退出；函数同步返回前等待本次组合调用收尾。已发生的位移、伤害、死亡、经验及掉落继续作为事实保留。脚本请求被取消后按原 `request_id` 或 operation 恢复证据，具体方法见[脚本执行](script-execution.md#归属取消和真实收尾)。
 
