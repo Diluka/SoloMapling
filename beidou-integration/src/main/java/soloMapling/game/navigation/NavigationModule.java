@@ -50,7 +50,7 @@ public final class NavigationModule implements RuntimeModule {
     }
 
     public static Config parseConfig(Map<String, Object> values) {
-        return new Config(integer(values, "arrival_tolerance_px", DEFAULT_CONFIG.arrivalTolerancePx(), 0, 32_767),
+        return new Config(integer(values, "arrival_tolerance_px", DEFAULT_CONFIG.arrivalTolerancePx(), 4, 32_767),
                 integer(values, "timeout_ms", DEFAULT_CONFIG.timeoutMs(), 1, 120_000),
                 integer(values, "stalled_timeout_ms", DEFAULT_CONFIG.stalledTimeoutMs(), 1, 120_000));
     }

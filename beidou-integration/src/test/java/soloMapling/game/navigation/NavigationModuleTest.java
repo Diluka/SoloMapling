@@ -96,6 +96,13 @@ class NavigationModuleTest {
         verify(fixture.map, never()).movePlayer(any(), any());
     }
 
+    @Test void configuredArrivalToleranceMustCoverTheGroundStoppingDistance() {
+        var rejected = assertThrows(IllegalArgumentException.class,
+                () -> NavigationModule.parseConfig(Map.of("arrival_tolerance_px", 3)));
+        assertEquals("invalid_navigation_config:arrival_tolerance_px", rejected.getMessage());
+        assertDoesNotThrow(() -> NavigationModule.parseConfig(Map.of("arrival_tolerance_px", 4)));
+    }
+
     @Test void nativeMapMovementRulesAndMidRouteStunStopFurtherNavigationInput() {
         var fixture = fixture(98_982_105, new Point(0, 0),
                 List.of(foothold(-200, 0, 400, 0, 1)), List.of());
