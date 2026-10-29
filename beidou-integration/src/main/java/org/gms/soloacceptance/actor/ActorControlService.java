@@ -26,6 +26,7 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.population.RobotPopulationService;
 import soloMapling.game.script.ScriptResult;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -70,6 +71,7 @@ public final class ActorControlService {
     private static final int SCRIPT_OUTPUT_EVENTS = 256;
     private final Object monitor = new Object();
     private final NativeActorBackend backend;
+    private final RobotPopulationService population;
     private final int maxSessions;
     private final int maxHistory;
     private final int maxEvents;
@@ -85,17 +87,18 @@ public final class ActorControlService {
     private AcceptanceObservationService observations;
 
     @Autowired
-    public ActorControlService(NativeActorBackend backend) {
-        this(backend, DEFAULT_MAX_SESSIONS, DEFAULT_MAX_HISTORY, DEFAULT_MAX_EVENTS,
+    public ActorControlService(NativeActorBackend backend, RobotPopulationService population) {
+        this(backend, population, DEFAULT_MAX_SESSIONS, DEFAULT_MAX_HISTORY, DEFAULT_MAX_EVENTS,
                 ActorControlService::newExecutor, Duration.ofSeconds(5));
     }
 
-    ActorControlService(NativeActorBackend backend, int maxSessions, int maxHistory, int maxEvents,
+    ActorControlService(NativeActorBackend backend, RobotPopulationService population, int maxSessions, int maxHistory, int maxEvents,
                         Function<String, ExecutorService> executorFactory, Duration stoppingWait) {
         if (maxSessions < 1 || maxHistory < 1 || maxEvents < 1 || stoppingWait.isNegative()) {
             throw new IllegalArgumentException("invalid actor control limits");
         }
         this.backend = backend;
+        this.population = population;
         this.maxSessions = maxSessions;
         this.maxHistory = maxHistory;
         this.maxEvents = maxEvents;
@@ -208,8 +211,8 @@ public final class ActorControlService {
                 try {
                     requireAccepting();
                     session = new Session("session-" + UUID.randomUUID(), nextGeneration.incrementAndGet(),
-                            owner, request.profileId(), worldGeneration, admittedEpoch, backend, createdExecutor);
-                    operation = operation("OPEN", session);
+                            owner, request.profileId(), worldGeneration, admittedEpoch, backend, createdExecutor, population);
+                    operation = operation("OPEN", session, null);
                 } catch (RuntimeException failure) {
                     if (session != null) closeReleasedLane(session);
                     else createdExecutor.shutdown();
@@ -264,7 +267,7 @@ public final class ActorControlService {
                     }
                     requireCloseHistoryCapacity(session);
                     session.firstCloseReserved = false;
-                    accepted = operation("CLOSE", session);
+                    accepted = operation("CLOSE", session, null);
                     session.state = "CLOSING";
                     session.cleanupScheduled = true;
                     cancelUndispatchedActions(session);
@@ -369,8 +372,7 @@ public final class ActorControlService {
                     if (session.pendingActions >= MAX_PENDING_ACTIONS) {
                         throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_action_capacity_exceeded");
                     }
-                    accepted = operation("ACTION", session);
-                    accepted.action = request.action();
+                    accepted = operation("ACTION", session, request.action());
                     accepted.actionSlotHeld = true;
                     session.pendingActions++;
                     requests.put(key, new RequestRecord(fingerprint, accepted.id));
@@ -490,7 +492,7 @@ public final class ActorControlService {
                                 || requests.size() + reservedFirstCloses() + 1 > maxHistory) {
                             throw error(HttpStatus.TOO_MANY_REQUESTS, "actor_history_capacity_exceeded");
                         }
-                        accepted = operation("SCRIPT", session);
+                        accepted = operation("SCRIPT", session, null);
                         accepted.nativeScriptOperation = script.operation();
                         accepted.scriptRequestId = requestId;
                         requests.put(key, new RequestRecord(fingerprint, accepted.id));
@@ -712,7 +714,7 @@ public final class ActorControlService {
         if (request == null) throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
         validateScriptSession(request.sessionId(), request.expectedGeneration());
         String source = request.source();
-        if (source == null || source.length() > 65536 || request.timeoutMs() < 1 || request.timeoutMs() > 5000
+        if (source == null || source.length() > 65536 || request.timeoutMs() < 1 || request.timeoutMs() > NativeScriptRequest.MAX_TIMEOUT_MS
                 || !validScriptUnicode(source)) {
             throw error(HttpStatus.BAD_REQUEST, "invalid_script_request");
         }
@@ -958,7 +960,8 @@ public final class ActorControlService {
             result.put("enabled_tools", List.of("actor_open", "actor_close", "operation_get", "operation_cancel", "game_act",
                     "script_run"));
             result.put("script_execution", Map.of("language", "javascript", "minimum_timeout_ms", 1,
-                    "maximum_timeout_ms", 5000, "default_timeout_ms", 1000, "maximum_source_characters", 65536,
+                    "maximum_timeout_ms", NativeScriptRequest.MAX_TIMEOUT_MS,
+                    "default_timeout_ms", NativeScriptRequest.DEFAULT_TIMEOUT_MS, "maximum_source_characters", 65536,
                     "maximum_parameters_bytes", 16384, "execution_owner", "character_runtime",
                     "streaming", Map.of("transport", "ndjson", "delivery", "optional_files",
                             "file_arguments", List.of("output_file", "error_file"), "cursor_argument", "since_output",
@@ -1710,18 +1713,19 @@ public final class ActorControlService {
         finish(operation, "CANCELLED", "open_cancelled_before_dispatch");
     }
 
-    private Operation operation(String kind, Session session) {
+    private Operation operation(String kind, Session session, String action) {
         Operation operation = new Operation("op-" + UUID.randomUUID(), kind, session);
+        operation.action = action;
         if (!"CLOSE".equals(kind)) {
             try {
-                operation.work = "OPEN".equals(kind) ? session.execution.acceptOpeningWork() : session.execution.acceptWork();
-                if ("ACTION".equals(kind) || "SCRIPT".equals(kind)) operation.moduleContext = session.execution.moduleContext();
                 if ("OPEN".equals(kind)) {
-                    ExecutionScope.WorkHandle exact = operation.work;
-                    exact.completion().whenComplete((fact, failure) -> rootCompleted(session));
+                    operation.work = session.execution.acceptOpeningWork();
+                    operation.work.completion().whenComplete((fact, failure) -> rootCompleted(session));
+                } else {
+                    operation.moduleContext = session.execution.moduleContext(action);
+                    operation.work = operation.moduleContext.acceptWork();
                 }
-            }
-            catch (ExecutionScope.Invalid failure) {
+            } catch (ExecutionScope.Invalid failure) {
                 WorldEpoch.State current = WorldEpoch.snapshot();
                 if ("scope_not_active".equals(failure.reason()) && (!current.active()
                         || current.token() != session.execution.scope().acceptedEpoch())) {
@@ -2133,13 +2137,13 @@ public final class ActorControlService {
         boolean firstCloseReserved = true;
         int pendingActions;
         Session(String id, long generation, String owner, String profile, String runtimeGeneration, WorldEpoch.Token admittedEpoch,
-                NativeActorBackend backend, ExecutorService executor) {
+                NativeActorBackend backend, ExecutorService executor, RobotPopulationService population) {
             this.id = id;
             this.generation = generation;
             this.owner = owner;
             this.profile = profile;
             this.runtimeGeneration = runtimeGeneration;
-            this.execution = new AcceptanceActorExecution(backend, id, admittedEpoch, executor);
+            this.execution = new AcceptanceActorExecution(backend, id, admittedEpoch, executor, population);
         }
     }
     private static final class Operation {

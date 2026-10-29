@@ -53,9 +53,40 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 模块共享函数
 
-在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。没有业务导出预装时，目录可以为空。
+在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。当前源码的 MCP 专用角色固定按 `RobotPopulation.yaml` 中的 `mcp_test` 类型装配，默认包含导航和人口能力。实际服务的源码身份及目录仍需与本次环境对应。
 
 函数缺失或提供者暂停、停用时正常返回 `UNAVAILABLE`；按实际结果选择后续流程。函数声明、装配与结果契约见[机器人模块参考](../../../docs/robot-runtime/modules.md#共享函数声明与调用)。北斗原有 `cm/qm/pi/rm/em` 方法继续按[源码导航](source-navigation.md)查阅。
+
+## 一次调用完成同场景导航
+
+从实际场景确定目标坐标后，在同一 `invoke` 中提交：
+
+```json
+{
+  "kind": "npc",
+  "operation": "invoke",
+  "context_id": "仍然OPEN的实际context_id",
+  "parameters": {"x": 420, "y": 180},
+  "timeout_ms": 30000,
+  "source": "modules.call('navigation.moveTo', {x: parameters.x, y: parameters.y})"
+}
+```
+
+示意坐标替换为该实际场景内的可达目标。导航函数同步等待抵达或失败及本次收尾；目录外壳 `SUCCEEDED` 之后继续检查 `result.outcome`，只有 `ARRIVED` 表示实际抵达。参数、地形范围和结果见[导航参考](../../../docs/robot-runtime/navigation.md)。脚本默认期限为30秒、最大120秒，导航还有自身期限；执行中断沿同一调用关系传到导航提供者，真实停止及已发生位移分别核对。
+
+## 创建与移除具体环境机器人
+
+已装配人口能力的上下文可执行：
+
+```javascript
+const robot = robots.create("navigation_probe");
+const removed = robots.remove(robot.instance_id);
+({robot, removed});
+```
+
+`robots` 是现有共享目录中 `robots.create/remove` 的薄包装，提供者不可用时保留 `UNAVAILABLE`。`navigation_probe` 使用配置中的模板和出生场景，返回具体 `instance_id` 后按同一引用移除。`mcp_test` 为已有 MCP 角色的装配类型，默认没有新建角色来源。
+
+启动数量只用于每轮世界初始化；脚本增减作用于本轮实际人口，配置文件保持原样，重启重新按配置初始化。完整结构、来源与关闭结果见[人口参考](../../../docs/robot-runtime/population.md)。
 
 ## 实时读取执行输出
 

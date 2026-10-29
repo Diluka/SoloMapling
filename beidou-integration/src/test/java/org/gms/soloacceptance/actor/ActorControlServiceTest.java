@@ -6,6 +6,9 @@ import org.gms.soloacceptance.ObservationException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.http.HttpStatus;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.action.ChatEvidence;
@@ -23,6 +26,7 @@ import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.population.RobotPopulationService;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
 import soloMapling.game.script.nativeenv.NativeScriptSession;
@@ -40,6 +44,8 @@ import java.io.PipedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -58,6 +64,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -65,6 +72,7 @@ import static org.mockito.Mockito.*;
 
 class ActorControlServiceTest {
     private NativeActorBackend backend;
+    private RobotPopulationService population;
     private ChatDispatch chatDispatch;
     private final Map<NativeActionService.ActionHandle, PreparedChat> preparedChats =
             Collections.synchronizedMap(new IdentityHashMap<>());
@@ -78,6 +86,8 @@ class ActorControlServiceTest {
     void prepare() {
         CharacterTestContext.install();
         AcceptanceObservationRuntime.onWorldStarted();
+        population = new RobotPopulationService(new StandardEnvironment());
+        population.onWorldStarted();
         backend = mock(NativeActorBackend.class);
         chatDispatch = mock(ChatDispatch.class);
         when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200L,
@@ -143,6 +153,60 @@ class ActorControlServiceTest {
     }
 
     @Test
+    void mcpRoleUsesTheFixedConfiguredTypeAndBindsItsDeclaredModuleFunctions(@TempDir Path directory) throws Exception {
+        population = populationFromConfig(directory, """
+                types:
+                  mcp_test:
+                    modules:
+                      input_from_file: {type: mcp-control, config: {}}
+                      path_from_file: {type: navigation, config: {}}
+                      population_from_file: {type: robot-population, config: {}}
+                initial_population: {mcp_test: 0}
+                """);
+        ActorControlService service = service(4, 20, 64);
+        var opening = open(service, "configured-mcp-role");
+        executors.getFirst().runNext();
+        var opened = service.get("admin", id(opening), 0, 100);
+        assertEquals("SUCCEEDED", opened.get("status"));
+        assertEquals("input_from_file", ((Map<?, ?>) runtimeView(opened).get("module")).get("instance_id"));
+        var functions = execution(service, opened).moduleContext().help();
+        assertTrue(functions.stream().allMatch(function -> Boolean.TRUE.equals(function.get("available"))));
+        assertEquals(Map.of("navigation.moveTo", "path_from_file", "robots.create", "population_from_file",
+                "robots.remove", "population_from_file"), functions.stream().collect(Collectors.toMap(
+                function -> (String) function.get("name"), function -> (String) function.get("module_id"))));
+    }
+
+    @Test
+    void disabledNavigationKeepsTheMcpRoleUsableAndReportsMovementUnavailable(@TempDir Path directory) throws Exception {
+        population = populationFromConfig(directory, """
+                types:
+                  mcp_test:
+                    modules:
+                      mcp: {type: mcp-control, config: {}}
+                      navigation: {type: navigation, config: {}, enabled: false}
+                initial_population: {mcp_test: 0}
+                """);
+        ActorControlService service = service(4, 20, 64);
+        prepareChat(service);
+        var opening = open(service, "mcp-with-navigation-disabled");
+        executors.getFirst().runNext();
+        var opened = service.get("admin", id(opening), 0, 100);
+        assertEquals("SUCCEEDED", opened.get("status"));
+        assertEquals("UNAVAILABLE", execution(service, opened).moduleContext()
+                .call("navigation.moveTo", Map.of("x", 0, "y", 0)).get("status"));
+
+        ObservationException unavailable = assertThrows(ObservationException.class, () -> service.act("admin",
+                "disabled-navigation-move", basicRequest(opened, "move", Map.of("direction", "RIGHT", "duration_ms", 300))));
+        assertEquals(HttpStatus.CONFLICT, unavailable.status());
+        assertEquals("actor_movement_unavailable", unavailable.reason());
+        verify(backend, never()).prepareMovement(any(), any(), any(), any(), any(), any(), any());
+
+        var chat = service.act("admin", "chat-with-navigation-disabled", chatRequest(opened, "chat remains available"));
+        executors.getFirst().runNext();
+        assertEquals("SUCCEEDED", service.get("admin", id(chat), 0, 100).get("status"));
+    }
+
+    @Test
     void openActionObservationAndCloseProjectOneHostWhileRootAndMcpWorkHaveDifferentScopes() throws Exception {
         ActorControlService service = service(4, 20, 64);
         prepareChat(service);
@@ -160,7 +224,7 @@ class ActorControlServiceTest {
         assertEquals(0, execution.moduleScope().snapshot().outstandingResources());
         Map<?, ?> module = (Map<?, ?>) runtimeView(opened).get("module");
         assertEquals("mcp-control", module.get("type_id"));
-        assertEquals(sessionId(opened), module.get("instance_id"));
+        assertEquals("mcp", module.get("instance_id"));
         assertEquals("ACTIVE", module.get("state"));
 
         ActorActRequest request = chatRequest(opened, "同一个runtime的聊天证据");
@@ -681,7 +745,7 @@ class ActorControlServiceTest {
 
     @Test
     void aRejectedQueueDoesNotLeaveAnOperationForeverQueuedOrCreateNativeState() {
-        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> {
+        ActorControlService service = new ActorControlService(backend, population, 4, 20, 64, profile -> {
             ManualExecutor executor = new ManualExecutor();
             executor.shutdown();
             return executor;
@@ -699,7 +763,7 @@ class ActorControlServiceTest {
     @Test
     void aStopDuringProfileValidationRejectsOpenAsOfflineBeforeAllocatingAnExecutor() {
         AtomicInteger factories = new AtomicInteger();
-        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> {
+        ActorControlService service = new ActorControlService(backend, population, 4, 20, 64, profile -> {
             factories.incrementAndGet();
             return new ManualExecutor();
         }, Duration.ZERO);
@@ -720,7 +784,7 @@ class ActorControlServiceTest {
     @Test
     void aStopInTheExecutorFactoryRejectsOpenAndShutsDownItsPrestartedPrivateWorker() throws Exception {
         AtomicReference<ThreadPoolExecutor> created = new AtomicReference<>();
-        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> {
+        ActorControlService service = new ActorControlService(backend, population, 4, 20, 64, profile -> {
             ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
                     new ArrayBlockingQueue<>(8), Thread.ofVirtual().factory());
             executor.prestartAllCoreThreads();
@@ -753,7 +817,7 @@ class ActorControlServiceTest {
                 return super.getCorePoolSize();
             }
         };
-        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> executor, Duration.ZERO);
+        ActorControlService service = new ActorControlService(backend, population, 4, 20, 64, profile -> executor, Duration.ZERO);
         services.add(service);
         service.onWorldStarted();
         try {
@@ -770,7 +834,7 @@ class ActorControlServiceTest {
     @Test
     void anOpenScopeAdmissionStopAfterConstructionClosesTheUnregisteredSessionAndExecutor() {
         ManualExecutor executor = new ManualExecutor();
-        ActorControlService service = new ActorControlService(backend, 4, 20, 64, profile -> executor, Duration.ZERO);
+        ActorControlService service = new ActorControlService(backend, population, 4, 20, 64, profile -> executor, Duration.ZERO);
         services.add(service);
         service.onWorldStarted();
         AtomicBoolean stopped = new AtomicBoolean();
@@ -1499,7 +1563,7 @@ class ActorControlServiceTest {
                 allTasks.countDown();
             }
         };
-        ActorControlService service = new ActorControlService(backend, 4, 40, 64, profile -> executor, Duration.ZERO);
+        ActorControlService service = new ActorControlService(backend, population, 4, 40, 64, profile -> executor, Duration.ZERO);
         services.add(service);
         service.onWorldStarted();
         prepareChat(service);
@@ -3566,8 +3630,19 @@ class ActorControlServiceTest {
         @Override public Map<String, Object> describe(NativeScriptSession session) { return Map.of("kind", "npc"); }
     }
 
+    private static RobotPopulationService populationFromConfig(Path directory, String yaml) throws IOException {
+        Path config = directory.resolve("RobotPopulation.yaml");
+        Files.writeString(config, yaml);
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("robot-test-config",
+                Map.of("solomapling.robot-population-config", config.toString())));
+        RobotPopulationService population = new RobotPopulationService(environment);
+        population.onWorldStarted();
+        return population;
+    }
+
     private ActorControlService service(int sessionLimit, int historyLimit, int eventLimit) {
-        ActorControlService service = new ActorControlService(backend, sessionLimit, historyLimit, eventLimit,
+        ActorControlService service = new ActorControlService(backend, population, sessionLimit, historyLimit, eventLimit,
                 profile -> {
                     ManualExecutor executor = new ManualExecutor();
                     executors.add(executor);

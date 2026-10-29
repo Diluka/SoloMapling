@@ -124,7 +124,7 @@ final class BotNavigationManager {
                 notifyWarmup(entry, bot);
                 entry.lastNavDecision = "graph-warmup";
                 clearNavigation(entry);
-                Point fallbackTarget = rawTargetPos != null ? new Point(rawTargetPos) : bot.getPosition();
+                Point fallbackTarget = rawTargetPos != null ? new Point(rawTargetPos) : entry.position();
                 return new NavigationDirective(fallbackTarget, false);
             }
             if (BotNavigationGraphProvider.peekGraph(bot.getMap(), entry.movementProfile) == null) {
@@ -141,7 +141,7 @@ final class BotNavigationManager {
                 }
                 entry.navGraph = graph;
             }
-            Point botPos = bot.getPosition();
+            Point botPos = entry.position();
             int startRegionId = resolveCurrentRegionId(graph, entry, bot.getMap(), botPos);
             int targetRegionId = resolveTargetRegionId(graph, entry, bot.getMap(), rawTargetPos);
             Point pathTargetPos = adjustPathTarget(entry, graph, targetRegionId, rawTargetPos);
@@ -229,7 +229,7 @@ final class BotNavigationManager {
             BotNavigationGraphProvider.warmGraphAsync(entry.bot.getMap(), entry.movementProfile);
             return false;
         }
-        Point botPos = entry.bot.getPosition();
+        Point botPos = entry.position();
         int startRegionId = resolveCurrentRegionId(graph, entry, entry.bot.getMap(), botPos);
         BotNavigationGraph.Edge edge = reuseCommittedEdge(graph, entry, startRegionId, entry.navTargetRegionId);
         if (edge == null) {
@@ -443,7 +443,7 @@ final class BotNavigationManager {
         return null;
     }
 
-    private static NavigationDirective tryExecuteEdge(BotNavigationGraph graph,
+    static NavigationDirective tryExecuteEdge(BotNavigationGraph graph,
                                                       BotMovementState entry,
                                                       Character bot,
                                                       Point botPos,
@@ -479,11 +479,11 @@ final class BotNavigationManager {
         // fallback and we withhold only the launch. Route/walk planning keeps using the closest graph
         // (unchanged), and resolveTarget's navGraph-swap replan re-commits a correct jump the instant the
         // exact graph lands. A brief stall at the launch point meanwhile is acceptable and transient.
-        if (BotNavigationGraphProvider.peekGraph(bot.getMap(), entry.movementProfile) != graph) {
+        if (!entry.projectsMotion() && BotNavigationGraphProvider.peekGraph(bot.getMap(), entry.movementProfile) != graph) {
             entry.lastEdgeBlockReason = "jump-graph-warmup";
             return null;
         }
-        Point botPos = bot.getPosition();
+        Point botPos = entry.position();
         if (!canExecuteSelectedJumpFromCurrentPosition(graph, entry, bot.getMap(), botPos, edge)) {
             // Bot may be standing at the top of a rope region whose bottom is the jump entry.
             // Grab the rope and descend — tickClimbing will naturally drive toward edge.startPoint.
@@ -754,7 +754,7 @@ final class BotNavigationManager {
         return new NavigationDirective(rawTargetPos, true);
     }
 
-    private static boolean shouldUsePreciseTarget(BotNavigationGraph graph,
+    static boolean shouldUsePreciseTarget(BotNavigationGraph graph,
                                                   BotMovementState entry,
                                                   Point botPos,
                                                   BotNavigationGraph.Edge edge) {
@@ -775,7 +775,7 @@ final class BotNavigationManager {
         };
     }
 
-    private static Point selectWaypoint(BotMovementState entry, BotNavigationGraph graph, Point botPos, BotNavigationGraph.Edge edge) {
+    static Point selectWaypoint(BotMovementState entry, BotNavigationGraph graph, Point botPos, BotNavigationGraph.Edge edge) {
         return switch (edge.type) {
             case WALK -> new Point(edge.endPoint);
             case CLIMB -> selectClimbWaypoint(graph, entry, botPos, edge);
@@ -1011,6 +1011,14 @@ final class BotNavigationManager {
                                    boolean zeroHeuristic,
                                    boolean instrument,
                                    long routeSeed) {
+        return runSearch(graph, map, startPos, startRegionId, targetRegionId, targetPos,
+                pathfindCaller, zeroHeuristic, instrument, routeSeed, () -> {});
+    }
+
+    static SearchOutcome runSearch(BotNavigationGraph graph, MapleMap map, Point startPos,
+                                   int startRegionId, int targetRegionId, Point targetPos,
+                                   String pathfindCaller, boolean zeroHeuristic, boolean instrument,
+                                   long routeSeed, Runnable checkpoint) {
         long startedAt = System.nanoTime();
         PathfindProfile profile = null;
         // routeSeed != 0 (per-bot) diversifies routes so 100 bots don't stack on one optimal
@@ -1037,6 +1045,7 @@ final class BotNavigationManager {
             open.add(new SearchNode(startState, 0, hValue(graph, startPos, targetPos, zeroHeuristic, randomized, epsilon)));
 
             while (!open.isEmpty()) {
+                checkpoint.run();
                 SearchNode current = open.poll();
                 if (current.cost != gScore.getOrDefault(current.state, Integer.MAX_VALUE)) {
                     staleNodes++;
@@ -1715,7 +1724,7 @@ final class BotNavigationManager {
                                       BotMovementState entry,
                                       MapleMap map,
                                       Point botPos) {
-        if (entry.climbing || (entry.bot != null && CharacterStance.isClimbing(entry.bot.getStance()))) {
+        if (entry.climbing || (entry.bot != null && CharacterStance.isClimbing(entry.stance()))) {
             // Rope climbing state is authoritative. Ground lookup below a rope often resolves to
             // the nearby platform instead of the rope region, which can replan from the wrong side
             // of the rope and bounce between entry/exit climb edges.

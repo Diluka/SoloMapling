@@ -67,7 +67,7 @@ python3 beidou-integration/scripts/build.py --help
 - MCP 外层保留 JWT/admin、owner/profile、外部 request_id、幂等历史与额度；原生账号创建/登录/存档由可信来源适配执行，角色资源与最终关闭归统一宿主根。V2 保留模块/预设/优先级/资源仲裁。公共层只验证调用方已授控制权和原生规则，不搬整个ActorControlService、不决定V2优先级，也不放宽MCP排除环境bot的身份保护。
 - 世界代次、MCPsession、V2runtime/模块代次、执行句柄、包序号、对话版本分别建模；同一内部执行句柄防重复派发，新的合法重复动作允许，不把攻击tick全部登记为外部operation。公共层不依赖acceptance开关、管理JWT或全世界扫描，不强制所有bot保留256包正文历史。
 - #139 当前接入目标是统一角色壳与首个真实 MCP 控制模块：OPEN 前已确定同一 root host/原接纳 epoch/唯一 lane，根来源登记与绑定原生角色，再挂模块；聊天与 actor 观察消费同一宿主，外层不得复制独立执行实例。外部 session、角色宿主与模块代次分别建模，`runtime_generation` 继续投影 WorldEpoch，不能改成 host/module ID。接入、回归及部署边界见 `docs/mcp-acceptance/runtime-module.md`，交付以 Issue 证据为准。
-- 原生 CM/QM 与包缓冲属于根 Client/角色来源。MCP 模块暂停/卸载默认停止输入、撤控制并排空自己的工作，保留现有 CM，不隐式 dispose/登出；显式 npc_cancel 或根 actor_close 沿正常规则处理。完整暂停/恢复、卸载重挂及复杂关闭由 #140 验收，不从 #139 聊天首环推导完成；生产自治、巡逻、刷怪不在本轮。
+- 原生 CM/QM 与包缓冲属于根 Client/角色来源。MCP 模块暂停/卸载默认停止输入、撤控制并排空自己的工作，保留现有 CM，不隐式 dispose/登出；显式 npc_cancel 或根 actor_close 沿正常规则处理。完整暂停/恢复及复杂关闭由 #140 验收，不从 #139 聊天首环推导完成；生产自治、巡逻、刷怪不在本轮。
 - 共享上下文位于 `soloMapling.game.context`：`WorldEpoch` 是唯一世界时钟，旧验收runtime仅投影委托；`CharacterRef` 固定角色/Client/World/Channel与捕获epoch，`SceneRef` 另外固定Map及成员/地图EIM。重验不能刷新旧epoch或按同ID替代对象；正常跨图不自动使角色绑定失效，场景资格另核。当前角色观察定点登记MCP不透明scene_ref，不借全目录刷新作为控制资格。
 - 公共检查只核对象结构，不核普通登录或授予控制权。MCP薄适配保留账号/lease/GM0/普通登录/排bot，Bot薄适配核精确BotRegistry对象与BotClient；V1模板通过非频道加载，Character.loggedIn可为false，不能为复用而改其存档/登录标记。getter故障是读取不可用，不能把活会话标LOST；角色资格和场景冲突分别处理。
 - #118 公共执行位于 `soloMapling.game.execution`：`ExecutionScope` 记录固定 epoch/runtime/module 身份与实际工作，`ScopeResources` 记录精确资源及一次握手，`CharacterCommandLane` 串行执行单个实际角色的短命令。MCP 控制模块经统一 `CharacterRuntime` 消费这些机制；Session/helper 不再自建 scope、Grant、角色资源或第二队列，外部额度只投影宿主原工作的真实结算；公共容量由调用方配置，不硬编码 MCP 7/8/256 策略。Scope 的普通工作与清理工作分别使用显式有界额度；允许持有资源时至少保留一个清理工作名额，不能只预留 lane 物理槽而让工作账本阻塞清理。
@@ -103,7 +103,14 @@ python3 beidou-integration/scripts/build.py --help
 - 模块组合和配置属于源码中的装配方案，通过相应测试和验收。机器人正常工作周期内模块组合固定，变化的是已有模块的任务、状态和能力可用性。主控选择角色活动目标，能力模块完成既定任务及已启用服务的事件；具体职责和调用关系由装配方案确定。
 - 装配登记实例和导出名称，再创建及初始化模块。暂停保留实例、配置和导出声明，卸载真实完成后撤下导出。停止或卸载清理 hook 失败时保留 `FAILED`、失败原因和未完成的清理责任，根关闭继续等待实际收尾。
 - `ModuleFunction` 的说明、参数校验和精确实例绑定同源；调用按当前有效提供者及代次解析，工作归提供者 scope。Java `ModuleContext.help()` / `call()` 与北斗原生引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录；缺失、停用或未激活正常返回 `UNAVAILABLE`，参数及执行异常沿现有脚本错误语义报告。
-- 脚本仍按原 `kind/operation` 进入真实北斗环境，复用 `cm/qm/pi/rm/em` 各自对象及 `executeCommand`。MCP 负责协议桥接；共享能力由实际装配的模块声明，本轮没有预装业务模块或游戏函数。源码测试、CI、隔离与实际部署证据按本轮交付记录分别确认，不由候选实现推导已上线。
+- 脚本仍按原 `kind/operation` 进入真实北斗环境，复用 `cm/qm/pi/rm/em` 各自对象及 `executeCommand`。MCP 负责协议桥接，共享能力由实际装配的模块声明。源码测试、CI、隔离与实际部署证据按本轮交付记录分别确认，不由候选实现推导已上线。
+
+## #263 类型配置与 #122 导航接入
+
+- 当前源码通过 `solomapling.robot-population-config` 读取 `RobotPopulation.yaml`；未指定路径时读取随程序分发的默认文件。`types` 定义模块组合和参数，加载时转换为装配计划；`initial_population` 仅在每轮世界启动时创建一次环境人口。运行期通过 `robots.create/remove` 增减完整实例，配置文件保持原样，实例内部组合保持固定。
+- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认显式装配 `mcp-control/navigation/robot-population`；后续新增非自主能力模块时同步这份类型配置和验收，自主控制模块放入对应业务类型。`mcp_test` 默认没有新建来源，`navigation_probe` 沿 `fmbot` 环境来源创建；默认初始数量均0，现有一代人口计划继续保留。
+- `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
+- 脚本默认期限30秒、最大120秒，调用者取消持续关联到提供者work。导航自身默认30秒、8px容差、3秒无进展；真实抵达、失败、已发生位移和实际停止分别核验。源码和部署结果以#122/#263证据为准，参考 `docs/robot-runtime/population.md`、`navigation.md` 及脚本调试技能。
 
 ## Git 与上游
 

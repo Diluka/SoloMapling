@@ -1,0 +1,28 @@
+types:
+  mcp_test:
+    modules:
+      mcp:
+        type: mcp-control
+        config: {}
+      navigation:
+        type: navigation
+        config:
+          arrival_tolerance_px: 8
+          timeout_ms: 30000
+          stalled_timeout_ms: 3000
+      population:
+        type: robot-population
+        config: {}
+
+  navigation_probe:
+    character:
+      template: fmbot
+      spawn: {world: 0, channel: 1, map: 100000000}
+    modules:
+      navigation:
+        type: navigation
+        config: {}
+
+initial_population:
+  mcp_test: 0
+  navigation_probe: 0

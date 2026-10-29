@@ -1,7 +1,6 @@
 package org.gms.soloacceptance.actor;
 
 import soloMapling.game.action.NativeActionResult;
-import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
@@ -21,11 +20,10 @@ import java.util.function.Consumer;
 public final class McpControlModule implements RuntimeModule {
     public static final ModuleDefinition<Map<String, Object>, McpControlModule> DEFINITION =
             new ModuleDefinition<>("mcp-control",
-                    Set.of("chat", "interaction", "inventory", "movement", "combat"),
+                    Set.of("chat", "interaction", "inventory", "combat"),
                     new ExecutionScope.Limits(16, 2, 16, 2), config -> new McpControlModule(), List.of());
 
     private volatile CharacterRuntime.ModuleContext context;
-    private final NativeMovementActions movement = new NativeMovementActions();
 
     private McpControlModule() { }
 
@@ -47,7 +45,6 @@ public final class McpControlModule implements RuntimeModule {
     }
 
     public ExecutionScope.WorkHandle acceptWork() { return context().acceptWork(); }
-    NativeMovementActions movement() { return movement; }
 
     public NativeScriptExecution runNativeScript(ExecutionScope.WorkHandle work, NativeScriptRequest request,
                                                   NativeScriptAdapter adapter) {

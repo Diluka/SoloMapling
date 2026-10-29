@@ -198,6 +198,31 @@ class BotMovementState {
     int lastBroadcastFh = 0;
     int lastGroundFhId = 0;
 
+    // Managed navigation predicts frames; only its runtime lane dispatches native movement.
+    private Point projectedPosition;
+    private int projectedStance;
+
+    void projectMotion() {
+        projectedPosition = new Point(bot.getPosition());
+        projectedStance = bot.getStance();
+    }
+
+    boolean projectsMotion() { return projectedPosition != null; }
+
+    Point position() { return projectsMotion() ? new Point(projectedPosition) : bot.getPosition(); }
+
+    void position(Point value) {
+        if (projectsMotion()) projectedPosition = new Point(value);
+        else bot.setPosition(value);
+    }
+
+    int stance() { return projectsMotion() ? projectedStance : bot.getStance(); }
+
+    void stance(int value) {
+        if (projectsMotion()) projectedStance = value;
+        else bot.setStance(value);
+    }
+
     BotMovementState(Character bot, Character owner) {
         this.bot = bot;
         this.owner = owner;

@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import __version__
 from .bridge import (
     BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT, MAX_COMMAND_CHARACTERS,
-    SCRIPT_MAX_SOURCE_UNITS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
+    SCRIPT_MAX_SOURCE_UNITS, SCRIPT_DEFAULT_TIMEOUT_MS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
     validate_command_request, validate_script_run,
 )
 
@@ -311,7 +311,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         operation: Literal["start", "invoke", "close"],
         source: Annotated[str, Field(max_length=SCRIPT_MAX_SOURCE_UNITS, strict=True)] = "",
         parameters: dict[str, Any] | None = None,
-        timeout_ms: Annotated[int, Field(ge=1, le=SCRIPT_MAX_TIMEOUT_MS, strict=True)] = 1000,
+        timeout_ms: Annotated[int, Field(ge=1, le=SCRIPT_MAX_TIMEOUT_MS, strict=True)] = SCRIPT_DEFAULT_TIMEOUT_MS,
         context_id: Identifier | None = None,
         options: dict[str, Any] = Field(default_factory=dict),
         entry: NativeScriptEntry | None = None,

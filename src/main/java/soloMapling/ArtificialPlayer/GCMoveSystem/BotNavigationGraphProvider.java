@@ -413,13 +413,21 @@ final class BotNavigationGraphProvider {
         if (map == null) {
             return null;
         }
+        return graphLoad(map, movementProfile, false).join();
+    }
+
+    /** Shared world-owned graph load; a managed caller can stop waiting without cancelling other users. */
+    static CompletableFuture<BotNavigationGraph> requestGraph(MapleMap map, BotMovementProfile movementProfile) {
+        return graphLoad(map, movementProfile, true);
+    }
+
+    private static CompletableFuture<BotNavigationGraph> graphLoad(MapleMap map,
+                                                                  BotMovementProfile movementProfile, boolean async) {
         movementProfile = canonicalProfile(map, movementProfile);
         GraphCacheKey key = GraphCacheKey.from(map.getId(), movementProfile);
         BotNavigationGraph cached = GRAPHS.get(key);
-        if (cached != null) {
-            return cached;
-        }
-        return getOrStartGraphLoad(map, movementProfile, key, false).join();
+        return cached != null ? CompletableFuture.completedFuture(cached)
+                : getOrStartGraphLoad(map, movementProfile, key, async);
     }
 
     /* Returns the cached graph without triggering a build. */

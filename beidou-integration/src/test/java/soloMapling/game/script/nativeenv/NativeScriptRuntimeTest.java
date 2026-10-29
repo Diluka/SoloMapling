@@ -45,6 +45,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -142,12 +144,15 @@ class NativeScriptRuntimeTest {
         NativeScriptResult unavailable = fixture.invoke(opened.contextId(), null, List.of(), """
                 ({help: modules.help(),
                   paused: modules.call('notes.record', {text:'不应记录'}),
-                  missing: modules.call('notes.missing', {})})
+                  missing: modules.call('notes.missing', {}),
+                  robots: robots.create('unconfigured.type')})
                 """);
         assertOpen(unavailable);
         Map<?, ?> availability = (Map<?, ?>) unavailable.result();
         assertEquals("UNAVAILABLE", ((Map<?, ?>) availability.get("paused")).get("status"));
         assertEquals("UNAVAILABLE", ((Map<?, ?>) availability.get("missing")).get("status"));
+        assertEquals(Map.of("status", "UNAVAILABLE", "function", "robots.create", "reason", "function_missing"),
+                availability.get("robots"));
         assertEquals(false, ((Map<?, ?>) ((List<?>) availability.get("help")).getFirst()).get("available"));
         assertSame(engine, fixture.adapter.session.engine());
         assertEquals(2, provider.instance().count);
@@ -335,6 +340,50 @@ class NativeScriptRuntimeTest {
         assertEquals(ScriptResult.Status.CANCELLED, result.status());
         assertClosed(result);
         fixture.assertDrained();
+    }
+
+    @Test void moduleCallsStopWithTheirCallingScriptAndSettleAfterTheProviderActuallyLeaves() throws Exception {
+        for (ScriptResult.Status stopping : List.of(ScriptResult.Status.CANCELLED, ScriptResult.Status.TIMED_OUT)) {
+            Fixture fixture = fixture();
+            NativeScriptResult opened = fixture.start("0", Map.of());
+            assertOpen(opened);
+            var entered = new CountDownLatch(1);
+            var stopped = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var providerWork = new AtomicReference<ExecutionScope.WorkHandle>();
+            var function = new ModuleFunction<RuntimeModule>("test.await_stop", "Wait for this module call to stop",
+                    List.of(), "Returns after its owned cleanup exits", (instance, context, work, arguments) -> {
+                        providerWork.set(work);
+                        entered.countDown();
+                        while (!work.cancelRequested()) LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+                        stopped.countDown();
+                        boolean released = false;
+                        while (!released) {
+                            try { released = release.await(50, TimeUnit.MILLISECONDS); }
+                            catch (InterruptedException ignored) { /* Model native cleanup that still owns its body. */ }
+                        }
+                        return null;
+                    });
+            var definition = new ModuleDefinition<Void, RuntimeModule>("waiting-provider", Set.of(),
+                    new ExecutionScope.Limits(4, 1, 4, 1), config -> new RuntimeModule() {}, List.of(function));
+            var provider = fixture.runtime.mount(definition, new ModuleSelection<>("provider", null, true));
+            NativeScriptExecution execution = fixture.call(request("invoke", opened.contextId(), Map.of(), null, List.of(),
+                    "modules.call('test.await_stop', {})", Map.of(), stopping == ScriptResult.Status.TIMED_OUT ? 500 : 5000));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                if (stopping == ScriptResult.Status.CANCELLED) execution.cancel();
+                assertTrue(stopped.await(5, TimeUnit.SECONDS));
+                assertTrue(providerWork.get().snapshot().cancelRequested());
+                assertFalse(providerWork.get().isSettled());
+                assertFalse(execution.completion().toCompletableFuture().isDone());
+            } finally { release.countDown(); }
+            NativeScriptResult result = await(execution);
+            assertEquals(stopping, result.status());
+            assertClosed(result);
+            assertTrue(providerWork.get().isSettled());
+            assertEquals(0, fixture.runtime.context(provider.reference()).scope().snapshot().acceptedWork());
+            fixture.assertDrained();
+        }
     }
 
     @Test void externalNativeCallbacksReuseTheSameEngineAndOriginalModuleScope() throws Exception {

@@ -71,7 +71,8 @@ public class BotGeneration {
         }
     }
 
-    private static Character loadTemplate() {
+    /** Load the existing read-only fmbot source for either generation's role adapter. */
+    public static Character loadTemplate() {
         Client client = new BotClient(SoloMaplingConstants.GameConstants.WORLD_SCANIA,
                 SoloMaplingConstants.GameConstants.CHANNEL_1);
         Character character = Character.loadCharFromDB(templateCharacterId(), client, false);

@@ -29,6 +29,10 @@ import java.util.function.Consumer;
 /** One exact native role, one carrier lane, and preconfigured compiled modules. Internal ABI v0.1. */
 public final class CharacterRuntime {
     private static final Map<Object, CharacterRuntime> ROLE_OWNERS = new IdentityHashMap<>();
+
+    public static boolean ownsNativeRole(org.gms.client.Character character) {
+        synchronized (ROLE_OWNERS) { return ROLE_OWNERS.containsKey(character); }
+    }
     private final Object monitor = new Object();
     private final Object generation = new Object();
     private final String id = "runtime-" + UUID.randomUUID();
@@ -383,14 +387,19 @@ public final class CharacterRuntime {
         @Override public List<Map<String, Object>> help() {
             synchronized (monitor) { requireActive(this, null); return moduleFunctionHelp(); }
         }
-        @Override public Map<String, Object> call(String name, Map<String, Object> arguments) {
-            return invokeModuleFunction(this, name, arguments);
+        @Override public Map<String, Object> call(String name, Map<String, Object> arguments,
+                                                 ExecutionScope.WorkHandle callerWork) {
+            return invokeModuleFunction(this, name, arguments, callerWork);
         }
 
         public ExecutionScope.WorkHandle acceptWork() {
+            return acceptWork(null, null);
+        }
+
+        private ExecutionScope.WorkHandle acceptWork(ExecutionScope callerScope, ExecutionScope.WorkHandle callerWork) {
             synchronized (monitor) {
                 requireActive(this, null);
-                ExecutionScope.WorkHandle work = scope.acceptWork();
+                ExecutionScope.WorkHandle work = scope.acceptWork(callerScope, callerWork);
                 event(RuntimeEvents.Kind.COMMAND_ACCEPTED, entry(ref), work.snapshot().id(), null, null);
                 work.completion().whenComplete((result, failure) -> {
                     events.append(RuntimeEvents.Kind.COMMAND_SETTLED, ref.instanceId, ref.moduleGeneration,
@@ -746,7 +755,8 @@ public final class CharacterRuntime {
         return null;
     }
 
-    private Map<String, Object> invokeModuleFunction(ModuleContext caller, String name, Map<String, Object> arguments) {
+    private Map<String, Object> invokeModuleFunction(ModuleContext caller, String name, Map<String, Object> arguments,
+                                                      ExecutionScope.WorkHandle callerWork) {
         Objects.requireNonNull(name); Objects.requireNonNull(arguments);
         ModuleEntry provider;
         ModuleContext context;
@@ -761,7 +771,7 @@ public final class CharacterRuntime {
             function = provider.functions.get(name);
             function.validate(arguments);
             context = provider.context;
-            work = context.acceptWork();
+            work = context.acceptWork(caller.scope, callerWork);
         }
         Object[] result = new Object[1];
         boolean[] invoked = new boolean[1];

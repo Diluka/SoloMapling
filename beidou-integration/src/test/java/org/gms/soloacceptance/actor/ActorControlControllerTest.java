@@ -8,6 +8,7 @@ import org.gms.model.dto.SubmitBody;
 import org.gms.soloacceptance.ObservationException;
 import org.gms.soloacceptance.AcceptanceAccess;
 import jakarta.servlet.DispatcherType;
+import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +32,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import soloMapling.beidou.CharacterTestContext;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -468,20 +470,32 @@ class ActorControlControllerTest {
     }
 
     @Test
-    void scriptEndpointsKeepAdminOwnerRequestIdsAndOriginalCancellationFingerprint() {
+    void scriptEndpointsKeepAdminOwnerRequestIdsAndOriginalCancellationFingerprint() throws Exception {
         ActorControlService service = mock(ActorControlService.class);
         ActorControlController controller = new ActorControlController(service);
         authenticate("script-admin", "ROLE_ADMIN");
         var script = new ActorScriptRequest("session", 7L, "npc", "start", null, Map.of("npc_id", 1032110),
-                null, List.of(), "cm.getPlayer().getName()", Map.of(), 1000L);
+                null, List.of(), "cm.getPlayer().getName()", Map.of(), 120000L);
         when(service.scriptRun("script-admin", "script-id", script)).thenReturn(Map.of("kind", "SCRIPT", "status", "SUCCEEDED"));
         assertEquals("SUCCEEDED", controller.scriptRun(new SubmitBody<>("script-id", script)).getData().get("status"));
-        StreamingResponseBody stream = output -> { };
+        StreamingResponseBody stream = output -> output.write("{\"type\":\"started\"}\n".getBytes(StandardCharsets.UTF_8));
         when(service.scriptStream("script-admin", "script-id", script, 3)).thenReturn(stream);
-        var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3,
-                mock(HttpServletRequest.class), mock(HttpServletResponse.class));
-        assertSame(stream, streamed.getBody());
-        assertEquals("application/x-ndjson", streamed.getHeaders().getContentType().toString());
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ServletOutputStream responseOutput = mock(ServletOutputStream.class);
+        when(response.getOutputStream()).thenReturn(responseOutput);
+        doAnswer(write -> {
+            output.write(write.getArgument(0, byte[].class));
+            return null;
+        }).when(responseOutput).write(any(byte[].class));
+        var streamed = controller.scriptStream(new SubmitBody<>("script-id", script), 3, request, response);
+        assertEquals(125000L, streamed.getTimeout());
+        assertNull(streamed.getCallable().call());
+        assertEquals("{\"type\":\"started\"}\n", output.toString(StandardCharsets.UTF_8));
+        verify(response).setContentType("application/x-ndjson");
+        verify(response).setHeader("Cache-Control", "no-store");
+        verify(response).setHeader("X-Accel-Buffering", "no");
         var cancel = new ActorScriptCancelRequest("session", 7L, "script-id", script.kind(), script.operation(),
                 script.contextId(), script.options(), script.entry(), script.args(), script.source(), script.parameters(), script.timeoutMs());
         when(service.scriptCancel("script-admin", "cancel-id", cancel)).thenReturn(Map.of("kind", "SCRIPT", "status", "CANCELLED"));
@@ -543,7 +557,7 @@ class ActorControlControllerTest {
                  "args":[1,0,{"selection":2},null,"中文"]}
                 """, ActorScriptRequest.class);
         assertEquals("", request.source());
-        assertEquals(1000L, request.timeoutMs());
+        assertEquals(30_000L, request.timeoutMs());
         assertEquals(Map.of(), request.parameters());
         assertEquals("npc", request.kind());
         assertEquals("invoke", request.operation());

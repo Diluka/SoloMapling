@@ -164,10 +164,10 @@ public final class NativeScriptSession {
             if (arguments.length != 2 || !arguments[0].isString()) {
                 throw new IllegalArgumentException("modules_call_requires_name_and_arguments");
             }
-            requireActiveInvocation("module_function_context_inactive");
+            NativeScriptExecution call = requireActiveInvocation("module_function_context_inactive");
             Object detached = ScriptValues.detachedJson(arguments[1]);
             if (!(detached instanceof Map<?, ?>)) throw new IllegalArgumentException("modules_call_requires_object_arguments");
-            return ScriptValues.json(capabilities.call(arguments[0].asString(), (Map<String, Object>) detached));
+            return ScriptValues.json(capabilities.call(arguments[0].asString(), (Map<String, Object>) detached, call.work()));
         });
         try {
             engine().eval("""
@@ -175,6 +175,16 @@ public final class NativeScriptSession {
                         globalThis.modules = Object.freeze({
                             help: function () { return parse(help(...arguments)); },
                             call: function (name, args) { return parse(call(...arguments)); }
+                        });
+                        globalThis.robots = Object.freeze({
+                            create: function (typeId) {
+                                const response = globalThis.modules.call('robots.create', {type_id: typeId});
+                                return response.status === 'SUCCEEDED' ? response.result : response;
+                            },
+                            remove: function (instanceId) {
+                                const response = globalThis.modules.call('robots.remove', {instance_id: instanceId});
+                                return response.status === 'SUCCEEDED' ? response.result : response;
+                            }
                         });
                     })(__soloModuleHelpBridge, __soloModuleCallBridge, JSON.parse);
                     delete globalThis.__soloModuleHelpBridge;
@@ -189,12 +199,13 @@ public final class NativeScriptSession {
         }
     }
 
-    private void requireActiveInvocation(String inactiveReason) {
+    private NativeScriptExecution requireActiveInvocation(String inactiveReason) {
         NativeScriptExecution call = activeCall;
         if (CURRENT.get() != this || call == null || closing.get() || closed || forced || call.shouldStop()) {
             throw new IllegalStateException(inactiveReason);
         }
         validate();
+        return call;
     }
 
     void bindParameters(Map<String, Object> parameters) {

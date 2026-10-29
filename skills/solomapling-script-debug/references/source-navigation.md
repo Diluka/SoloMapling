@@ -42,5 +42,7 @@ javap -public -classpath beidou-integration/target/woven-classes org.gms.client.
 - 引擎、参数和命令绑定：读 [NativeScriptSession](../../../beidou-integration/src/main/java/soloMapling/game/script/nativeenv/NativeScriptSession.java)。
 - 原文件首次求值和注入：读 [NativeScriptLoader](../../../beidou-integration/src/main/java/org/gms/soloscripting/NativeScriptLoader.java) 及 [NativeScriptEnvironmentAspect](../../../beidou-integration/src/main/aspect/soloMapling/beidou/NativeScriptEnvironmentAspect.aj)。
 - 调度归属与 owned EIM 限制：读 [NativeScriptSchedulerAspect](../../../beidou-integration/src/main/java/org/gms/soloscripting/NativeScriptSchedulerAspect.java)。当前受管 EM 的实例创建入口明确拒绝；普通频道事件有自己的所有权。
+- 类型装配与初始人口：读 [RobotPopulationConfig](../../../beidou-integration/src/main/java/soloMapling/game/population/RobotPopulationConfig.java)、[RobotPopulationService](../../../beidou-integration/src/main/java/soloMapling/game/population/RobotPopulationService.java) 和[默认类型配置](../../../beidou-integration/src/main/resources/soloMapling/game/population/RobotPopulation.yaml)。现有 MCP 角色固定引用 `mcp_test` 类型。
+- 模块共享导出：读 [ModuleFunction](../../../beidou-integration/src/main/java/soloMapling/game/runtime/ModuleFunction.java) 及对应模块的声明。[NavigationModule](../../../beidou-integration/src/main/java/soloMapling/game/navigation/NavigationModule.java) 声明目标导航，[RobotPopulationModule](../../../beidou-integration/src/main/java/soloMapling/game/population/RobotPopulationModule.java) 声明完整实例的创建和移除；JS 的 `robots` 简写仍从 `NativeScriptSession` 绑定处查阅。
 
 查阅完成后保留所依据的类、方法、原脚本和源码身份即可。需要反复查看同一组签名时按需提取，不维护另一份手写方法表。

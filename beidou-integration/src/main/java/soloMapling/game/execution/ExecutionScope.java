@@ -100,20 +100,25 @@ public final class ExecutionScope {
     public void requireActive() { synchronized (monitor) { requireResourceAdmissionLocked(); } }
 
     public WorkHandle acceptWork() {
+        return acceptWork(null, null);
+    }
+
+    /** The enclosing call supplies cancellation; this scope still owns all actual work and settlement. */
+    public WorkHandle acceptWork(ExecutionScope callerScope, WorkHandle callerWork) {
         synchronized (monitor) {
             requireResourceAdmissionLocked();
-            return newWorkLocked(null);
+            return newWorkLocked(null, callerScope, callerWork);
         }
     }
 
     WorkHandle acceptCleanupLocked(ScopeResources.DrainPermit permit) {
         if (permit.ownerScope() != this || !permit.validLocked()) throw new Invalid("drain_not_allowed");
-        return newWorkLocked(permit);
+        return newWorkLocked(permit, null, null);
     }
 
-    private WorkHandle newWorkLocked(ScopeResources.DrainPermit permit) {
+    private WorkHandle newWorkLocked(ScopeResources.DrainPermit permit, ExecutionScope callerScope, WorkHandle callerWork) {
         requireWorkCapacityLocked(permit != null);
-        WorkHandle handle = new WorkHandle(this, ++nextWork, permit);
+        WorkHandle handle = new WorkHandle(this, ++nextWork, permit, callerScope, callerWork);
         work.put(handle.id, handle);
         return handle;
     }
@@ -142,7 +147,7 @@ public final class ExecutionScope {
             if (handle.bodyAttempted) return false;
             handle.bodyAttempted = true;
             if (handle.carrierClaimed) handle.queueDeparted = true;
-            enter = handle.cleanupPermit == null ? activeLocked() && !handle.cancelRequested
+            enter = handle.cleanupPermit == null ? activeLocked() && !handle.cancelRequested()
                     : handle.cleanupPermit.validLocked();
             if (!enter) {
                 handle.skipped = true;
@@ -174,7 +179,7 @@ public final class ExecutionScope {
         Objects.requireNonNull(apply);
         synchronized (monitor) {
             requireOwnLocked(handle);
-            if (!activeLocked() || handle.cleanupPermit != null || handle.cancelRequested
+            if (!activeLocked() || handle.cleanupPermit != null || handle.cancelRequested()
                     || !handle.bodyAttempted || handle.skipped || handle.resultClaimed) return false;
             if (!work.containsKey(handle.id)) requireWorkCapacityLocked(false);
             handle.resultClaimed = true;
@@ -345,6 +350,8 @@ public final class ExecutionScope {
         private final ExecutionScope scope;
         private final long id;
         private final ScopeResources.DrainPermit cleanupPermit;
+        private final ExecutionScope callerScope;
+        private final WorkHandle callerWork;
         private final CompletableFuture<WorkSnapshot> factual = new CompletableFuture<>();
         private boolean cancelRequested;
         private boolean rejected;
@@ -361,12 +368,17 @@ public final class ExecutionScope {
         private int publicationBodies;
         private boolean factualSignalled;
 
-        private WorkHandle(ExecutionScope scope, long id, ScopeResources.DrainPermit permit) {
+        private WorkHandle(ExecutionScope scope, long id, ScopeResources.DrainPermit permit,
+                           ExecutionScope callerScope, WorkHandle callerWork) {
             this.scope = scope; this.id = id; cleanupPermit = permit;
+            this.callerScope = callerScope; this.callerWork = callerWork;
         }
         public ExecutionScope scope() { return scope; }
         public WorldEpoch.Token acceptedEpoch() { return scope.acceptedEpoch; }
-        public boolean cancelRequested() { synchronized (scope.monitor) { return cancelRequested; } }
+        public boolean cancelRequested() {
+            synchronized (scope.monitor) { if (cancelRequested) return true; }
+            return callerScope != null && !callerScope.isActive() || callerWork != null && callerWork.cancelRequested();
+        }
         public boolean isCleanup() { return cleanupPermit != null; }
         public CompletionStage<WorkSnapshot> completion() { return factual.minimalCompletionStage(); }
         public WorkSnapshot snapshot() { synchronized (scope.monitor) { return snapshotLocked(); } }
@@ -426,7 +438,7 @@ public final class ExecutionScope {
         }
         private WorkSnapshot snapshotLocked() {
             return new WorkSnapshot(id, cleanupPermit == null ? WorkKind.NORMAL : WorkKind.CLEANUP,
-                    cancelRequested, rejected, queueDeparted, bodyState, skipped, carrierClaimed, carrierSettled,
+                    cancelRequested(), rejected, queueDeparted, bodyState, skipped, carrierClaimed, carrierSettled,
                     settlementFailed, resultClaimed, resultApplied, publicationBodies, settledLocked());
         }
     }

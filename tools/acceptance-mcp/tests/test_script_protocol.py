@@ -43,8 +43,9 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"session_id", "expected_generation", "request_id", "kind", "operation"}, set(schema["required"]))
         self.assertEqual("", schema["properties"]["source"]["default"])
         self.assertNotIn("environment", schema["properties"])
-        self.assertEqual((1, 5000), (schema["properties"]["timeout_ms"]["minimum"],
+        self.assertEqual((1, 120000), (schema["properties"]["timeout_ms"]["minimum"],
                                     schema["properties"]["timeout_ms"]["maximum"]))
+        self.assertEqual(30000, schema["properties"]["timeout_ms"]["default"])
         self.assertEqual([], self.stub.requests)
 
     async def test_real_stdio_native_output_preserves_backend_result(self) -> None:
@@ -179,7 +180,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             {**SCRIPT_ARGS, "source": "x" * 65537},
             {**SCRIPT_ARGS, "timeout_ms": True},
             {**SCRIPT_ARGS, "timeout_ms": 0},
-            {**SCRIPT_ARGS, "timeout_ms": 5001},
+            {**SCRIPT_ARGS, "timeout_ms": 120001},
             {**SCRIPT_ARGS, "timeout_ms": "1000"},
             {**SCRIPT_ARGS, "parameters": [private]},
             {**SCRIPT_ARGS, "options": None},

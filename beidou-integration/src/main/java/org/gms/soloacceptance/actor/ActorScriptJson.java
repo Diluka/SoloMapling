@@ -3,6 +3,7 @@ package org.gms.soloacceptance.actor;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonNode;
+import soloMapling.game.script.nativeenv.NativeScriptRequest;
 
 import java.io.IOException;
 import java.util.List;
@@ -59,7 +60,7 @@ final class ActorScriptJson {
     }
 
     static Long timeout(JsonNode node, DeserializationContext context) throws IOException {
-        return node.has("timeout_ms") ? requiredLong(node, "timeout_ms", context) : 1000L;
+        return node.has("timeout_ms") ? requiredLong(node, "timeout_ms", context) : NativeScriptRequest.DEFAULT_TIMEOUT_MS;
     }
 
     @SuppressWarnings("unchecked")
