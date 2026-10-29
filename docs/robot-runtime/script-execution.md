@@ -21,6 +21,8 @@
 | `parameters` | JSON 对象，默认 `{}`，以同名对象供本次脚本读取 |
 | `timeout_ms` | 整数 1～5,000，默认 1,000；覆盖本次环境准备、执行和结果转换 |
 | `since_output` | 输出游标，默认 0；同一原请求恢复时填写已收到的最后输出序号 |
+| `output_file` | 可选，本地 NDJSON 文件路径；接收 `started/output/gap`，逐条追加并刷新 |
+| `error_file` | 可选，本地 NDJSON 文件路径；提供时单独接收 stderr 的 `output` 事件 |
 
 `options`、`args`、`parameters` 的输入预算由服务端统一裁决：按服务端规范化 JSON 的 UTF-8 编码计算，三根总量最多 16,384 字节，每个根的深度最多 16。客户端保留 JSON 类型、有限数值、有效 Unicode、节点数和深度检查，不再用自身重编码的字节数作第二次预算裁决。不同编码器可能将同一数值写为 `1e+20` 或 `1.0E20`，客户端编码长度不能用来推定服务端是否接受；超出服务端预算的请求明确拒绝，不进入原生执行。
 
@@ -32,29 +34,36 @@
 
 ## 输出和结果
 
-`script_run` 在执行过程中通过 MCP progress 通知发送增量输出，通知的 `message` 是 JSON 文本。官方 SDK 调用方传入 `progress_callback` 接收通知；客户端是否展示进度按实际宿主验收记录判断。后端使用 `POST /solo/acceptance/v1/script/stream?since_output=0` 的 NDJSON 响应，沿用原脚本请求信封与幂等记录。
+`script_run` 按需将执行过程写入文件。只提供 `output_file` 时，该文件按收到的顺序合并 `started/output/gap` 事件和 stdout/stderr；同时提供 `error_file` 时，stderr 的 `output` 事件写入 `error_file`，其余事件写入 `output_file`。只提供 `error_file` 时记录 stderr 事件。每个事件以一行 UTF-8 JSON 追加写入并立即刷新，脚本执行期间即可读取文件。
+
+路径属于 MCP 进程所在机器，相对路径以该进程的工作目录为基准，建议使用绝对路径。父目录须已存在；文件打开失败时先返回错误，再由调用方处理路径。文件路径属于客户端输出配置，不传给游戏后端，也不参与脚本执行身份；恢复原请求时可以选择新的输出文件。
+
+提供文件时，客户端使用 `POST /solo/acceptance/v1/script/stream?since_output=0` 的 NDJSON 响应，沿用原脚本请求信封与幂等记录。未提供文件时使用同步 `/script/run`，只返回最终结果。两种调用均不发送 MCP progress 通知，最终工具响应保持原执行结果。
 
 | `type` | 内容 |
 |---|---|
 | `started` | 本次 `request_id` 和原 `operation_id` |
 | `output` | `seq`、`channel`（stdout/stderr）、增量 `text` 和 `output_truncated`，以及请求与操作 ID |
 | `gap` | 有界窗口已失去部分输出时的 `oldest_cursor/latest_cursor` |
-| `result` | 最终 `operation`；MCP 工具响应返回这份原结果 |
+| `result` | HTTP 流中的最终 `operation`；MCP 工具响应返回这份原结果，文件只保存前述过程事件 |
 
 输出序号在同一 operation 内递增，两个通道共用顺序。`since_output` 与生命周期的 `since_cursor`、角色包的 `since_cursor` 分别使用。每个 operation 保留最近 256 个输出事件；通过 `operation_get(operation_id, since_output=…)` 的 `script_output` 读取已保留输出及 `next_cursor/oldest_cursor/latest_cursor/cursor_expired/output_truncated`。恢复流时使用完全相同的原请求和原 `request_id`，另带输出游标；断线后的执行状态及取消结果从原 operation 核对。
 
 ```python
-import json
-
-async def receive_output(progress, total, message):
-    event = json.loads(message)
-    if event["type"] == "output":
-        print(event["text"], end="", flush=True)
-
-result = await client.call_tool(
-    "script_run", invocation, progress_callback=receive_output
-)
+result = await client.call_tool("script_run", {
+    **invocation,
+    "output_file": "/absolute/debug/script-output.ndjson",
+    "error_file": "/absolute/debug/script-errors.ndjson",
+})
 ```
+
+执行期间可在另一终端查看：
+
+```bash
+tail -f /absolute/debug/script-output.ndjson /absolute/debug/script-errors.ndjson
+```
+
+文件采用追加方式。恢复时将最后保存的输出 `seq` 作为 `since_output`，避免重复记录已读取片段；若使用较早游标，重读片段仍会追加到文件。`gap` 和每条事件的操作 ID、序号用于识别窗口缺失及跨调用记录。
 
 `console`、`print` 等语言输出按 UTF-8 收集到本次 `stdout/stderr`，保留分片写入的完整 Unicode 字符；每路最多 16,384 字节，超出设置 `output_truncated=true`。这是脚本语言输出，游戏聊天仍沿角色的原生字符集规则。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
 

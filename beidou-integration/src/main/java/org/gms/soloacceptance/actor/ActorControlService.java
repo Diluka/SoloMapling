@@ -960,7 +960,8 @@ public final class ActorControlService {
             result.put("script_execution", Map.of("language", "javascript", "minimum_timeout_ms", 1,
                     "maximum_timeout_ms", 5000, "default_timeout_ms", 1000, "maximum_source_characters", 65536,
                     "maximum_parameters_bytes", 16384, "execution_owner", "character_runtime",
-                    "streaming", Map.of("transport", "ndjson", "delivery", "mcp_progress", "cursor_argument", "since_output",
+                    "streaming", Map.of("transport", "ndjson", "delivery", "optional_files",
+                            "file_arguments", List.of("output_file", "error_file"), "cursor_argument", "since_output",
                             "event_capacity", SCRIPT_OUTPUT_EVENTS, "maximum_stdout_bytes", 16384, "maximum_stderr_bytes", 16384)));
             result.put("native_environments", backend.nativeScriptEnvironments());
             result.put("actions", List.of("chat", "npc_center_open", "npc_cancel", "npc_reply", "inventory_move",

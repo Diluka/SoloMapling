@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, ExitStack
 import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
-from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +34,7 @@ InventorySlot = Annotated[int, Field(ge=1, le=127, strict=True)]
 EquippedSlot = Literal[*EQUIPMENT_SLOTS]
 ObjectId = Annotated[int, Field(ge=1, le=MAX_INT, strict=True)]
 CommandText = Annotated[str, Field(min_length=1, max_length=MAX_COMMAND_CHARACTERS, strict=True)]
+OutputFile = Annotated[str, Field(min_length=1, strict=True)]
 
 
 class ChatParameters(BaseModel):
@@ -124,7 +124,7 @@ class ExpectedContext(BaseModel):
 CHAT_ARGUMENTS = frozenset({"session_id", "expected_generation", "request_id", "action", "parameters", "expected_context"})
 COMMAND_ARGUMENTS = frozenset({"profile_id", "request_id", "command", "expected_command_generation"})
 SCRIPT_RUN_REQUIRED = frozenset({"session_id", "expected_generation", "request_id", "kind", "operation"})
-SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"source", "parameters", "timeout_ms", "context_id", "options", "entry", "args", "since_output"}
+SCRIPT_RUN_ARGUMENTS = SCRIPT_RUN_REQUIRED | {"source", "parameters", "timeout_ms", "context_id", "options", "entry", "args", "since_output", "output_file", "error_file"}
 
 
 class AcceptanceMCPServer(MCPServer):
@@ -203,7 +203,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "实际开放能力以 game_capabilities 为准；QUEUED 不等于已登录，"
                       "取消操作不等于结束NPC对话。game_act 支持普通聊天、已审NPC回复、背包移位，以及受控移动/停止、单次近战普通攻击、库存物品拾取/丢弃、普通HP/MP药剂使用和装备穿脱；实际能力以桥公告为准。"
                       "基本动作由同一角色运行体执行；不接收任意伤害、技能、坐标或封包，不开放礼包accept、任意NPC、未审查选项或自治通关工具。"
-                      "script_run 在同一角色运行体执行有期限的北斗脚本，执行中通过MCP进度通知实时交付stdout/stderr，最终返回结果；根据能力公告及随源码技能选择真实北斗环境与原入口。"
+                      "script_run 在同一角色运行体执行有期限的北斗脚本，可用output_file/error_file将执行过程实时追加到MCP宿主文件；未提供文件时只返回最终结果。根据能力公告及随源码技能选择真实北斗环境与原入口。"
                       "持久 context_id 用于后续回调或关闭，原生副作用按实际结果核验，不由工具返回成功推导玩法完成。"
                       "北斗脚本提供 executeCommand(commandText) 通用执行函数，与 game_command 共用原生handle；权限沿原生，RETURNED不代表具体命令效果。"
                       "game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现；命令及脚本用法通过随源码技能查阅。"
@@ -306,7 +306,6 @@ def build_server(config: BridgeConfig) -> MCPServer:
 
     @server.tool(annotations=open_annotations)
     async def script_run(
-        ctx: Context,
         session_id: Identifier, expected_generation: Generation, request_id: RequestId,
         kind: Literal["npc", "quest", "portal", "reactor", "event"],
         operation: Literal["start", "invoke", "close"],
@@ -318,24 +317,42 @@ def build_server(config: BridgeConfig) -> MCPServer:
         entry: NativeScriptEntry | None = None,
         args: list[Any] = Field(default_factory=list),
         since_output: Cursor = 0,
+        output_file: OutputFile | None = None,
+        error_file: OutputFile | None = None,
     ) -> CallToolResult:
-        """在当前角色运行体执行北斗脚本，通过MCP进度通知实时发送started/output/gap事件（message为JSON），最终返回执行结果。kind选择实际北斗环境，start创建上下文，invoke继续代码或入口，close收尾。输出事件带request_id/operation_id、seq、channel和text；since_output用于同请求恢复输出读取。source默认空，parameters为JSON参数；executeCommand沿原生权限。使用原request_id及相同执行参数恢复，本次执行结算和Context最终关闭分别核验。"""
-        notification_sequence = 0
-
-        async def forward(event: dict[str, Any]) -> None:
-            nonlocal notification_sequence
-            notification_sequence += 1
-            await ctx.report_progress(notification_sequence, message=json.dumps(event, ensure_ascii=False))
-
+        """在当前角色运行体执行北斗脚本并返回最终结果。可选output_file/error_file为MCP宿主本地路径，UTF-8追加started/output/gap的NDJSON消息并逐条刷新；只给output_file时合并输出，另给error_file时将stderr分流，只给error_file时仅记录stderr。不提供文件时只返回最终结果。目录须已存在，相对路径按MCP工作目录。kind选择实际北斗环境，start创建上下文，invoke继续代码或入口，close收尾。since_output用于同请求恢复输出读取，文件路径可变而执行参数须保持相同。source默认空；executeCommand沿原生权限。本次执行结算和Context最终关闭分别核验。"""
         try:
-            data = await bridge.script_run(
-                session_id, expected_generation, request_id=request_id, kind=kind, operation=operation,
-                source=source, parameters=parameters, timeout_ms=timeout_ms, context_id=context_id,
-                options=options, entry=entry, args=args, since_output=since_output, on_event=forward,
-            )
+            with ExitStack() as files:
+                try:
+                    output = files.enter_context(open(output_file, "a", encoding="utf-8")) if output_file is not None else None
+                    errors = files.enter_context(open(error_file, "a", encoding="utf-8")) if error_file is not None else None
+                except OSError:
+                    raise BridgeError("OUTPUT_FILE_UNAVAILABLE", "无法打开输出文件，请检查路径、目录和写入权限。",
+                                      request_id=request_id) from None
+
+                async def forward(event: dict[str, Any]) -> None:
+                    destination = errors if event["type"] == "output" and event["channel"] == "stderr" and errors is not None else output
+                    if destination is not None:
+                        try:
+                            destination.write(json.dumps(event, ensure_ascii=False) + "\n")
+                            destination.flush()
+                        except OSError:
+                            raise BridgeError("OUTPUT_WRITE_FAILED", "流式消息写入失败，请按原 request_id 核对结果。",
+                                              request_id=request_id, outcome_unknown=True) from None
+
+                data = await bridge.script_run(
+                    session_id, expected_generation, request_id=request_id, kind=kind, operation=operation,
+                    source=source, parameters=parameters, timeout_ms=timeout_ms, context_id=context_id,
+                    options=options, entry=entry, args=args, since_output=since_output,
+                    on_event=forward if output is not None or errors is not None else None,
+                )
             return result(data, is_error=data.get("status") != "SUCCEEDED")
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
+        except OSError:
+            # A failed flush may fail again when ExitStack closes the file.
+            return result(BridgeError("OUTPUT_WRITE_FAILED", "流式消息写入失败，请按原 request_id 核对结果。",
+                                      request_id=request_id, outcome_unknown=True).public_data(), is_error=True)
 
     @server.tool(annotations=read_annotations)
     async def operation_get(
