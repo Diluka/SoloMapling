@@ -1,6 +1,6 @@
 # 机器人模块定义与共享函数
 
-本文面向接入模块的开发者，描述 #205 的模块契约、#270 的操作调用与 #286 的动作/控制职责名称，以及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航、战斗、原生动作、药剂和世界人口能力模块；具体业务类型按配置选择模块。持续交战见[#271 战斗参考](combat.md)，普通复活见[#275 原生动作参考](native-actions.md)，恢复与异常解除见[#279 药剂参考](potions.md)。
+本文面向接入模块的开发者，描述模块定义、类型化操作及动作/控制职责。源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前类型可选择MCP控制、导航、战斗、原生动作、药剂、狩猎控制、恢复控制和世界人口能力。持续交战见[战斗参考](combat.md)，单次药效见[药剂参考](potions.md)，连续选怪见[狩猎控制](hunting.md)，自动用药时机见[恢复控制](recovery.md)。
 
 ## 定义与实例配置
 
@@ -46,7 +46,7 @@ classDiagram
 
 机器人装配方案及配置随源码维护，通过对应测试和验收确认模块之间的组合。每个机器人按方案创建模块；正常工作周期内模块组合固定，模块的任务、状态和能力可用性随运行变化。
 
-[`RobotPopulation.yaml`](population.md) 的 `types` 声明每个类型的模块组合及参数，加载时转换成装配计划。现有 MCP 普通专用角色固定使用 `mcp_test` 类型；后续新增非自主动作模块时更新该类型的显式配置，自主控制模块保留在其业务类型中。
+[`RobotPopulation.yaml`](population.md) 的 `types` 声明每个类型的模块组合及参数，加载时转换成装配计划。现有MCP普通专用角色固定使用 `mcp_test` 类型；狩猎控制与恢复控制也按各自启动约定显式装配，其他业务类型选择自己的组合。
 
 控制模块负责选择角色活动目标、约束与任务顺序，并组织动作模块调度；动作模块完成已经确定的任务。动作可以持续执行、安排多个步骤，并为完成本次目标派生子目标、组合调用其他动作；这些选择属于执行规划。具体职责和调用关系由装配方案确定，`controls` 声明模块执行原生动作所需的控制资源。队伍人数、店铺访客数、牌桌席位及模块内部任务数量由各自业务规则管理。
 
@@ -56,6 +56,16 @@ classDiagram
 - 卸载完成后撤下实例的导出登记。停止或卸载清理 hook 异常时保留 `FAILED`、失败原因和未完成的清理责任，根关闭继续等待真实收尾。
 
 模块只清理自己拥有的工作与资源。角色最终退出、来源释放和唯一 lane 的关闭仍由 `CharacterRuntime` 管理。
+
+### 持续控制工作
+
+具体控制模块通过强类型 `start/stop` 方法及同源 `ModuleFunction` 导出管理活动。`ControlModule` 保持职责标记，活动参数、结果和自动启动策略归具体模块：狩猎装载及恢复后待命，恢复控制每次激活自动开始监控。
+
+[`ModuleTask`](../../beidou-integration/src/main/java/soloMapling/game/runtime/ModuleTask.java) 为持续活动承载模块原scope中的独立工作，并跟踪carrier真实退出。活动开始后的工作与启动函数调用分别管理，因此启动返回及脚本Context关闭后活动继续。实际观察或原生执行仍使用角色原有唯一lane中的短work；动作提供者保留自己的scope/work与取消关联。
+
+持续活动在其scope中保留运行中的活动work，角色短命令lane可在两次执行之间为空。活动停止、本次原生命令结算和整个宿主关闭是分别核对的事实。
+
+显式 `stop` 只结束该次活动及其下游，等待真实收尾后保留模块继续调用。模块暂停、停用、卸载和根关闭沿同一工作归属排空；`CONTROL_ACTIVITY` 在既有有界运行体事件中记录开始、转换和结束事实。
 
 可装载的父模块可以在内部组合子模块或组件，由父模块构造、初始化和管理私有结构、启用关系、局部状态与内部调用协议，并提供统一对外契约。内部工作的资源归属及最终收尾由父模块原 scope 承担；通过共享目录调用的独立动作模块仍使用各自的 scope 与资源，取消、期限及收尾沿调用关系关联。内部查询结果由父模块解释，单项操作的业务结果由自己的 `R` 表达，整体提供者可用性由共享目录表达。
 
@@ -92,7 +102,7 @@ modules.call("example.counter.next", {label: "本次调用"});
 
 Java 可使用 `context.call(NavigationActionModule.MOVE_TO, new MoveToRequest(x, y, remainingMs), callerWork)`，获得 `ModuleCall<NavigationResult>`；`status/reason` 表达目录可用性，`result` 保留操作的具体业务类型。该入口在当前注册的精确操作声明上调用同一handler，直接消费已构造的业务输入。JSON入口才执行schema校验与输入转换，随后共享相同的提供者工作与完成语义。
 
-Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。当前源码的默认 `mcp_test` 导出 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md)、[`native.revive`](native-actions.md)、[`potions.use`](potions.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP 通过 `script_run` 承接原生上下文中的脚本调用；北斗对象 API 的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
+Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。默认 `mcp_test` 提供 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md)、[`native.revive`](native-actions.md)、[`potions.use`](potions.md)、[`hunting.start/stop`](hunting.md)、[`recovery.start/stop`](recovery.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP通过 `script_run` 承接原生上下文中的脚本调用；北斗对象API的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
 
 ## 最小协议示例
 

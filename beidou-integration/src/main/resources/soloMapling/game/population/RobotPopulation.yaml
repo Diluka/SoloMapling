@@ -22,6 +22,16 @@ types:
         config:
           restore_cooldown_ms: 5000
           cleanse_cooldown_ms: 5000
+      hunting:
+        type: hunting-control
+        config: {}
+      recovery:
+        type: recovery-control
+        config:
+          hp_threshold_pct: 50
+          mp_threshold_pct: 50
+          cleanse_enabled: true
+          check_interval_ms: 500
       population:
         type: robot-population
         config: {}

@@ -39,7 +39,7 @@ solomapling:
 
 | 类型 | 装配与用途 |
 |---|---|
-| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`potions`、`robot-population`；为已有 MCP 专用角色提供测试能力，不声明新建角色来源 |
+| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`potions`、`hunting-control`、`recovery-control`、`robot-population`；为已有MCP专用角色装配调试能力，继续使用原生普通角色来源 |
 
 `mcp_test` 的默认初始数量为 `0`，MCP 角色仍由 `actor_open` 打开。
 
@@ -49,7 +49,9 @@ solomapling:
 
 `potions` 模块独立导出 `potions.use`，使用指定的已适配物品药效并维护恢复、异常解除两组冷却；两组默认各5000ms，可分别配置 `restore_cooldown_ms` 与 `cleanse_cooldown_ms`。该模块可独立于战斗装配，参数、原生效果及结果见[药剂参考](potions.md)。
 
-后续新增非自主动作模块时，将其加入 `mcp_test.modules` 并随模块共同验收。负责自主目标决策与模块调度的控制模块保留在其业务类型中。MCP 接入代码只引用固定类型名，模块组合在这份配置中维护。
+`hunting-control` 默认 `style: AUTO`，装载及恢复激活后保持 `IDLE`，由 `hunting.start` 开始本场景活动；`hunting.stop` 等活动真实收尾后回待命。`recovery-control` 每次激活自动监控HP/MP和可解异常，显式 `recovery.stop` 后待命，`recovery.start` 或重新激活会再次开始。结束狩猎不结束恢复，配置及状态见[狩猎](hunting.md)和[恢复](recovery.md)参考。
+
+后续能力由各机器人类型明确选择，长期MCP调试能力随 `mcp_test` 共同维护和验收。MCP接入代码只引用固定类型名，模块组合在这份配置中维护。
 
 ## 本地临时类型
 

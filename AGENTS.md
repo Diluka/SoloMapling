@@ -108,7 +108,7 @@ python3 beidou-integration/scripts/build.py --help
 ## #263 类型配置与 #122 导航接入
 
 - 当前源码通过 `solomapling.robot-population-config` 读取单个路径或有序文件列表；未指定时仅读取内置默认文件。后文件按类型名完整替换同名 `types`，按类型名覆盖 `initial_population`，合并后一次编译装配计划及核对引用。每轮世界启动只创建一次初始人口；运行期通过 `robots.create/remove` 增减完整实例，文件与实例模块组合保持固定。
-- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/combat/native-actions/potions/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主控制模块放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
+- 已有MCP普通专用角色固定引用 `mcp_test` 类型，保留原profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/combat/native-actions/potions/hunting-control/recovery-control/robot-population`，初始数量0；狩猎装载及恢复激活后待命，恢复控制每次激活自动监控。后续能力由类型明确选择并随默认和本地配置共同验收。临时测试类型定义在Git忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
 - `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾；可选调用参数`timeout_ms`取1..120000ms，实际取与模块配置期限的较小值，供组合动作传递剩余预算。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
 - 脚本默认期限30秒、最大120秒，调用者取消持续关联到提供者work。导航自身默认30秒、8px容差、3秒无进展；真实抵达、失败、已发生位移和实际停止分别核验。源码和部署结果以#122/#263证据为准，参考 `docs/robot-runtime/population.md`、`navigation.md` 及脚本调试技能。
 
@@ -188,7 +188,7 @@ python3 beidou-integration/scripts/build.py --help
 
 ## #271 简化战斗动作与 #275 原生动作
 
-- `CombatActionModule.ENGAGE` 声明 `CombatRequest → CombatResult`，共享名 `combat.engage`。父模块在角色绑定后初始化当前职业及祖先路径，复用旧 `BotAttackConfig/BotBuffConfig/BotAttackProfile/BotDamageModel`；34个冒险家职业节点及BEGINNER保持完整继承，单体、群攻、大招分别回溯，Buff按祖先顺序累计。Thief武器、Cleric亡灵Heal、ShadowPartner按旧规则；实际HP、死亡、经验和掉落分别核对。
+- `CombatActionModule.ENGAGE` 声明 `CombatRequest → CombatResult`，共享名 `combat.engage`。父模块按实际职业变化更新入口，当前原生首片与legacy分别以rules及覆盖清单说明。legacy职业树继续复用旧 `BotAttackConfig/BotBuffConfig/BotAttackProfile/BotDamageModel`，保留一期职业节点来源、类别回溯及Buff顺序；原生首片使用实际学会等级、属性和资源，见下方#272/#127约定。
 - 交战目标、允许命中集合、冷却和Buff节奏归模块实例，一次同步调用完成接敌、持续攻击及本次收尾。导航沿同一共享目录传剩余期限，实际短命令使用提供者新work和角色唯一lane。`combat-action`只声明本实例的持续交战控制；已有MCP基本攻击的控制边界保留。
 - `NativeActionModule` 类型为 `native-actions`，按操作声明强类型输入输出；首环 `REVIVE` 提供空参数 `native.revive`，使用独立 `revive` control，与MCP、导航同时装配。普通请求编码来自北斗1.12完整ChangeMapHandler，原事件先裁决，标准路径沿原Character.respawn，不传外部地图/坐标/任意封包。
 - 复活在原生派发点确认死亡；原本存活、实际复活、事件接管仍未复活及未知后态分别表达。合法换图后继续沿原CharacterRef及epoch确认HP和新场景，既发效果保留；处理器返回、事件裁决、真实复活及事件后续任务完成分别核对。模块只收尾本次原lane工作，EIM/EM仍归原所有者，不能把Future/operation已终态当实际排空。
@@ -220,3 +220,18 @@ python3 beidou-integration/scripts/build.py --help
 - 原生地图的延时掉落归原地图所有者管理；本次角色伤害工作退出与地物生成分别核验。源码、隔离与实际部署证据以#280为准，角色来源和普通玩家资料保持各自边界。
 
 - #276地图滑度读取在Solo地面元数据边界按WZ原始点小数解析，运行地图与离线loader共用；业务货币设置保持。图缓存版本62使旧区域格式截断滑度时生成的图失效，按现有机制重建；#283实际复验与交付状态见Issue证据。
+
+## #287 狩猎与 #289 恢复控制
+
+- `HuntingControlModule` 类型为 `hunting-control`，装载及恢复激活后为IDLE。强类型 `start(HuntingStartOptions)`、`stop()` 与 `hunting.start/stop` 同源；style支持AUTO/CAMP/PATROL/ROAM/STACK，默认AUTO，duration_ms为本次可选正时长。STARTED表示模块自有活动开始，脚本返回或Context正常关闭后继续；stop等待当前交战/导航及驻点真实释放后回IDLE，模块仍可再次开始。
+- 四方式复用旧地图轮廓、点位、范围和等待决策，fresh选择与sticky保持分别遵守原规则；驻点/区段/楼层使用原BotSpotClaims单一来源。实际移动和交战消费NavigationActionModule/CombatActionModule。角色死亡、场景变化、期限或必要能力不可用结束本次活动，恢复后重新显式开始。当前场景的狩猎与完整选图、跨图日程分别沿#287/#91核验。
+- `RecoveryControlModule` 类型为 `recovery-control`，每次激活自动开始独立监控；强类型 `start()/stop()` 与 `recovery.start/stop` 同源。显式stop后本轮待命，start或下次激活再次监控。HP/MP阈值默认各50%、范围0～100，0关闭对应触发；cleanse_enabled默认true，check_interval_ms默认500且为正整数。每轮先恢复后净化，同轮HP/MP共同触发只发一次特殊药水。
+- 恢复消费PotionActionModule.USE及原两组CD，curable集合由PotionItem.ALL_CURE.curableDiseases同源提供。死亡等待外部复活，正常换图、资源已满、暂无异常、药剂暂不可用仍保持监控；用药事实与时机诊断分别记录。结束狩猎不结束恢复，模块私有计数和最近结果不替代角色或药剂账本。
+- 两个控制模块通过ModuleTask承载各自原scope中的独立work/carrier，原生观察与动作仍沿角色唯一lane；新短命令使用对应提供者的新work。显式停止只收尾本次活动，下游真实退出后返回；生命周期hook非阻塞发出取消，根等待原工作实际排空。CONTROL_ACTIVITY以安全标识符记录状态/目标/用药转换并绑定工作及模块代次。默认及本地mcp_test装配这两个模块，源码/隔离/部署及真人客户端证据按Issue分别记录，参考docs/robot-runtime/hunting.md、recovery.md。
+
+## #272 / #127 真实战斗首片
+
+- 当前BEGINNER及整个冒险家Warrior/Mage族使用native_skill_combat_first_v1；首批攻击为skill0、1001004、1001005、2001004、2001005，Buff为1001003、2001002、2001003。较高职业只回溯本批已适配且真实学会的祖先技能，按当前学会等级、装备、属性、资源和WZ准备执行；职业变化后更新入口。其余一期路径保留legacy_simulated_combat_v1，跨两类路径的结果标为mixed_native_and_legacy_combat_v1。
+- NativeCombatActions的有限可信伤害输入沿原生近战/魔法/施法handler派发，真实成本和阻断状态在派发前核对；原生HPMP、Buff、冷却、死亡、EXP、任务和掉落分别确认。Warrior首批按匹配WZ的1001003/4/5登记，旧常量及V1路径继续作为对应版本来源。
+- contact_physical_v1在当前BEGINNER或冒险家Warrior/Mage原生分支的交战期间处理物理接触入伤，复用WZ身体框及有限物防输入，通过TakeDamageHandler结算真实HPMP、MagicGuard、反伤和死亡。入伤的ModuleTask归战斗原scope，关联本次调用/期限，交战返回前实际退出；恢复控制只观察并消费药剂。
+- 结果保留既有交战字段并增加current_job/job_changes、真实资源、已适配技能最近事实及接触入伤摘要，native_attack_fact_scope/native_buff_fact_scope/contact_hit_fact_scope说明各自有界范围，累计次数与最近结果分别解释。普通MCP与环境来源消费同一后端并保留各自登录/收益/存档资格。覆盖清单见docs/robot-runtime/combat-jobs.md；#272/#127的大阶段继续按职业、技能族和后续范围推进，本轮源码、隔离、正式及客户端验证分别留证。

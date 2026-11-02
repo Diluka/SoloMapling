@@ -53,9 +53,23 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 模块共享函数
 
-在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是 JSON 对象。当前源码的 MCP 专用角色固定按 `RobotPopulation.yaml` 中的 `mcp_test` 类型装配，默认包含导航、战斗、原生动作和人口能力。实际服务的源码身份及目录仍需与本次环境对应。
+在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是JSON对象。MCP专用角色固定按 `RobotPopulation.yaml` 的 `mcp_test` 类型装配，包含动作能力及狩猎、恢复控制。实际服务的源码身份及目录仍需与本次环境对应。
 
 函数缺失或提供者暂停、停用时正常返回 `UNAVAILABLE`；按实际结果选择后续流程。函数声明、装配与结果契约见[机器人模块参考](../../../docs/robot-runtime/modules.md#共享函数声明与调用)。北斗原有 `cm/qm/pi/rm/em` 方法继续按[源码导航](source-navigation.md)查阅。
+
+## 开始连续狩猎与恢复
+
+在当前真实场景、已装配能力和角色资源满足本次活动要求时，提交一次启动：
+
+```javascript
+modules.call("hunting.start", {style: "AUTO", duration_ms: 30000});
+```
+
+业务结果 `STARTED` 表示狩猎模块已建立自己的持续活动。启动调用返回、当前脚本正常结束或Context正常关闭后，活动继续按期限、场景和停止条件运行；在后续有效上下文中调用 `modules.call("hunting.stop", {})`，等待当前动作和驻点真实收尾并读取摘要。详细参数、状态和四种方式见[狩猎控制](../../../docs/robot-runtime/hunting.md)。
+
+恢复控制每次激活自动监控HP/MP和可解异常。可用 `modules.call("recovery.stop", {})` 显式待命，再用 `modules.call("recovery.start", {})` 开始；它与狩猎独立，狩猎结束后恢复继续。阈值、药剂分组CD和真实结果见[恢复控制](../../../docs/robot-runtime/recovery.md)。
+
+观察当前角色、运行体有界事件及真实战斗后态，分别确认持续活动、用药和工作退出。停止具体活动保持角色与模块；结束整个角色由 `actor_close` 沿根关闭流程完成。
 
 ## 一次调用完成同场景导航
 
@@ -91,9 +105,9 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 }
 ```
 
-该次调用在允许范围内接敌、选招并持续攻击，等待本次交战与组合导航收尾。`allowed_target_oids` 最多32个不同 ID，必须包含指定目标，省略时仅允许指定目标。目录返回 `SUCCEEDED` 后检查 `result.outcome`、`attacks` 和 `hits`；`buff_skill_ids` 是当前路径声明，`buffs_cast` 是本次派发记录。调用的攻击使用旧模拟规则，仍可能产生真实怪物扣血、经验和掉落，按实际后态核对。
+该次调用在允许范围内接敌、选招并持续攻击，等待本次交战、组合导航及接触入伤工作收尾。`allowed_target_oids` 最多32个不同ID，必须包含指定目标，省略时仅允许指定目标。目录返回 `SUCCEEDED` 后读取 `result.outcome/rules` 和相应 `*_fact_scope`，结合 `attacks/hits`、真实HP/MP及技能事实核对效果；`buff_skill_ids` 是路径声明，`buffs_cast` 是派发记录，具体效果由规则分支和后态表达。
 
-当前完整候选覆盖旧表约定的冒险家职业链；未配置专属技能的职业沿通用普攻兜底。参数、结果、模块实例冷却及取消语义见[战斗参考](../../../docs/robot-runtime/combat.md)，职业清单见[职业能力](../../../docs/robot-runtime/combat-jobs.md)。临时职业测试类型和材料放在 `RobotPopulation.local.yaml`，沿[人口配置](../../../docs/robot-runtime/population.md#本地临时类型)加载。
+当前BEGINNER及冒险家Warrior/Mage族使用首批真实技能、成本与原生派发，其余一期路径继续保留明确的legacy分支。自动恢复由独立控制模块消费药剂完成。参数、有限policy、资源和取消语义见[战斗参考](../../../docs/robot-runtime/combat.md)，职业清单见[职业能力](../../../docs/robot-runtime/combat-jobs.md)。临时职业类型和材料放在 `RobotPopulation.local.yaml`，沿[人口配置](../../../docs/robot-runtime/population.md#本地临时类型)加载，准备与效果分别留证。
 
 ## 请求原生普通复活
 
