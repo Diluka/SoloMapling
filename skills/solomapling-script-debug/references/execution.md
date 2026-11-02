@@ -107,6 +107,20 @@ modules.call("native.revive", {});
 
 普通复活可能合法换图，并结束当前 NPC Context。以实际脚本结果及最新角色观察决定后续步骤；当前 Context 仍 OPEN 时继续原上下文，已关闭时按需要新建环境。参数、强类型 Java 操作和取消/收尾契约见[原生动作参考](../../../docs/robot-runtime/native-actions.md)。死亡及事件场景放在专用隔离 fixture 准备，准备变化与复活效果分别留证。
 
+## 应用指定药剂效果
+
+在已装配 `potions` 的角色原生上下文内，按物品 ID 请求本次效果：
+
+```javascript
+const call = modules.call("potions.use", {itemId: 2000004});
+// 先检查 call.status，再读取 call.result 的业务结果与角色前后态。
+call;
+```
+
+一期 `2000004` 沿原生特殊药水恢复 HP/MP，`2050004` 沿原生万能疗伤药解除可解异常。背包无需有对应药水，本操作不增加或扣减库存。两者分别使用恢复、异常解除冷却，默认各5秒；HP和MP缺损共用同一恢复冷却。
+
+目录外壳 `SUCCEEDED` 表示调用已返回，实际生效以业务结果和 HP/MP、异常集合前后变化为准。冷却、无效果和未适配物品分别有明确结果。取消或停止后，已发生药效和已记冷却保留，须等待本次真实工作退出。完整输入、结果及配置见[药剂参考](../../../docs/robot-runtime/potions.md)；异常和资源缺损在专用隔离 fixture 准备并单独归因。
+
 ## 创建与移除具体环境机器人
 
 先按[人口配置说明](../../../docs/robot-runtime/population.md#本地临时类型)在本地临时文件中定义并加载 `navigation_probe`。已装配人口能力的上下文可执行：

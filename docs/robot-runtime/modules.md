@@ -1,6 +1,6 @@
 # 机器人模块定义与共享函数
 
-本文面向接入模块的开发者，描述 #205 的模块契约、#270 的动作/策略入口及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航、战斗、原生动作和世界人口能力模块；具体业务类型按配置选择模块。持续交战见[#271 战斗参考](combat.md)，普通复活见[#275 原生动作参考](native-actions.md)。
+本文面向接入模块的开发者，描述 #205 的模块契约、#270 的动作/策略入口及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航、战斗、原生动作、药剂和世界人口能力模块；具体业务类型按配置选择模块。持续交战见[#271 战斗参考](combat.md)，普通复活见[#275 原生动作参考](native-actions.md)，恢复与异常解除见[#279 药剂参考](potions.md)。
 
 ## 定义与实例配置
 
@@ -77,7 +77,7 @@ modules.call("example.counter.next", {label: "本次调用"});
 
 Java 可使用 `context.call(NavigationActionModule.MOVE_TO, new MoveToRequest(x, y, remainingMs), callerWork)`，获得 `ModuleCall<NavigationResult>`；`status/reason` 表达目录可用性，`result` 保留操作的具体业务类型。该入口在当前注册的精确操作声明上调用同一handler，直接消费已构造的业务输入。JSON入口才执行schema校验与输入转换，随后共享相同的提供者工作与完成语义。
 
-Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。当前源码的默认 `mcp_test` 导出 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md)、[`native.revive`](native-actions.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP 通过 `script_run` 承接原生上下文中的脚本调用；北斗对象 API 的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
+Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。当前源码的默认 `mcp_test` 导出 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md)、[`native.revive`](native-actions.md)、[`potions.use`](potions.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP 通过 `script_run` 承接原生上下文中的脚本调用；北斗对象 API 的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
 
 ## 最小协议示例
 

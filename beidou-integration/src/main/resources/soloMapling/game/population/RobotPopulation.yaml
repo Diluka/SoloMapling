@@ -17,6 +17,11 @@ types:
       native:
         type: native-actions
         config: {}
+      potions:
+        type: potions
+        config:
+          restore_cooldown_ms: 5000
+          cleanse_cooldown_ms: 5000
       population:
         type: robot-population
         config: {}
