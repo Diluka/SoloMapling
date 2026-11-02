@@ -47,6 +47,9 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             if (map == null || map.getId() != spawn.map()) throw new IllegalStateException("robot_map_unavailable");
             var portal = map.getPortal(0);
             if (portal == null) throw new IllegalStateException("robot_spawn_unavailable");
+            // A headless origin has no client to land it after publication.
+            var position = map.getPointBelow(portal.getPosition());
+            if (position == null) throw new IllegalStateException("robot_spawn_ground_unavailable");
 
             Character character = BotGeneration.loadTemplate();
             BotClient client = (BotClient) character.getClient();
@@ -56,7 +59,7 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             character.setId(BotRegistry.allocateId());
             character.setName(getRandomCharacterIGN());
             character.setMap(map);
-            character.setPosition(portal.getPosition());
+            character.setPosition(position);
             character.setStance(5);
             // Initialize only this V2 origin, once; map changes must not multiply rates again.
             character.resetPlayerRates();
@@ -71,6 +74,7 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             channel.addPlayer(character);
             world.getPlayerStorage().addPlayer(character);
             map.addPlayer(character);
+            character.setMapTransitionComplete();
             received.current = BotGameContexts.capture(server, character, client, world, channel);
             return received;
         } catch (RuntimeException | Error failure) {

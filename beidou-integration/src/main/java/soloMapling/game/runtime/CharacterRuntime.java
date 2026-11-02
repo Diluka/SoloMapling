@@ -469,6 +469,15 @@ public final class CharacterRuntime {
             events.append(RuntimeEvents.Kind.ACTION_RESULT, ref.instanceId, ref.moduleGeneration,
                     work.snapshot().id(), reason, result.outcome().name());
         }
+
+        /** Bounded control facts remain attributable to the exact activity and module generation. */
+        public void recordActivity(ExecutionScope.WorkHandle work, String reason, String outcome) {
+            requireOwn(work);
+            require(reason.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
+                    && outcome.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}"), "invalid_control_activity_fact");
+            events.append(RuntimeEvents.Kind.CONTROL_ACTIVITY, ref.instanceId, ref.moduleGeneration,
+                    work.snapshot().id(), reason, outcome);
+        }
         public CharacterCommandLane.Submission submitCleanup(ScopeResources.CleanupAttempt cleanup,
                                                               Runnable body, Runnable settled) {
             requireOwn(cleanup.work());

@@ -1,0 +1,37 @@
+package soloMapling.game.hunting;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Collections;
+
+/** Safe facts of the current or most recently completed activity, without native role/map references. */
+public record HuntingSnapshot(HuntingControlModule.State state, long activityId, String requestedStyle,
+                              String style, Long durationMs, long elapsedMs, int engagements, int kills,
+                              int navigationCalls, String endReason, Map<String, Object> placement) {
+    public HuntingSnapshot { placement = Collections.unmodifiableMap(new LinkedHashMap<>(placement)); }
+
+    public Map<String, Object> toMap() {
+        var value = new LinkedHashMap<String, Object>();
+        value.put("state", state.name());
+        value.put("activity_id", activityId);
+        value.put("requested_style", requestedStyle);
+        value.put("style", style);
+        value.put("duration_ms", durationMs);
+        value.put("elapsed_ms", elapsedMs);
+        value.put("engagements", engagements);
+        value.put("kills", kills);
+        value.put("navigation_calls", navigationCalls);
+        value.put("end_reason", endReason);
+        value.put("placement", placement);
+        return value;
+    }
+
+    Map<String, Object> response(String outcome, String reason) {
+        var value = new LinkedHashMap<String, Object>();
+        value.put("outcome", outcome);
+        value.put("state", state.name());
+        value.put("reason", reason);
+        value.put("activity", toMap());
+        return value;
+    }
+}

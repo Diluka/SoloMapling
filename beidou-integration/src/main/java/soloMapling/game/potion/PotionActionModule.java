@@ -20,8 +20,6 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class PotionActionModule implements ActionModule {
     public record Config(int restoreCooldownMs, int cleanseCooldownMs) { }
     public static final Config DEFAULT_CONFIG = new Config(5000, 5000);
-    private static final Set<Disease> CURABLE_DISEASES = Set.of(Disease.POISON, Disease.SEAL, Disease.DARKNESS,
-            Disease.WEAKEN, Disease.SLOW, Disease.CURSE);
     public static final ModuleFunction<PotionActionModule, PotionRequest, PotionResult> USE = new ModuleFunction<>(
             "potions.use", "对自身应用已适配道具的原生药效，不要求持有或消耗库存。",
             List.of(new ModuleFunction.Parameter("itemId", ModuleFunction.Type.INTEGER, true,
@@ -85,7 +83,7 @@ public final class PotionActionModule implements ActionModule {
                         var remaining = after.diseases();
                         boolean effective = item.group() == PotionItem.Group.RESTORE
                                 ? after.hp() > before.hp() || after.mp() > before.mp()
-                                : before.diseases().stream().anyMatch(disease -> CURABLE_DISEASES.contains(disease)
+                                : before.diseases().stream().anyMatch(disease -> item.curableDiseases().contains(disease)
                                         && !remaining.contains(disease));
                         outcome = effective ? PotionResult.Outcome.APPLIED : PotionResult.Outcome.NO_EFFECT;
                         now = server.getCurrentTime();

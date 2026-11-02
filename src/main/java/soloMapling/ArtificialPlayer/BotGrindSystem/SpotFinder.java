@@ -596,12 +596,19 @@ public final class SpotFinder {
     // (no stack adjacency -> the tight rangeY still gates). p null = plain horizontal-first behavior.
     public static Monster nearestHostileCrossLedge(MapleMap map, Point from, int rangeX, int rangeY,
                                                    MapGrindProfile p, int stackRangeY) {
+        return nearestHostileCrossLedge(map, from, rangeX, rangeY, p, stackRangeY,
+                map == null ? List.of() : map.getAllMonsters());
+    }
+
+    /** The same range and distance rule over the caller's currently eligible native candidates. */
+    public static Monster nearestHostileCrossLedge(MapleMap map, Point from, int rangeX, int rangeY,
+                                                   MapGrindProfile p, int stackRangeY, List<Monster> candidates) {
         if (map == null || from == null) {
             return null;
         }
         Monster best = null;
         double bestSq = Double.MAX_VALUE;
-        for (Monster m : map.getAllMonsters()) {
+        for (Monster m : candidates) {
             if (!isHostile(m)) {
                 continue;
             }
@@ -663,11 +670,19 @@ public final class SpotFinder {
     public static Monster bestStackHostile(MapleMap map, List<Spot> members, Spot preferred,
                                            int x0, int x1, int yTop, int yBottom,
                                            Point from, int clusterRadius) {
+        return bestStackHostile(map, members, preferred, x0, x1, yTop, yBottom, from, clusterRadius,
+                map == null ? List.of() : map.getAllMonsters());
+    }
+
+    /** The existing stack/cluster scorer, with candidates already filtered by the activity owner. */
+    public static Monster bestStackHostile(MapleMap map, List<Spot> members, Spot preferred,
+                                           int x0, int x1, int yTop, int yBottom,
+                                           Point from, int clusterRadius, List<Monster> candidates) {
         if (map == null || members == null || members.isEmpty() || from == null) {
             return null;
         }
         List<Monster> band = new ArrayList<>();
-        for (Monster m : map.getAllMonsters()) {
+        for (Monster m : candidates) {
             if (!isHostile(m)) {
                 continue;
             }
@@ -702,12 +717,20 @@ public final class SpotFinder {
     // degrades to plain nearest.
     public static Monster bestClusterHostileInBand(MapleMap map, Point anchor, int radius,
                                                    int x0, int x1, Point from, int clusterRadius) {
+        return bestClusterHostileInBand(map, anchor, radius, x0, x1, from, clusterRadius,
+                map == null ? List.of() : map.getAllMonsters());
+    }
+
+    /** The existing ledge/cluster scorer over the activity's eligible native candidates. */
+    public static Monster bestClusterHostileInBand(MapleMap map, Point anchor, int radius,
+                                                   int x0, int x1, Point from, int clusterRadius,
+                                                   List<Monster> candidates) {
         if (map == null || anchor == null) {
             return null;
         }
         Point ref = (from != null) ? from : anchor;
         List<Monster> band = new ArrayList<>();
-        for (Monster m : map.getAllMonsters()) {
+        for (Monster m : candidates) {
             if (!isHostile(m)) {
                 continue;
             }

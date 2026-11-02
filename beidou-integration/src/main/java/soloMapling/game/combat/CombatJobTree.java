@@ -1,7 +1,9 @@
 package soloMapling.game.combat;
 
 import org.gms.client.Job;
+import org.gms.client.Character;
 import org.gms.client.inventory.WeaponType;
+import soloMapling.game.action.NativeCombatActions;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackConfig;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackProfile;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotBuffConfig;
@@ -13,11 +15,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** One combat parent's private advancement tree, bound once to the role's initial job. */
+/** One combat parent's current advancement tree; actual learned skills decide native first-phase plans. */
 public final class CombatJobTree {
     public enum AttackKind { SINGLE, AOE, ULTIMATE }
 
-    public record AttackPlan(Job providerJob, AttackKind kind, BotAttackProfile profile, boolean undeadOnly) {}
+    public record AttackPlan(Job providerJob, AttackKind kind, BotAttackProfile profile, boolean undeadOnly,
+                             NativeCombatActions.Plan nativePlan) {
+        public boolean nativeRules() { return nativePlan != null; }
+        public int reachX() { return nativeRules() ? nativePlan.reachX() : profile.reachX; }
+        public int reachY() { return nativeRules() ? nativePlan.reachY() : profile.reachY; }
+        public int maximumTargets() { return nativeRules() ? nativePlan.mobCount() : profile.numAttacked; }
+    }
 
     private record JobNode(Job job, JobNode parent, BotAttackConfig.JobAttacks attacks, List<Integer> buffs) {}
 
@@ -84,9 +92,25 @@ public final class CombatJobTree {
     }
 
     /** Each category stops at its first declaring advancement; AUTO selection belongs to the parent. */
-    public Optional<AttackPlan> resolve(AttackKind kind, WeaponType weapon, boolean undeadTarget) {
+    public Optional<AttackPlan> resolve(AttackKind kind, WeaponType weapon, boolean undeadTarget, Character actor) {
+        if (nativeMode(actor)) {
+            if (kind == AttackKind.ULTIMATE) return Optional.empty();
+            if (actor.getJob().isA(Job.WARRIOR)) {
+                int skillId = kind == AttackKind.AOE ? 1001005 : 1001004;
+                var plan = NativeCombatActions.plan(actor, skillId);
+                if (plan != null) return Optional.of(new AttackPlan(Job.WARRIOR, kind, null, false, plan));
+            } else if (actor.getJob().isA(Job.MAGICIAN) && kind == AttackKind.SINGLE) {
+                for (int skillId : List.of(2001005, 2001004)) {
+                    var plan = NativeCombatActions.plan(actor, skillId);
+                    if (plan != null) return Optional.of(new AttackPlan(Job.MAGICIAN, kind, null, false, plan));
+                }
+            }
+            var basic = kind == AttackKind.SINGLE ? NativeCombatActions.plan(actor, 0) : null;
+            return basic == null ? Optional.empty()
+                    : Optional.of(new AttackPlan(Job.BEGINNER, kind, null, false, basic));
+        }
         if (undeadTarget && kind == AttackKind.AOE && healing != null) {
-            return Optional.of(new AttackPlan(healing.job(), kind, BotAttackConfig.healUndead(), true));
+            return Optional.of(new AttackPlan(healing.job(), kind, BotAttackConfig.healUndead(), true, null));
         }
         for (var node = current; node != null; node = node.parent()) {
             var attacks = node.job() == Job.THIEF ? BotAttackConfig.localAttacks(node.job(), weapon) : node.attacks();
@@ -95,10 +119,22 @@ public final class CombatJobTree {
                 case AOE -> attacks.aoe();
                 case ULTIMATE -> attacks.ultimate();
             };
-            if (profile != null) return Optional.of(new AttackPlan(node.job(), kind, profile, false));
+            if (profile != null) return Optional.of(new AttackPlan(node.job(), kind, profile, false, null));
         }
         return kind == AttackKind.SINGLE
-                ? Optional.of(new AttackPlan(Job.BEGINNER, kind, basicFallback, false)) : Optional.empty();
+                ? Optional.of(new AttackPlan(Job.BEGINNER, kind, basicFallback, false, null)) : Optional.empty();
+    }
+
+    static boolean nativeMode(Character actor) {
+        Job job = actor.getJob();
+        return job == Job.BEGINNER || job.isA(Job.WARRIOR) || job.isA(Job.MAGICIAN);
+    }
+
+    List<Integer> buffs(Character actor) {
+        if (!nativeMode(actor)) return buffs;
+        var candidates = actor.getJob().isA(Job.WARRIOR) ? List.of(1001003)
+                : actor.getJob().isA(Job.MAGICIAN) ? List.of(2001002, 2001003) : List.<Integer>of();
+        return candidates.stream().filter(skill -> actor.getSkillLevel(skill) > 0).toList();
     }
 
     /** Current job first; unrelated branches never participate in attack selection. */

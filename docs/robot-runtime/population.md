@@ -39,7 +39,7 @@ solomapling:
 
 | 类型 | 装配与用途 |
 |---|---|
-| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`potions`、`robot-population`；为已有 MCP 专用角色提供测试能力，不声明新建角色来源 |
+| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`potions`、`hunting-control`、`recovery-control`、`robot-population`；为已有MCP专用角色装配调试能力，继续使用原生普通角色来源 |
 
 `mcp_test` 的默认初始数量为 `0`，MCP 角色仍由 `actor_open` 打开。
 
@@ -49,7 +49,9 @@ solomapling:
 
 `potions` 模块独立导出 `potions.use`，使用指定的已适配物品药效并维护恢复、异常解除两组冷却；两组默认各5000ms，可分别配置 `restore_cooldown_ms` 与 `cleanse_cooldown_ms`。该模块可独立于战斗装配，参数、原生效果及结果见[药剂参考](potions.md)。
 
-后续新增非自主动作模块时，将其加入 `mcp_test.modules` 并随模块共同验收。负责自主目标决策与模块调度的控制模块保留在其业务类型中。MCP 接入代码只引用固定类型名，模块组合在这份配置中维护。
+`hunting-control` 默认 `style: AUTO`，装载及恢复激活后保持 `IDLE`，由 `hunting.start` 开始本场景活动；`hunting.stop` 等活动真实收尾后回待命。`recovery-control` 每次激活自动监控HP/MP和可解异常，显式 `recovery.stop` 后待命，`recovery.start` 或重新激活会再次开始。结束狩猎不结束恢复，配置及状态见[狩猎](hunting.md)和[恢复](recovery.md)参考。
+
+后续能力由各机器人类型明确选择，长期MCP调试能力随 `mcp_test` 共同维护和验收。MCP接入代码只引用固定类型名，模块组合在这份配置中维护。
 
 ## 本地临时类型
 
@@ -77,6 +79,8 @@ initial_population:
 人口服务在每轮世界来源就绪后，按 `initial_population` 创建一次初始环境人口。启动数量是初始值；之后脚本的创建、移除会改变本轮实际数量，配置文件保持原样。世界重新启动后重新按文件初始化。
 
 人口服务拥有自己创建的完整机器人运行体。创建沿环境来源、模板加载及 `BotRegistry` 接入真实角色，再装配该类型的模块；成功结果表示角色和模块初始化完成。关闭先停止模块并等待其工作、资源真实结束，再释放根角色来源及唯一 lane。世界停止沿同一关闭流程处理本服务的实例。
+
+环境来源在 OPEN 的原角色 lane 中，将入口0的位置投影到同 x 正下方的实际地面，作为发布前的出生初值；地图加入完成后通过原生接口结束首次换图状态。入口下无地面时创建明确失败；已发布角色的移动继续由动作模块执行。普通 MCP 来源保留原生登录与保存位置。
 
 已有 MCP 角色通过 `assemble("mcp_test", runtime)` 消费相同类型目录，其角色来源和最终关闭仍归原 MCP 根宿主。现有一代 `EnvironmentPopulation.yaml` 继续管理其批次及人口意图。
 

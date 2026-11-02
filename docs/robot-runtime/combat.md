@@ -1,16 +1,12 @@
 # 指定目标的持续交战
 
-本文描述 #271 第一阶段的当前源码契约。HERO 与 IL_ARCHMAGE 两条职业链先完成实际交战验证，随后沿同一契约补齐旧表：当前完整候选覆盖34个冒险家职业节点及 BEGINNER，旧表28项攻击声明和31项Buff声明已完成来源对照；详细范围与职业特例见[职业能力清单](combat-jobs.md)。其余职业场景的实际验证、完整候选最终验收、正式部署与真人客户端结果仍分别按 Issue 记录确认。
+本文描述 `CombatActionModule` 的源码契约。主控选择目标、允许范围及活动安排，战斗动作完成本次接敌、选招、Buff、持续攻击和收尾。#271 的一期来源与 #272/#127 的真实规则首片分别保留覆盖清单；源码、隔离实际调用、部署和真人客户端状态按对应 Issue 记录。
 
-主控决定接战目标、允许范围、继续或中断。战斗动作在这些约束内选招、调整朝向、接敌并连续攻击，指定目标死亡、失效、不可达或调用结束后返回实际结果，后续活动交由主控决定。
+连续选怪由[狩猎控制](hunting.md)调度，自动用药由[恢复控制](recovery.md)调度，单次药效与分组冷却见[药剂动作](potions.md)。
 
 ## 装配与调用
 
-模块类型为 `combat`，实现 `ActionModule` 职责标记与运行体生命周期协议。强类型输入输出归于操作 `CombatActionModule.ENGAGE`，其声明为 `ModuleFunction<CombatActionModule, CombatRequest, CombatResult>`；同一声明维护用途、参数、结果说明、完成条件和实际 handler。当前可用性从 `modules.help()` 查看。
-
-Java 通过 `context.call(CombatActionModule.ENGAGE, request, callerWork)` 获得 `ModuleCall<CombatResult>`。先检查 `status/reason` 表达的目录可用性，再读取具体业务 `result.outcome()`。脚本以 `modules.call("combat.engage", args)` 消费同一提供者和 handler，JSON 参数在目录边界转换为 `CombatRequest`。该操作在已受理原生短命令结算、导航及交战停止后返回。
-
-当前源码的长期 `mcp_test` 类型显式装配战斗、导航和人口能力。战斗模块只有一个配置项：
+模块类型为 `combat`，实现 `ActionModule`。`CombatActionModule.ENGAGE` 使用同一 `ModuleFunction<CombatActionModule, CombatRequest, CombatResult>` 维护参数、强类型handler、结果及完成条件。
 
 ```yaml
 modules:
@@ -20,9 +16,7 @@ modules:
       timeout_ms: 30000
 ```
 
-模块 `timeout_ms` 为1～120,000毫秒，默认30,000，是调用省略期限时的默认值。环境角色按自己的类型装配同一个定义；测试类型及材料配置放在不提交的 `RobotPopulation.local.yaml`，见[人口配置](population.md#本地临时类型)。已有 MCP 角色继续使用原 `primary` 来源、账号及保存规则。
-
-在已有 OPEN 北斗上下文中，取得当前实际场景的怪物对象 ID 后调用：
+`timeout_ms` 为1～120000ms，默认30000，作为省略调用期限时的默认值。Java通过 `context.call(CombatActionModule.ENGAGE, request, callerWork)` 获得 `ModuleCall<CombatResult>`；脚本沿共享目录：
 
 ```javascript
 modules.call("combat.engage", {
@@ -33,70 +27,76 @@ modules.call("combat.engage", {
 });
 ```
 
-| 函数参数 | 约定 |
+| 参数 | 规则 |
 |---|---|
-| `target_oid` | 必填，当前实际场景中指定怪物的正整数对象 ID，最大2,147,483,647 |
-| `allowed_target_oids` | 可选，允许命中的正整数对象 ID 集合，最多32个不同 ID，须包含指定目标；默认仅指定目标 |
-| `choice` | `AUTO/SINGLE/AOE/ULTIMATE`，默认 `AUTO` |
-| `timeout_ms` | 本次交战期限1～120,000毫秒，默认模块配置 |
+| `target_oid` | 当前实际场景中指定怪物的正整数OID |
+| `allowed_target_oids` | 最多32个不同的正整数OID，须包含指定目标；省略时仅该目标 |
+| `choice` | `AUTO/SINGLE/AOE/ULTIMATE`，默认 `AUTO`，在当前路径可用类别中选择 |
+| `timeout_ms` | 本次交战期限1～120000ms |
 
-`target_oid` 是本次固定目标，朝向及接敌都围绕它执行。命中集合先按当前射程、地形及职业规则筛选，再受允许集合约束；指定目标优先，实际数量仍受技能预设目标上限限制。只有指定目标时，群攻也只能命中该目标。模块不会在调用内自行换成最近的其他怪物。允许集合约束攻击命中的怪物，Buff 仍沿旧队伍作用范围处理。
+目标是本次固定交战对象。目标集合先按当前攻击几何筛选，再受允许集合及技能目标数约束，指定目标优先。目录的 `SUCCEEDED` 表示操作返回，具体游戏结果由 `CombatResult` 表达。
 
-目录返回 `{status: "SUCCEEDED", result: ...}` 表示函数正常返回，具体交战结局读 `result.outcome`。函数缺失、停用或未激活时，目录按既有契约返回顶层 `UNAVAILABLE`。参数错误沿当前脚本错误契约表达。外层 `script_run.timeout_ms` 还覆盖环境准备与结果处理，调用时应给本次交战及收尾留出预算。
+## 当前规则分支
 
-## 职业路径与实例状态
+| 分支 | 范围与语义 |
+|---|---|
+| `native_skill_combat_first_v1` | BEGINNER及冒险家Warrior/Mage族；按真实学会等级和当前属性执行首批已适配技能、普通攻击及Buff |
+| `legacy_simulated_combat_v1` | 其余一期职业路径继续沿旧简化选招、伤害和消耗规则 |
+| `mixed_native_and_legacy_combat_v1` | 本次交战跨越了两类分支，具体派发同时保留各自规则标记 |
 
-父模块在角色来源完成绑定后的首次激活中读取当前职业，构造私有职业树并固定入口。当前路径按“本职业 → 上一转职阶段 → 更早祖先”查询；单体、群攻和大招独立解析，首个提供该类别的节点结束本次查询。Buff 声明按“最早祖先 → 当前职业”的顺序累计。单次调用复用该树，其他分支不参与本次选招。运行期转职后的入口刷新由二期衔接角色事实与通知能力。
+首批攻击为 `1001004/1001005/2001004/2001005`，真实Buff为 `1001003/2001002/2001003`。较高Warrior/Mage职业回溯实际学会的首批祖先技能；未学会时沿当前可用普通攻击或明确的无可用计划结果。详细覆盖及一期来源对照见[职业能力](combat-jobs.md)。
 
-`AUTO` 沿旧规则结合目标数量、群攻范围和大招间隔选择类别。显式 `SINGLE/AOE/ULTIMATE` 只查询该类别；当前路径无适用类别时返回 `NO_ATTACK`，单体按旧规则保留普通攻击兜底。技能段数、范围、武器变体和伤害预设见[职业能力清单](combat-jobs.md)。
+原生分支每次按当前技能等级和WZ取得成本、目标数、段数及效果。派发前检查实际HP/MP、冷却和已声明的攻击/施法阻断状态，资源不足时保留明确事实；成本复用原生计算及其Buff修正，受信施放中若原生效果拒绝，本次伤害也被阻断。角色职业发生变化时重建当前职业入口，后续计划使用新事实。
 
-攻击节奏、大招间隔和 Buff 再次派发时间归模块实例持有。大招间隔沿旧规则为25秒；新交战调用继续使用本实例已有冷却。每个实例同时维持一套有效交战循环，重入调用返回 `BUSY`。暂停后恢复保留实例私有状态，恢复的执行资格使用新模块代次。
+伤害输入由可信有限policy按真实属性、装备与技能数据生成，结果保留 `damage_policy` 及原生派发事实：普攻沿 `basic_melee_v1`，已适配近战技能使用 `native_physical_skill_v1`，魔法使用 `native_magic_skill_v1`，真实自身Buff使用 `native_self_buff_v1`。原生近战、魔法或施法handler负责对应技能结算，并由 `MapleMap.damageMonster` 处理怪物HP、死亡、经验、任务与掉落。完整职业技能及客户端算法按后续切片扩展；当前覆盖以声明的分支和技能为准。
 
-## 接敌、取消与收尾
+## 交战期间的接触入伤
 
-交战循环使用战斗提供者的受管调用 work；每次原生观察、朝向、Buff 或攻击以新的短 work 进入该角色原有的唯一 lane。当前目标不在可攻击范围时，通过 `context.call(NavigationActionModule.MOVE_TO, new MoveToRequest(...), work)` 组合调用导航，传入交战剩余期限；`ModuleCall<NavigationResult>` 区分导航可用性及其具体结果，导航自己的配置期限仍适用。地形范围见[导航参考](navigation.md)。导航缺失或停用返回 `UNAVAILABLE`，无法完成接敌时返回相应的不可达、期限或取消结果。
+首期 `contact_physical_v1` 在当前BEGINNER或冒险家Warrior/Mage真实分支的交战期间观察实际怪物与角色碰撞，包含接敌导航等待时间。它复用WZ怪物身体框，以角色脚点向上50px的竖向探测线与怪物下半身体框检查接触，沿模块实例的2500ms节拍派发有限物理受击输入；节拍跨本实例的不同目标保留，职业变化后按当前分支继续判断。
 
-目录将调用者取消关联到战斗 work，再关联到导航提供者 work。战斗停止、脚本取消、场景变化和根关闭都要求本次循环及在途短命令真实退出；函数同步返回前等待本次组合调用收尾。已发生的位移、伤害、死亡、经验及掉落继续作为事实保留。脚本请求被取消后按原 `request_id` 或 operation 恢复证据，具体方法见[脚本执行](script-execution.md#归属取消和真实收尾)。
+基础输入按怪物PADamage减去已穿装备WDEF及WDEF Buff之和的一半计算，最小为1；随后通过原生 `TakeDamageHandler` 结算MagicGuard、反伤、防御被动、真实HP/MP与死亡。此policy声明的是交战期间的接触受击范围，怪物追击、完整技能AI及客户端回避计算继续按后续支持扩展。
 
-战斗模块使用 `combat-action` 控制资源，已有 MCP 基本 `attack` 使用 `combat`。两者沿各自合法 Grant 共用角色 lane；本模块只约束自身持续交战循环。其他合法攻击入口可能同时影响怪物状态，结果中的 HP 或经验前后差值须结合具体场景归因。
+入伤工作归战斗模块原scope的独立 `ModuleTask`，与交战调用及其期限保持关联；派发前复核本次调用和当前场景。交战结束时先停止并等待该工作真实退出，再返回。恢复控制只观察真实后态并请求药剂，原生入伤和资源消耗分别留证。
 
-## 结果与实际效果
+## 接敌与收尾
 
-`CombatResult.toMap()` 投影本次结果：
+不可直接命中时，通过当前运行体的 `navigation.moveTo` 调用接敌，传递本次剩余期限，并等待导航实际结果。方向、攻击和受击短命令使用角色原有唯一lane；交战循环和停止等待在受管载体执行。
+
+取消、期限、目标失效、场景变化、暂停、卸载和根关闭均停止新的派发，并等待已受理短命令、接敌导航及入伤工作真实结算。已发生的HP/MP、命中、死亡或收益事实保留。同一实例已有交战时，新调用返回 `BUSY`。
+
+## 结果与事实范围
 
 | 字段 | 含义 |
 |---|---|
-| `outcome`、可选 `reason` | 本次结局与具体原因 |
-| `initial_job`、`active_path` | 初始化时的职业及从当前职业到祖先的查询路径 |
-| `buff_skill_ids` | 沿当前路径累计的 Buff 声明，按祖先到当前职业排列 |
-| `buffs_cast` | 本次实际调用旧 Buff 派发的技能记录；短调用可能只派发声明中的一部分 |
-| `attacks` | 按 `provider_job/kind/skill_id/route` 汇总的派发次数 `count` |
-| `hits` | 按怪物汇总的 `object_id/monster_id/hp_before/hp_after/rolled_damage/killed` |
-| `navigation_calls` | 本次接敌的导航调用次数 |
-| `level_before/level_after`、`exp_before/exp_after` | 调用开始与结束时的角色实际等级和经验 |
-| `elapsed_ms`、`execution_stopped` | 本次耗时及本次执行已退出；`BUSY` 请求未新建交战循环 |
-| `rules` | 当前为 `legacy_simulated_combat_v1` |
+| `outcome`、`reason` | 交战结果及具体原因 |
+| `initial_job`、`current_job`、`active_path`、`job_changes` | 初始化职业、当前职业与路径，以及本次入口变化摘要 |
+| `rules` | 本次采用的规则分支 |
+| `buff_skill_ids`、`buffs_cast` | 当前路径的Buff声明及实际派发记录，结合规则分支解释效果 |
+| `attacks` | 按提供节点、类别、技能及路线汇总的派发次数；原生项同时给出实际 `skill_level` 和 `rules` |
+| `hits` | 按怪物汇总的OID、模板、HP前后、输入伤害及死亡事实 |
+| `resources_before`、`resources_after` | 本次资源前后快照 |
+| `native_attacks`、`native_buffs` | 每项已适配技能最近的原生结果，包括实际等级、policy、派发、资源及命中事实 |
+| `native_attack_attempts`、`native_buff_attempts` | 本次原生攻击及Buff的累计尝试次数 |
+| `native_attack_fact_scope`、`native_buff_fact_scope` | `LATEST_PER_SKILL`，上述列表分别保留每技能最近事实 |
+| `contact_hits`、`contact_hit_count` | 最近一次接触结果及本次受击输入的派发次数，HP/MP变化读取具体结果 |
+| `contact_hit_fact_scope` | `LAST`，接触列表保留最后一次事实 |
+| `navigation_calls` | 接敌导航调用次数 |
+| `level_before/after`、`exp_before/after` | 实际等级及经验前后值 |
+| `elapsed_ms`、`execution_stopped` | 本次耗时与执行是否真实退出 |
+
+事实为有界摘要，具体保留范围读取对应的 `*_fact_scope`；累计次数与最近事实分别解释。原生技能事实的 `outcome` 区分 `APPLIED/RESOURCE_UNAVAILABLE/COOLDOWN/REJECTED/CANCELLED/UNKNOWN`。`rolled_damage` 是输入伤害，实际HP减少还受原生规则、过量伤害和其他参与者影响。掉落由原生地图延时任务持有，掉落及后续背包变化须另观察。
 
 | `outcome` | 含义 |
 |---|---|
-| `TARGET_DEAD` | 本次观察到指定目标已死亡 |
-| `TARGET_INVALID` | 开始时目标不存在或已死亡，或过程中被移除、替换 |
-| `UNREACHABLE` | 当前支持的攻击几何或导航无法完成接敌 |
-| `UNAVAILABLE` | 接敌所需的导航提供者不可用 |
-| `CANCELLED` | 调用或所属生命周期请求停止 |
-| `TIMED_OUT` | 交战或组合导航期限已到 |
-| `CONTEXT_CHANGED` | 原角色或场景资格变化 |
-| `BUSY` | 同一实例已有交战，本次调用未启动新循环 |
-| `NO_ATTACK` | 当前查询类别没有可用攻击计划 |
+| `TARGET_DEAD` | 本次观察到指定目标死亡 |
+| `TARGET_INVALID` | 目标缺失、移除、替换或开始时已死亡 |
+| `UNREACHABLE` | 当前攻击几何或导航不能完成接敌 |
+| `UNAVAILABLE` | 所需动作提供者不可用 |
+| `CANCELLED`、`TIMED_OUT`、`CONTEXT_CHANGED` | 调用取消、期限已到或原上下文资格改变 |
+| `BUSY`、`NO_ATTACK` | 已有交战或当前没有可用攻击计划 |
+| `DEAD` | 角色已死亡 |
+| `INDETERMINATE` | 执行或副作用未能确认，保留已取得事实 |
 
-伤害沿 `BotDamageModel` 的自定义模拟数值，V2通过 `BotAttackDriver.strikeNative` 复用攻击包与伤害计算。每个已选目标的总伤害调用一次北斗 `MapleMap.damageMonster`，后续扣血、死亡、经验、任务进度、掉落条件、倍率、位置和归属均沿原生结算。`rolled_damage` 是累计模拟伤害，和实际 HP 减少量分别记录；过量伤害或其他参与者都会影响两者关系。经验跨升级时也应同时查看等级变化。当前结果没有掉落清单，掉落及后续库存变化须另外观察；交战动作本身不拾取地物。
+普通MCP来源与环境Bot消费同一后端，原生登录、倍率及保存继续由各自来源管理。环境角色保留自身登录标记，普通掉落、任务候选及收益资格沿原生规则核对。
 
-V2攻击输入和广播在角色原lane执行，伤害生效及死亡动画沿原生方法契约；原生地图安排的延时掉落继续由地图管理。调用结算和地物实际生成分别取证。V1的 `strike` 和既有自建掉落入口继续保持原有行为。
-
-普通MCP角色沿原登录流程初始化经验、掉落和金币倍率；V2环境来源在绑定实际世界后按同一原生顺序初始化一次，后续换图继续使用当前倍率。环境来源保留临时角色身份及原登录标记：普通掉落沿北斗规则保留，任务掉落候选仍受原生 `isLoggedInWorld()` 资格限制。运行期世界倍率热更对环境来源的覆盖按原生现有边界处理，本轮验证其创建时初始化。
-
-一期沿用旧简化消耗：攻击使用模拟技能等级、伤害和节奏，未接入真实技能学习资格、MP、箭矢或飞镖等完整消费链。Buff 派发主要广播施法角色自身外观；附近真人队友在旧队伍 Buff 路径上可能获得实际效果。`buff_skill_ids` 说明可用声明，`buffs_cast` 说明本次已派发记录，两者都不等同于完整服务器属性效果验证。实际扣血、死亡、经验、掉落及持久化分别核对。
-
-二期通过 #90/#127 接入真实职业规则、消耗和成长驱动的入口变化，继续沿用本次交战请求、结果及模块生命周期边界。当前源码说明不表示这些二期规则已交付。
-
-源码入口为 [CombatActionModule](../../beidou-integration/src/main/java/soloMapling/game/combat/CombatActionModule.java)、[CombatRequest](../../beidou-integration/src/main/java/soloMapling/game/combat/CombatRequest.java) 和 [CombatResult](../../beidou-integration/src/main/java/soloMapling/game/combat/CombatResult.java)。职业声明及旧规则来源由[职业能力清单](combat-jobs.md)维护。
+源码入口为 [CombatActionModule](../../beidou-integration/src/main/java/soloMapling/game/combat/CombatActionModule.java)、[CombatJobTree](../../beidou-integration/src/main/java/soloMapling/game/combat/CombatJobTree.java)、[NativeCombatActions](../../beidou-integration/src/main/java/soloMapling/game/action/NativeCombatActions.java) 和 [NativeContactDamageActions](../../beidou-integration/src/main/java/soloMapling/game/action/NativeContactDamageActions.java)。#272/#127继续按职业与技能族推进后续范围。

@@ -10,8 +10,6 @@ import org.gms.client.inventory.Item;
 import org.gms.net.packet.Packet;
 import org.gms.net.opcodes.SendOpcode;
 import org.gms.constants.skills.Rogue;
-import org.gms.constants.skills.Cleric;
-import org.gms.constants.skills.Bishop;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -67,7 +65,7 @@ class CombatActionModuleTest {
                     new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 30_000), null);
             var result = call.result();
             assertEquals(CombatResult.Outcome.TARGET_DEAD, result.outcome());
-            assertEquals(0, result.initialJob());
+            assertEquals(Job.THIEF.getId(), result.initialJob());
             assertEquals(1, result.hits().size());
             assertEquals(91, result.hits().getFirst().objectId());
             assertEquals(0, result.hits().getFirst().hpAfter());
@@ -101,6 +99,19 @@ class CombatActionModuleTest {
             assertEquals("navigation_unavailable", result.get("reason"));
             verify(fixture.target, never()).damage(any(), anyInt(), anyBoolean());
             assertEquals(0, fixture.runtime.snapshot().lane().pending());
+        }
+    }
+
+    @Test void normalTimeoutDrainsContactWithoutAnUncaughtLaneCancellation() throws Exception {
+        try (var fixture = new Fixture()) {
+            fixture.hp.set(10_000);
+            var result = fixture.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 100), null).result();
+
+            assertEquals(CombatResult.Outcome.TIMED_OUT, result.outcome());
+            assertTrue(fixture.target.isAlive());
+            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            assertTrue(fixture.laneFailures.isEmpty(), fixture.laneFailures.toString());
         }
     }
 
@@ -159,25 +170,13 @@ class CombatActionModuleTest {
         }
     }
 
-    @Test void clericLineAutoHealsOnlyTheUndeadAndKeepsNormalSkillsForLivingTargets() throws Exception {
-        for (Job job : List.of(Job.CLERIC, Job.PRIEST, Job.BISHOP)) {
-            try (var fixture = new Fixture(job, 1372000)) {
-                when(fixture.target.getStats().isUndead()).thenReturn(true);
-                when(fixture.outside.getStats()).thenReturn(mock(MonsterStats.class));
-                var result = fixture.caller.call(CombatActionModule.ENGAGE,
-                        new CombatRequest(91, Set.of(91, 92), CombatRequest.Choice.AUTO, 30_000), null).result();
-                assertEquals(CombatResult.Outcome.TARGET_DEAD, result.outcome());
-                assertEquals(Cleric.HEAL, result.attacks().getFirst().skillId());
-                assertEquals(Job.CLERIC.getId(), result.attacks().getFirst().providerJob());
-                assertEquals(List.of(91), result.hits().stream().map(CombatResult.Hit::objectId).toList());
-                verify(fixture.outside, never()).damage(any(), anyInt(), anyBoolean());
-            }
-        }
+    @Test void higherMageWithoutLearnedAncestorSkillsUsesTheRealBasicGeometry() throws Exception {
         try (var fixture = new Fixture(Job.BISHOP, 1372000)) {
-            var result = fixture.caller.call(CombatActionModule.ENGAGE,
-                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 30_000), null).result();
-            assertEquals(Bishop.ANGEL_RAY, result.attacks().getFirst().skillId());
-            assertEquals(Job.BISHOP.getId(), result.attacks().getFirst().providerJob());
+            assertTrue(CombatActionModule.inAttackRange(fixture.actor, fixture.target));
+            when(fixture.target.getPosition()).thenReturn(new Point(300, 0));
+            assertFalse(CombatActionModule.inAttackRange(fixture.actor, fixture.target));
+            assertTrue(fixture.attackPackets(SendOpcode.MAGIC_ATTACK).isEmpty());
+            assertEquals(0, fixture.runtime.snapshot().lane().pending());
         }
     }
 
@@ -194,9 +193,10 @@ class CombatActionModuleTest {
         final AtomicInteger exp = new AtomicInteger();
         final AtomicInteger hp = new AtomicInteger(100);
         final List<Packet> packets = new CopyOnWriteArrayList<>();
+        final List<Throwable> laneFailures = new CopyOnWriteArrayList<>();
 
-        Fixture() { this(false, Job.BEGINNER, 0); }
-        Fixture(boolean navigation) { this(navigation, Job.BEGINNER, 0); }
+        Fixture() { this(false, Job.THIEF, 1332000); }
+        Fixture(boolean navigation) { this(navigation, Job.THIEF, 1332000); }
         Fixture(Job job, int weaponId) { this(false, job, weaponId); }
 
         Fixture(boolean navigation, Job job, int weaponId) {
@@ -225,6 +225,7 @@ class CombatActionModuleTest {
                     .when(actor).setPosition(any());
             doAnswer(invocation -> { stance.set(invocation.getArgument(0)); return null; }).when(actor).setStance(anyInt());
             when(actor.getHp()).thenReturn(50);
+            when(actor.isAlive()).thenReturn(true);
             when(actor.getChair()).thenReturn(-1);
             when(actor.getTotalMoveSpeedStat()).thenReturn(100);
             when(actor.getTotalJumpStat()).thenReturn(100);
@@ -266,7 +267,11 @@ class CombatActionModuleTest {
             when(outside.isAlive()).thenReturn(true);
             when(outside.isBoss()).thenReturn(true);
             doReturn(List.of(outside, target)).when(map).getMapObjectsInRange(any(), anyDouble(), eq(List.of(MapObjectType.MONSTER)));
-            var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
+            var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), body -> {
+                var thread = new Thread(body, "combat-test-lane");
+                thread.setUncaughtExceptionHandler((worker, failure) -> laneFailures.add(failure));
+                return thread;
+            });
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8, 1,
                     new ExecutionScope.Limits(16, 2, 16, 2)), lane);
             var ref = new GameContext.CharacterRef(runtime.acceptedEpoch(), actor, client, world, channel);

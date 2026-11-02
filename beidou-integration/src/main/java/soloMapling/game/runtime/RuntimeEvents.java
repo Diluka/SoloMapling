@@ -13,7 +13,7 @@ public final class RuntimeEvents {
 
     public enum Kind {
         CREATED, BOUND, MODULE_MOUNTED, MODULE_ACTIVE, MODULE_STOPPING, MODULE_STOPPED,
-        MODULE_UNLOADED, COMMAND_ACCEPTED, COMMAND_SETTLED, ACTION_RESULT, CLOSING, CLOSED
+        MODULE_UNLOADED, COMMAND_ACCEPTED, COMMAND_SETTLED, ACTION_RESULT, CONTROL_ACTIVITY, CLOSING, CLOSED
     }
 
     public record Event(long sequence, Kind kind, String runtimeId, String moduleId,

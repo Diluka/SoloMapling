@@ -9,6 +9,8 @@ import org.gms.net.server.world.World;
 import org.gms.server.maps.MapManager;
 import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Portal;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.FootholdTree;
 import org.gms.util.DatabaseConnection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,11 +103,17 @@ class RobotPopulationOriginTest {
         var portal = mock(Portal.class);
         when(portal.getPosition()).thenReturn(new Point(30, 40));
         doReturn(portal).when(map).getPortal(0);
+        var footholds = new FootholdTree(new Point(-500, -500), new Point(500, 500));
+        footholds.insert(new Foothold(new Point(-100, 180), new Point(100, 220), 1));
+        map.setFootholds(footholds);
         MapManager maps = mock(MapManager.class);
         when(channel.getMapFactory()).thenReturn(maps);
         when(maps.getMap(10000)).thenReturn(map);
         doAnswer(call -> {
             Character arriving = call.getArgument(0);
+            assertEquals(30, arriving.getPosition().x);
+            assertTrue(Math.abs(arriving.getPosition().y - 206) <= 1,
+                    "published origin starts on the real slope within native pixel rounding");
             arriving.setMapId(map.getId());
             members(map).add(arriving);
             return null;
@@ -156,6 +164,7 @@ class RobotPopulationOriginTest {
         assertSame(character, map.getCharacterById(character.getId()));
         assertEquals(2, runtime.observeOrigin().get("channel_id"));
         assertFalse(character.isLoggedIn());
+        assertFalse(character.isChangingMaps(), "the published headless origin has completed its initial map entry");
         assertEquals(4, character.getExpRate());
         assertEquals(3, character.getDropRate());
         assertEquals(2, character.getMesoRate());
@@ -170,6 +179,19 @@ class RobotPopulationOriginTest {
         assertSame(other, channelPlayers.getCharacterById(72));
         assertSame(other, worldPlayers.getCharacterById(72));
         verify(character, never()).saveCharToDB();
+    }
+
+    @Test
+    void spawnWithoutGroundFailsBeforeTemplateCreationOrPublication() {
+        map.setFootholds(new FootholdTree(new Point(-500, -500), new Point(500, 500)));
+        var opening = runtime.acceptOpeningWork();
+        runtime.submitOpening(opening, () -> EnvironmentRobotOrigin.receive(runtime, opening, specification()), () -> {});
+        assertEquals("robot_spawn_ground_unavailable",
+                assertThrows(IllegalStateException.class, executor::drain).getMessage());
+        templates.verifyNoInteractions();
+        assertTrue(runtime.originReleased());
+        assertSame(other, map.getCharacterById(72));
+        verify(map, never()).addPlayer(any());
     }
 
     @Test

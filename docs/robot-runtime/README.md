@@ -4,12 +4,11 @@
 候选实现、源码测试、隔离验收及实际部署分别以对应 Issue 的记录为准。
 类型及初始人口配置见 [#263 的人口参考](population.md)，当前场景目标导航见
 [#122 的导航参考](navigation.md)，指定目标持续交战及职业范围见
-[#271 的战斗参考](combat.md)，普通复活见[#275 的原生动作参考](native-actions.md)，恢复与异常解除见[#279 的药剂参考](potions.md)。
+[战斗参考](combat.md)，普通复活见[原生动作参考](native-actions.md)，单次药效见[药剂参考](potions.md)，持续选怪和自动用药分别见[狩猎控制](hunting.md)与[恢复控制](recovery.md)。
 阶段入口为 [M1 #79](https://github.com/Diluka/SoloMapling/issues/79)，MCP 首环与次环分别为
 [#139](https://github.com/Diluka/SoloMapling/issues/139)、[#140](https://github.com/Diluka/SoloMapling/issues/140)。
 
-当前包含通用角色壳、MCP 控制接入、配置装配、环境实例创建/移除、导航、战斗、原生动作和药剂模块。生产自主练级、巡逻、刷怪、
-跟随及其策略按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
+当前包含通用角色壳、MCP控制接入、配置装配、环境实例创建/移除、导航、战斗、原生动作、药剂及当前场景的狩猎和恢复控制。完整选图、跨图日程和跟随按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
 其中的最小示例仅说明协议接线。`RuntimeModule` 统一可装载模块生命周期；
 `ActionModule` 承担既定目标内的动作能力，`ControlModule` 选择任务目标与约束，安排任务顺序和动作模块调度，并决定继续或中断。
 动作可持续执行、组织步骤及组合其他动作；每项 `ModuleFunction<M, I, R>` 操作分别定义具体输入、结果和完成条件，同一模块可提供多项异构操作。
