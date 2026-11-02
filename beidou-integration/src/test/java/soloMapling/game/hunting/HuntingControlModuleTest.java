@@ -10,6 +10,7 @@ import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.server.life.Monster;
+import org.gms.server.life.MonsterStats;
 import org.gms.server.maps.MapleMap;
 import org.gms.soloacceptance.actor.McpControlModule;
 import org.junit.jupiter.api.AfterEach;
@@ -157,6 +158,55 @@ class HuntingControlModuleTest {
         }
     }
 
+    @Test void unreachableCampTargetIsDeferredWhileAnotherCandidateCanRun() throws Exception {
+        try (var fixture = new Fixture(true, true)) {
+            var alternative = mock(Monster.class);
+            when(alternative.getObjectId()).thenReturn(700002);
+            when(alternative.isAlive()).thenReturn(true);
+            when(alternative.getPosition()).thenReturn(new Point(40, 0));
+            when(alternative.getStats()).thenReturn(mock(MonsterStats.class));
+            when(fixture.monster.getStats()).thenReturn(mock(MonsterStats.class));
+            when(fixture.map.getAllMonsters()).thenReturn(List.of(fixture.monster, alternative));
+            when(fixture.map.getMapObject(alternative.getObjectId())).thenReturn(alternative);
+            var rejected = mock(CombatResult.class);
+            when(rejected.outcome()).thenReturn(CombatResult.Outcome.UNREACHABLE);
+            when(rejected.hits()).thenReturn(List.of());
+            var cancelled = mock(CombatResult.class);
+            when(cancelled.outcome()).thenReturn(CombatResult.Outcome.CANCELLED);
+            when(cancelled.hits()).thenReturn(List.of());
+            var firstAttempts = new AtomicInteger();
+            var selectedAlternative = new AtomicReference<CombatRequest>();
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            when(fixture.combat.execute(any(), any(), any())).thenAnswer(call -> {
+                CombatRequest request = call.getArgument(0);
+                if (request.targetOid() == fixture.monster.getObjectId()) {
+                    firstAttempts.incrementAndGet();
+                    return rejected;
+                }
+                selectedAlternative.set(request);
+                entered.countDown();
+                awaitEvenWhenCancelled(release);
+                return cancelled;
+            });
+            try {
+                assertEquals(HuntingStartResult.Outcome.STARTED,
+                        fixture.hunting.start(new HuntingStartOptions(HuntingStartOptions.Style.CAMP, null)).outcome());
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertEquals(1, firstAttempts.get());
+                assertEquals(alternative.getObjectId(), selectedAlternative.get().targetOid());
+                assertEquals(Set.of(alternative.getObjectId()), selectedAlternative.get().allowedTargetOids());
+                assertTrue(((List<?>) fixture.hunting.snapshot().placement().get("deferred_target_oids"))
+                        .contains(fixture.monster.getObjectId()));
+                assertEquals(0, fixture.hunting.snapshot().kills());
+            } finally {
+                release.countDown();
+                fixture.hunting.stop();
+            }
+            fixture.assertHuntingDrained();
+        }
+    }
+
     private static void eventually(BooleanSupplier condition) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
@@ -190,6 +240,7 @@ class HuntingControlModuleTest {
         final HuntingControlModule hunting;
         final CombatActionModule combat = mock(CombatActionModule.class);
         final Monster monster = mock(Monster.class);
+        final MapleMap map = mock(MapleMap.class);
         final MapGrindProfile profile;
         final MapGrindProfile previousProfile;
         CharacterRuntime.ModuleRef huntingRef;
@@ -201,7 +252,6 @@ class HuntingControlModuleTest {
             var storage = mock(PlayerStorage.class);
             var actor = mock(Character.class);
             var client = mock(Client.class);
-            var map = mock(MapleMap.class);
             var equipped = mock(Inventory.class);
             when(server.isOnline()).thenReturn(true);
             when(server.getWorld(0)).thenReturn(world);

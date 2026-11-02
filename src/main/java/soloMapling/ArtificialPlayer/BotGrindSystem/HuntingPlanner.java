@@ -210,9 +210,9 @@ public final class HuntingPlanner {
         resetProgress(now);
     }
 
-    /** An unreachable ROAM target gets one old retarget window before it is considered again. */
+    /** A confirmed unreachable target gets one old retarget window before it is considered again. */
     public void deferTarget(int oid, long now) {
-        if (style == GrindStyle.ROAM && phase != Phase.RELEASED) deferredTargets.put(oid, now + 4000);
+        if (phase != Phase.RELEASED) deferredTargets.put(oid, now + 4000);
     }
 
     public void release() {
@@ -361,24 +361,21 @@ public final class HuntingPlanner {
 
     private Monster acquireTarget(long now) {
         var position = actor.getPosition();
+        var candidates = map.getAllMonsters().stream()
+                .filter(monster -> !deferredTargets.containsKey(monster.getObjectId())).toList();
         if (style == GrindStyle.ROAM) {
-            return deferredTargets.isEmpty()
-                    ? SpotFinder.nearestHostileCrossLedge(map, position, 900, 140, profile, 400)
-                    : map.getAllMonsters().stream()
-                            .filter(monster -> !deferredTargets.containsKey(monster.getObjectId()) && acceptsSticky(monster))
-                            .min(Comparator.comparingDouble(monster -> position.distanceSq(monster.getPosition())))
-                            .orElse(null);
+            return SpotFinder.nearestHostileCrossLedge(map, position, 900, 140, profile, 400, candidates);
         }
         Monster selected;
         if (stack != null) {
             selected = SpotFinder.bestStackHostile(map, members, assigned, stack.x0() - ACQUIRE_MARGIN,
-                    stack.x1() + ACQUIRE_MARGIN, stack.topY() - 60, stack.bottomY() + 60, position, CLUSTER_RADIUS);
+                    stack.x1() + ACQUIRE_MARGIN, stack.topY() - 60, stack.bottomY() + 60, position, CLUSTER_RADIUS, candidates);
             if (assigned == null) return selected;
         } else {
             var band = personalBand();
             selected = SpotFinder.bestClusterHostileInBand(map, spot.anchor(), spot.radius(),
                     band == null ? spot.anchor().x - spot.radius() - ACQUIRE_MARGIN : band[0],
-                    band == null ? spot.anchor().x + spot.radius() + ACQUIRE_MARGIN : band[1], position, CLUSTER_RADIUS);
+                    band == null ? spot.anchor().x + spot.radius() + ACQUIRE_MARGIN : band[1], position, CLUSTER_RADIUS, candidates);
             if (band == null) return selected;
         }
         if (selected != null) {
@@ -391,10 +388,10 @@ public final class HuntingPlanner {
         personalFallback = true;
         return stack != null
                 ? SpotFinder.bestStackHostile(map, members, null, stack.x0() - ACQUIRE_MARGIN,
-                        stack.x1() + ACQUIRE_MARGIN, stack.topY() - 60, stack.bottomY() + 60, position, CLUSTER_RADIUS)
+                        stack.x1() + ACQUIRE_MARGIN, stack.topY() - 60, stack.bottomY() + 60, position, CLUSTER_RADIUS, candidates)
                 : SpotFinder.bestClusterHostileInBand(map, spot.anchor(), spot.radius(),
                         spot.anchor().x - spot.radius() - ACQUIRE_MARGIN,
-                        spot.anchor().x + spot.radius() + ACQUIRE_MARGIN, position, CLUSTER_RADIUS);
+                        spot.anchor().x + spot.radius() + ACQUIRE_MARGIN, position, CLUSTER_RADIUS, candidates);
     }
 
     private boolean acceptsSticky(Monster monster) {
