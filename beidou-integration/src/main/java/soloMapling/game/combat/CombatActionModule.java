@@ -376,13 +376,11 @@ public final class CombatActionModule implements ActionModule {
                 var failure = new AtomicReference<Throwable>();
                 var step = task.context.acceptWork();
                 try {
-                    task.context.submit("combat-action", step, () -> {
-                        checkpoint(task);
-                        if (task.stopContacts || ownWork.cancelRequested()) throw new CancellationException();
-                    }, () -> {
+                    task.context.submit("combat-action", step, () -> {}, () -> {
                         try {
                             checkpoint(task);
-                            if (task.stopContacts || ownWork.cancelRequested() || !task.target.isAlive()
+                            if (task.stopContacts || ownWork.cancelRequested()) throw new CancellationException();
+                            if (!task.target.isAlive()
                                     || !CombatJobTree.nativeMode(task.actor) || System.nanoTime() < nextContact) return;
                             var hit = NativeContactDamageActions.contact(server, task.scene, task.work,
                                     ownWork, task.deadline);

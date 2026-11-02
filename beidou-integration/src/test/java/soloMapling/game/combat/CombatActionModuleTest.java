@@ -102,6 +102,19 @@ class CombatActionModuleTest {
         }
     }
 
+    @Test void normalTimeoutDrainsContactWithoutAnUncaughtLaneCancellation() throws Exception {
+        try (var fixture = new Fixture()) {
+            fixture.hp.set(10_000);
+            var result = fixture.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 100), null).result();
+
+            assertEquals(CombatResult.Outcome.TIMED_OUT, result.outcome());
+            assertTrue(fixture.target.isAlive());
+            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            assertTrue(fixture.laneFailures.isEmpty(), fixture.laneFailures.toString());
+        }
+    }
+
     @Test void aNativeLinkageFailureReturnsToTheCallerAfterTheDamageWorkSettles() throws Exception {
         try (var fixture = new Fixture()) {
             var failure = new NoSuchMethodError("native_drop_linkage_failure");
@@ -180,6 +193,7 @@ class CombatActionModuleTest {
         final AtomicInteger exp = new AtomicInteger();
         final AtomicInteger hp = new AtomicInteger(100);
         final List<Packet> packets = new CopyOnWriteArrayList<>();
+        final List<Throwable> laneFailures = new CopyOnWriteArrayList<>();
 
         Fixture() { this(false, Job.THIEF, 1332000); }
         Fixture(boolean navigation) { this(navigation, Job.THIEF, 1332000); }
@@ -253,7 +267,11 @@ class CombatActionModuleTest {
             when(outside.isAlive()).thenReturn(true);
             when(outside.isBoss()).thenReturn(true);
             doReturn(List.of(outside, target)).when(map).getMapObjectsInRange(any(), anyDouble(), eq(List.of(MapObjectType.MONSTER)));
-            var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
+            var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), body -> {
+                var thread = new Thread(body, "combat-test-lane");
+                thread.setUncaughtExceptionHandler((worker, failure) -> laneFailures.add(failure));
+                return thread;
+            });
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8, 1,
                     new ExecutionScope.Limits(16, 2, 16, 2)), lane);
             var ref = new GameContext.CharacterRef(runtime.acceptedEpoch(), actor, client, world, channel);

@@ -2,25 +2,17 @@ package soloMapling.ArtificialPlayer.GCMoveSystem;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.xml.sax.SAXException;
+import org.gms.provider.Data;
+import org.gms.provider.DataProvider;
+import org.gms.provider.DataProviderFactory;
+import org.gms.provider.DataTool;
 import org.gms.provider.wz.WZFiles;
 import org.gms.server.life.Monster;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
 import java.awt.*;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-
-import static soloMapling.ArtificialPlayer.GCMoveSystem.BotWzXml.findNamedChild;
-import static soloMapling.ArtificialPlayer.GCMoveSystem.BotWzXml.getIntAttribute;
-import static soloMapling.ArtificialPlayer.GCMoveSystem.BotWzXml.getIntValue;
 
 // Loads a mob's body hitbox (lt/rb bounds) from its WZ Mob/%07d.img.xml and maps it to world
 // coordinates around the mob's position (mirrored when facing left). One rectangle is cached per
@@ -40,6 +32,7 @@ public final class BotMobHitboxProvider {
 
     private static final Map<Integer, Rectangle> boundsByMobId = new ConcurrentHashMap<>();
     private static volatile Path cachedMobRoot = null;
+    private static DataProvider mobData;
 
     private BotMobHitboxProvider() {
     }
@@ -74,23 +67,19 @@ public final class BotMobHitboxProvider {
                 return;
             }
             boundsByMobId.clear();
+            mobData = DataProviderFactory.getDataProvider(WZFiles.MOB);
             cachedMobRoot = currentMobRoot;
         }
     }
 
     private static Rectangle loadMobBounds(int mobId) {
-        Path mobFile = WZFiles.MOB.getFile().resolve(String.format("%07d.img.xml", mobId));
-        if (!Files.isRegularFile(mobFile)) {
+        Data data = mobData.getData(String.format("%07d.img", mobId));
+        if (data == null) {
             log.debug("Bot mob hitbox: no WZ file for mob {} - caching miss", mobId);
             return UNRESOLVED_BOUNDS;
         }
 
-        Document document = parseXmlDocument(mobFile);
-        if (document == null) {
-            return UNRESOLVED_BOUNDS;
-        }
-
-        Rectangle bounds = loadFrameBounds(document.getDocumentElement());
+        Rectangle bounds = loadFrameBounds(data);
         if (bounds == null) {
             log.debug("Bot mob hitbox: no lt/rb bounds on any of {} for mob {} - caching miss",
                     String.join(",", FRAME_GROUP_FALLBACK), mobId);
@@ -99,18 +88,14 @@ public final class BotMobHitboxProvider {
         return bounds;
     }
 
-    private static Rectangle loadFrameBounds(Element root) {
-        Element linkedRoot = resolveLinkedRoot(root);
+    private static Rectangle loadFrameBounds(Data root) {
+        Data linkedRoot = resolveLinkedRoot(root);
         for (String frameGroup : FRAME_GROUP_FALLBACK) {
-            Element group = findNamedChild(linkedRoot, frameGroup);
-            if (group == null) {
-                continue;
-            }
-            Element frame = findNamedChild(group, "0");
+            Data frame = linkedRoot.getChildByPath(frameGroup + "/0");
             if (frame == null) {
                 continue;
             }
-            Rectangle bounds = toBounds(findNamedChild(frame, "lt"), findNamedChild(frame, "rb"));
+            Rectangle bounds = toBounds(frame.getChildByPath("lt"), frame.getChildByPath("rb"));
             if (bounds != null) {
                 return bounds;
             }
@@ -118,20 +103,14 @@ public final class BotMobHitboxProvider {
         return null;
     }
 
-    private static Element resolveLinkedRoot(Element root) {
-        Element info = findNamedChild(root, "info");
-        int linkedMobId = getIntValue(findNamedChild(info, "link"), 0);
+    private static Data resolveLinkedRoot(Data root) {
+        int linkedMobId = DataTool.getInt("info/link", root, 0);
         if (linkedMobId <= 0) {
             return root;
         }
 
-        Path linkedFile = WZFiles.MOB.getFile().resolve(String.format("%07d.img.xml", linkedMobId));
-        if (!Files.isRegularFile(linkedFile)) {
-            return root;
-        }
-
-        Document linkedDocument = parseXmlDocument(linkedFile);
-        return linkedDocument != null ? linkedDocument.getDocumentElement() : root;
+        Data linked = mobData.getData(String.format("%07d.img", linkedMobId));
+        return linked != null ? linked : root;
     }
 
     private static Rectangle calculateWorldBounds(Rectangle modelBounds, Point origin, boolean facingLeft) {
@@ -146,31 +125,21 @@ public final class BotMobHitboxProvider {
         return new Rectangle(origin.x + left, origin.y + modelBounds.y, right - left, modelBounds.height);
     }
 
-    private static Rectangle toBounds(Element lt, Element rb) {
+    private static Rectangle toBounds(Data lt, Data rb) {
         if (lt == null || rb == null) {
             return null;
         }
 
-        int left = Math.min(getIntAttribute(lt, "x", 0), getIntAttribute(rb, "x", 0));
-        int right = Math.max(getIntAttribute(lt, "x", 0), getIntAttribute(rb, "x", 0));
-        int top = Math.min(getIntAttribute(lt, "y", 0), getIntAttribute(rb, "y", 0));
-        int bottom = Math.max(getIntAttribute(lt, "y", 0), getIntAttribute(rb, "y", 0));
+        Point first = DataTool.getPoint(lt), second = DataTool.getPoint(rb);
+        int left = Math.min(first.x, second.x);
+        int right = Math.max(first.x, second.x);
+        int top = Math.min(first.y, second.y);
+        int bottom = Math.max(first.y, second.y);
         if (left >= right || top >= bottom) {
             return null;
         }
 
         return new Rectangle(left, top, right - left, bottom - top);
-    }
-
-    private static Document parseXmlDocument(Path path) {
-        try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            DocumentBuilder builder = factory.newDocumentBuilder();
-            return builder.parse(path.toFile());
-        } catch (ParserConfigurationException | SAXException | IOException e) {
-            log.warn("Failed to load bot mob hitbox data from {}", path, e);
-            return null;
-        }
     }
 
 }
