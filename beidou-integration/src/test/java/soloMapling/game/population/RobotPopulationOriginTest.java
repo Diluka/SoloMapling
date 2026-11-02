@@ -164,6 +164,7 @@ class RobotPopulationOriginTest {
         assertSame(character, map.getCharacterById(character.getId()));
         assertEquals(2, runtime.observeOrigin().get("channel_id"));
         assertFalse(character.isLoggedIn());
+        assertFalse(character.isChangingMaps(), "the published headless origin has completed its initial map entry");
         assertEquals(4, character.getExpRate());
         assertEquals(3, character.getDropRate());
         assertEquals(2, character.getMesoRate());

@@ -74,6 +74,7 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             channel.addPlayer(character);
             world.getPlayerStorage().addPlayer(character);
             map.addPlayer(character);
+            character.setMapTransitionComplete();
             received.current = BotGameContexts.capture(server, character, client, world, channel);
             return received;
         } catch (RuntimeException | Error failure) {
