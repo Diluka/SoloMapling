@@ -16,7 +16,6 @@ import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RoleBinding;
 
-import java.awt.Point;
 import java.util.Map;
 
 import static soloMapling.FreeMarket.FMShopDescGen.getRandomCharacterIGN;
@@ -48,12 +47,9 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             if (map == null || map.getId() != spawn.map()) throw new IllegalStateException("robot_map_unavailable");
             var portal = map.getPortal(0);
             if (portal == null) throw new IllegalStateException("robot_spawn_unavailable");
-            var position = portal.getPosition();
-            var ground = map.getFootholds().findBelow(position);
-            if (ground == null) throw new IllegalStateException("robot_spawn_ground_unavailable");
             // A headless origin has no client to land it after publication.
-            int groundY = (int) Math.round(ground.getY1() + ((double) ground.getY2() - ground.getY1())
-                    * (position.x - (double) ground.getX1()) / (ground.getX2() - (double) ground.getX1()));
+            var position = map.getPointBelow(portal.getPosition());
+            if (position == null) throw new IllegalStateException("robot_spawn_ground_unavailable");
 
             Character character = BotGeneration.loadTemplate();
             BotClient client = (BotClient) character.getClient();
@@ -63,7 +59,7 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
             character.setId(BotRegistry.allocateId());
             character.setName(getRandomCharacterIGN());
             character.setMap(map);
-            character.setPosition(new Point(position.x, groundY));
+            character.setPosition(position);
             character.setStance(5);
             // Initialize only this V2 origin, once; map changes must not multiply rates again.
             character.resetPlayerRates();
