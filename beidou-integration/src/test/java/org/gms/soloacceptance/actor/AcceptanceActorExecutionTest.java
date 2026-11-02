@@ -9,6 +9,8 @@ import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
@@ -23,6 +25,9 @@ import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.population.RobotPopulationService;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -50,7 +55,7 @@ class AcceptanceActorExecutionTest {
     private boolean expectedUnreleasedOrigin;
 
     @BeforeEach
-    void oneSessionAndOneRealSerialQueue() {
+    void oneSessionAndOneRealSerialQueue(@TempDir Path configurationDirectory) throws IOException {
         CharacterTestContext.install();
         org.gms.client.Job.values();
         WorldEpoch.onWorldStarted();
@@ -72,7 +77,19 @@ class AcceptanceActorExecutionTest {
         executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
                 Thread.ofVirtual().uncaughtExceptionHandler((thread, failure) -> { }).factory(),
                 new ThreadPoolExecutor.AbortPolicy());
-        RobotPopulationService population = new RobotPopulationService(new StandardEnvironment());
+        // This fixture exercises MCP work/cleanup ownership, not autonomous control scheduling.
+        var configuration = configurationDirectory.resolve("RobotPopulation.yaml");
+        Files.writeString(configuration, """
+                types:
+                  mcp_test:
+                    modules:
+                      mcp: {type: mcp-control, config: {}}
+                initial_population: {mcp_test: 0}
+                """);
+        var environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("mcp-work-fixture",
+                Map.of("solomapling.robot-population-config", configuration.toString())));
+        RobotPopulationService population = new RobotPopulationService(environment);
         population.onWorldStarted();
         execution = new AcceptanceActorExecution(backend, "helper-module", WorldEpoch.snapshot().token(), executor, population);
     }

@@ -88,7 +88,9 @@ public final class NativeContactDamageActions {
         int damage = Math.max(1, physicalAttack - defense / 2);
         int hpBefore = actor.getHp(), mpBefore = actor.getMp();
         var dispatched = new AtomicBoolean();
-        boolean handlerError = NativePacketDispatch.dispatch(scene.actor().client(), new TakeDamageHandler(),
+        boolean handlerError;
+        try {
+            handlerError = NativePacketDispatch.dispatch(scene.actor().client(), new TakeDamageHandler(),
                 Unpooled.buffer(19).writeIntLE((int) server.getCurrentTime()).writeByte(-1).writeByte(0)
                         .writeIntLE(damage).writeIntLE(target.getId()).writeIntLE(target.getObjectId())
                         .writeByte(target.getPosition().x > position.x ? 0 : 1),
@@ -104,6 +106,10 @@ public final class NativeContactDamageActions {
                         throw new NativeActionService.Invalid("contact_source_changed");
                     }
                 }, () -> dispatched.set(true));
+        } catch (NativeActionService.Invalid changed) {
+            if (!dispatched.get() && changed.reason().equals("contact_source_changed")) return null;
+            throw changed;
+        }
         return new ContactResult(POLICY_ID, dispatched.get(), target.getObjectId(), target.getId(),
                 physicalAttack, defense, damage, hpBefore, actor.getHp(), mpBefore, actor.getMp(),
                 !actor.isAlive(), handlerError, invocationWork.cancelRequested() || contactWork.cancelRequested());

@@ -211,6 +211,20 @@ class NativeContactDamageActionsTest {
         assertEquals(50, actor.getMp());
     }
 
+    @Test void monsterRemovedBetweenTheSnapshotAndDispatchSkipsThisContactAttempt() {
+        when(map.getMonsterByOid(501)).thenReturn(null);
+        clearInvocations(client);
+
+        assertNull(contact());
+
+        assertEquals(100, actor.getHp());
+        assertEquals(50, actor.getMp());
+        verify(map).getAllMonsters();
+        verify(map).getMonsterByOid(501);
+        verify(client, never()).sendPacket(any());
+        assertEquals(0, lane.snapshot().pending());
+    }
+
     @Test void callerAndContactCancellationDuringNativeAdmissionPreventDamage() {
         for (boolean cancelCaller : new boolean[]{true, false}) {
             var caller = scope.acceptWork();
