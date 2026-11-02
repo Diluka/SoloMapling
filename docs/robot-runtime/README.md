@@ -8,7 +8,7 @@
 阶段入口为 [M1 #79](https://github.com/Diluka/SoloMapling/issues/79)，MCP 首环与次环分别为
 [#139](https://github.com/Diluka/SoloMapling/issues/139)、[#140](https://github.com/Diluka/SoloMapling/issues/140)。
 
-当前包含通用角色壳、MCP 控制接入、配置装配、环境实例创建/移除、导航、战斗、原生动作和药剂候选模块。生产自主练级、巡逻、刷怪、
+当前包含通用角色壳、MCP 控制接入、配置装配、环境实例创建/移除、导航、战斗、原生动作和药剂模块。生产自主练级、巡逻、刷怪、
 跟随及其策略按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
 其中的最小示例仅说明协议接线。`RuntimeModule` 统一可装载模块生命周期；
 `ActionModule` 承担既定目标内的动作能力，`StrategyModule` 选择任务目标、约束及继续或中断。
