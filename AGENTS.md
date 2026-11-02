@@ -228,6 +228,7 @@ python3 beidou-integration/scripts/build.py --help
 - `RecoveryControlModule` 类型为 `recovery-control`，每次激活自动开始独立监控；强类型 `start()/stop()` 与 `recovery.start/stop` 同源。显式stop后本轮待命，start或下次激活再次监控。HP/MP阈值默认各50%、范围0～100，0关闭对应触发；cleanse_enabled默认true，check_interval_ms默认500且为正整数。每轮先恢复后净化，同轮HP/MP共同触发只发一次特殊药水。
 - 恢复消费PotionActionModule.USE及原两组CD，curable集合由PotionItem.ALL_CURE.curableDiseases同源提供。死亡等待外部复活，正常换图、资源已满、暂无异常、药剂暂不可用仍保持监控；用药事实与时机诊断分别记录。结束狩猎不结束恢复，模块私有计数和最近结果不替代角色或药剂账本。
 - 两个控制模块通过ModuleTask承载各自原scope中的独立work/carrier，原生观察与动作仍沿角色唯一lane；新短命令使用对应提供者的新work。显式停止只收尾本次活动，下游真实退出后返回；生命周期hook非阻塞发出取消，根等待原工作实际排空。CONTROL_ACTIVITY以安全标识符记录状态/目标/用药转换并绑定工作及模块代次。默认及本地mcp_test装配这两个模块，源码/隔离/部署及真人客户端证据按Issue分别记录，参考docs/robot-runtime/hunting.md、recovery.md。
+- 环境来源在OPEN原lane、地图发布前，按入口0同x下方真实foothold初始化出生位置；无地面明确失败。该初值处理不改变普通MCP登录/保存位置或已发布角色的动作执行。
 
 ## #272 / #127 真实战斗首片
 

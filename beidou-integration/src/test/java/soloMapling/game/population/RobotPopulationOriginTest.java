@@ -9,6 +9,8 @@ import org.gms.net.server.world.World;
 import org.gms.server.maps.MapManager;
 import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Portal;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.FootholdTree;
 import org.gms.util.DatabaseConnection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,11 +103,15 @@ class RobotPopulationOriginTest {
         var portal = mock(Portal.class);
         when(portal.getPosition()).thenReturn(new Point(30, 40));
         doReturn(portal).when(map).getPortal(0);
+        var footholds = new FootholdTree(new Point(-500, -500), new Point(500, 500));
+        footholds.insert(new Foothold(new Point(-100, 180), new Point(100, 220), 1));
+        doReturn(footholds).when(map).getFootholds();
         MapManager maps = mock(MapManager.class);
         when(channel.getMapFactory()).thenReturn(maps);
         when(maps.getMap(10000)).thenReturn(map);
         doAnswer(call -> {
             Character arriving = call.getArgument(0);
+            assertEquals(new Point(30, 206), arriving.getPosition(), "published origin starts on the real slope below its portal");
             arriving.setMapId(map.getId());
             members(map).add(arriving);
             return null;
@@ -170,6 +176,19 @@ class RobotPopulationOriginTest {
         assertSame(other, channelPlayers.getCharacterById(72));
         assertSame(other, worldPlayers.getCharacterById(72));
         verify(character, never()).saveCharToDB();
+    }
+
+    @Test
+    void spawnWithoutGroundFailsBeforeTemplateCreationOrPublication() {
+        doReturn(new FootholdTree(new Point(-500, -500), new Point(500, 500))).when(map).getFootholds();
+        var opening = runtime.acceptOpeningWork();
+        runtime.submitOpening(opening, () -> EnvironmentRobotOrigin.receive(runtime, opening, specification()), () -> {});
+        assertEquals("robot_spawn_ground_unavailable",
+                assertThrows(IllegalStateException.class, executor::drain).getMessage());
+        templates.verifyNoInteractions();
+        assertTrue(runtime.originReleased());
+        assertSame(other, map.getCharacterById(72));
+        verify(map, never()).addPlayer(any());
     }
 
     @Test
