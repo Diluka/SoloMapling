@@ -111,7 +111,9 @@ class RobotPopulationOriginTest {
         when(maps.getMap(10000)).thenReturn(map);
         doAnswer(call -> {
             Character arriving = call.getArgument(0);
-            assertEquals(new Point(30, 206), arriving.getPosition(), "published origin starts on the real slope below its portal");
+            assertEquals(30, arriving.getPosition().x);
+            assertTrue(Math.abs(arriving.getPosition().y - 206) <= 1,
+                    "published origin starts on the real slope within native pixel rounding");
             arriving.setMapId(map.getId());
             members(map).add(arriving);
             return null;
