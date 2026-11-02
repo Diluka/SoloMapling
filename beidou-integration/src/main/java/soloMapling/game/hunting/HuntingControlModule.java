@@ -77,7 +77,10 @@ public final class HuntingControlModule implements ControlModule {
         return new Config(HuntingStartOptions.Style.valueOf(values.getOrDefault("style", "AUTO").toString()));
     }
 
-    @Override public synchronized void onActivated(CharacterRuntime.ModuleContext context) { this.context = context; }
+    @Override public synchronized void onActivated(CharacterRuntime.ModuleContext context) {
+        if (active != null) finish(active);
+        this.context = context;
+    }
 
     @Override public void onStopping(CharacterRuntime.ModuleContext context, CharacterRuntime.StopMode mode) {
         Activity activity;
@@ -91,6 +94,7 @@ public final class HuntingControlModule implements ControlModule {
     public HuntingStartResult start(HuntingStartOptions options) {
         Activity activity;
         synchronized (this) {
+            if (active != null) finish(active);
             if (active != null) return new HuntingStartResult(HuntingStartResult.Outcome.BUSY,
                     "hunting_busy", snapshot(active, active.state));
             if (context == null || !context.scope().isActive()) return new HuntingStartResult(
@@ -104,6 +108,7 @@ public final class HuntingControlModule implements ControlModule {
         }
         var admission = activity.admission.join();
         if (admission != HuntingStartResult.Outcome.STARTED) activity.task.await();
+        if (activity.task.work().isSettled()) finish(activity);
         synchronized (this) {
             return new HuntingStartResult(admission, admission == HuntingStartResult.Outcome.STARTED
                     ? "activity_started" : activity.endReason, snapshot(activity, activity.state));

@@ -84,12 +84,23 @@ class ActorControlServiceTest {
     private final List<ActorControlService> services = new ArrayList<>();
 
     @BeforeEach
-    void prepare() {
+    void prepare(@TempDir Path configurationDirectory) throws IOException {
         CharacterTestContext.install();
         org.gms.client.Job.values();
         AcceptanceObservationRuntime.onWorldStarted();
-        population = new RobotPopulationService(new StandardEnvironment());
-        population.onWorldStarted();
+        // Protocol tests manually advance the lane; autonomous controls have their own real-carrier tests.
+        population = populationFromConfig(configurationDirectory, """
+                types:
+                  mcp_test:
+                    modules:
+                      mcp: {type: mcp-control, config: {}}
+                      navigation: {type: navigation, config: {}}
+                      combat: {type: combat, config: {}}
+                      native: {type: native-actions, config: {}}
+                      potions: {type: potions, config: {}}
+                      population: {type: robot-population, config: {}}
+                initial_population: {mcp_test: 0}
+                """);
         backend = mock(NativeActorBackend.class);
         chatDispatch = mock(ChatDispatch.class);
         when(backend.chatTimingCapabilities()).thenReturn(Map.of("chat_minimum_interval_ms", 200L,
@@ -120,9 +131,6 @@ class ActorControlServiceTest {
 
     @Test
     void anAcceptedOpenIsNotReportedOnlineBeforeNativeEvidenceAndClosedRequestDoesNotReopen() throws Exception {
-        assertFalse(population.configuration().types().containsKey("navigation_probe"));
-        assertTrue(population.configuration().types().get("mcp_test").modules().stream()
-                .anyMatch(module -> module.instanceId().equals("combat")));
         ActorControlService service = service(4, 20, 64);
         var opened = open(service, "open-one");
         assertEquals("QUEUED", opened.get("status"));

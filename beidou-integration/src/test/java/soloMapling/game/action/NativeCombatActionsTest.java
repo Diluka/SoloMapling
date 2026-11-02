@@ -46,12 +46,11 @@ import java.awt.Point;
 import java.awt.Rectangle;
 import java.io.FileInputStream;
 import java.nio.file.Path;
-import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.AbstractExecutorService;
-import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -71,7 +70,8 @@ class NativeCombatActionsTest {
     private ExecutionScope scope;
     private CharacterCommandLane lane;
     private CharacterCommandLane.ControlPermit permit;
-    private ManualExecutor executor;
+    private ThreadPoolExecutor executor;
+    private ItemInformationProvider items;
     private MockedStatic<Server> servers;
     private MockedStatic<ItemInformationProvider> metadata;
     private MockedStatic<SkillFactory> skills;
@@ -105,7 +105,7 @@ class NativeCombatActionsTest {
         when(server.getCurrentTime()).thenReturn(10_000L);
         servers = mockStatic(Server.class);
         servers.when(Server::getInstance).thenReturn(server);
-        var items = mock(ItemInformationProvider.class);
+        items = mock(ItemInformationProvider.class);
         when(items.getWeaponType(1302000)).thenReturn(WeaponType.SWORD1H);
         when(items.getWeaponType(1372000)).thenReturn(WeaponType.WAND);
         metadata = mockStatic(ItemInformationProvider.class);
@@ -156,24 +156,41 @@ class NativeCombatActionsTest {
         var ref = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), actor, client, world, channel);
         scene = new GameContext.SceneRef(ref, map, null, null);
         scope = new ExecutionScope(ref.epoch(), new ExecutionScope.Limits(16, 1, 8, 1));
-        executor = new ManualExecutor();
+        executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), body ->
+                new Thread(() -> {
+                    try (var worldLookup = mockStatic(Server.class);
+                         var skillLookup = mockStatic(SkillFactory.class);
+                         var itemLookup = mockStatic(ItemInformationProvider.class)) {
+                        worldLookup.when(Server::getInstance).thenReturn(server);
+                        itemLookup.when(ItemInformationProvider::getInstance).thenReturn(items);
+                        learned.forEach((id, skill) -> skillLookup.when(() -> SkillFactory.getSkill(id)).thenReturn(skill));
+                        body.run();
+                    }
+                }, "native-combat-action-test"));
         lane = new CharacterCommandLane(8, 1, executor);
         permit = lane.bindGrantedPermit(scope, ref, lane.declareGrant(scope),
                 () -> NativeContextChecks.requireCharacterCurrent(server, ref));
         role(Job.MAGICIAN, 1372000);
     }
 
-    @AfterEach void cleanup() {
-        if (lane != null) lane.close();
-        if (executor != null) executor.shutdown();
-        ThreadLocalUtil.removeCurrentClient();
-        if (metadata != null) metadata.close();
-        if (servers != null) servers.close();
-        if (skills != null) skills.close();
-        ExecutionScope.tryBeginWorldStop();
+    @AfterEach void cleanup() throws Exception {
+        try {
+            if (actor != null) actor.cancelAllBuffs(false);
+        } finally {
+            if (lane != null) lane.close();
+            if (executor != null) {
+                executor.shutdown();
+                assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+            }
+            ThreadLocalUtil.removeCurrentClient();
+            if (metadata != null) metadata.close();
+            if (servers != null) servers.close();
+            if (skills != null) skills.close();
+            ExecutionScope.tryBeginWorldStop();
+        }
     }
 
-    @Test void learnedMagicClawUsesCurrentWzLevelAndConsumesNativeMpOnceForItsTwoLines() {
+    @Test void learnedMagicClawUsesCurrentWzLevelAndConsumesNativeMpOnceForItsTwoLines() throws Exception {
         assertNull(NativeCombatActions.plan(actor, 2001005));
         learn(2001005, 1);
         var target = monster(501, 40);
@@ -196,7 +213,7 @@ class NativeCombatActionsTest {
         assertTrue(actor.getInventory(InventoryType.USE).list().isEmpty());
     }
 
-    @Test void slashBlastConsumesOneRealHpMpCostForTheWholeNativeTargetSet() {
+    @Test void slashBlastConsumesOneRealHpMpCostForTheWholeNativeTargetSet() throws Exception {
         role(Job.WARRIOR, 1302000);
         learn(1001005, 1);
         var first = monster(501, 40); var second = monster(502, 60);
@@ -211,7 +228,7 @@ class NativeCombatActionsTest {
         verify(map).damageMonster(eq(actor), eq(second), anyInt());
     }
 
-    @Test void nativeInfinityAllowsTheLearnedAncestorSpellAtZeroMpWithoutAnMpCheatPoint() {
+    @Test void nativeInfinityAllowsTheLearnedAncestorSpellAtZeroMpWithoutAnMpCheatPoint() throws Exception {
         role(Job.BISHOP, 1372000);
         learn(2001005, 1);
         learn(2321004, 1);
@@ -230,7 +247,7 @@ class NativeCombatActionsTest {
         verify(actor.getAutoBanManager(), never()).addPoint(eq(AutobanFactory.MPCON), anyString());
     }
 
-    @Test void resourceAndSealRejectionsHaveNoNativeAttackEffectWhileSealedBasicAttackRemainsLegal() {
+    @Test void resourceAndSealRejectionsHaveNoNativeAttackEffectWhileSealedBasicAttackRemainsLegal() throws Exception {
         learn(2001005, 1);
         var target = monster(501, 40);
         actor.updateHpMp(201, 9);
@@ -260,7 +277,7 @@ class NativeCombatActionsTest {
         assertTrue(actor.hasDisease(Disease.SEAL));
     }
 
-    @Test void magicGuardRunsNativeSpecialMoveAndRegistersTheLearnedEffectWithItsActualCost() {
+    @Test void magicGuardRunsNativeSpecialMoveAndRegistersTheLearnedEffectWithItsActualCost() throws Exception {
         learn(2001002, 1);
         var result = onLane(work -> NativeCombatActions.buff(server, scene, work, 2001002));
         assertEquals(NativeCombatActions.Outcome.APPLIED, result.outcome());
@@ -301,11 +318,11 @@ class NativeCombatActionsTest {
         return target;
     }
 
-    private NativeCombatActions.StrikeResult strike(NativeCombatActions.Plan plan, List<Monster> targets) {
+    private NativeCombatActions.StrikeResult strike(NativeCombatActions.Plan plan, List<Monster> targets) throws Exception {
         return onLane(work -> NativeCombatActions.strike(server, scene, work, plan, targets, false));
     }
 
-    private <T> T onLane(Function<ExecutionScope.WorkHandle, T> action) {
+    private <T> T onLane(Function<ExecutionScope.WorkHandle, T> action) throws Exception {
         var work = scope.acceptWork();
         var result = new AtomicReference<T>();
         var failure = new AtomicReference<Throwable>();
@@ -313,8 +330,7 @@ class NativeCombatActionsTest {
             try { result.set(action.apply(work)); }
             catch (RuntimeException | Error stopped) { failure.set(stopped); }
         }, () -> {});
-        executor.runNext();
-        work.completion().toCompletableFuture().join();
+        work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertTrue(work.isSettled());
         assertEquals(0, lane.snapshot().pending());
         if (failure.get() instanceof Error fatal) throw fatal;
@@ -323,18 +339,4 @@ class NativeCombatActionsTest {
         return result.get();
     }
 
-    private static final class ManualExecutor extends AbstractExecutorService {
-        private final ArrayDeque<Runnable> queued = new ArrayDeque<>();
-        private boolean stopped;
-        @Override public void execute(Runnable command) {
-            if (stopped) throw new RejectedExecutionException();
-            queued.add(command);
-        }
-        void runNext() { queued.remove().run(); }
-        @Override public void shutdown() { stopped = true; }
-        @Override public List<Runnable> shutdownNow() { stopped = true; var result = List.copyOf(queued); queued.clear(); return result; }
-        @Override public boolean isShutdown() { return stopped; }
-        @Override public boolean isTerminated() { return stopped && queued.isEmpty(); }
-        @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return isTerminated(); }
-    }
 }

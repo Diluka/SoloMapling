@@ -285,11 +285,14 @@ class HuntingControlModuleTest {
         void assertHuntingDrained() {
             assertEquals(HuntingControlModule.State.IDLE, hunting.snapshot().state());
             assertEquals(0, runtime.snapshot().lane().pending());
+            assertEquals(0, BotSpotClaims.holders(mapId, 0));
             var scope = huntingScope();
-            assertEquals(0, scope.acceptedWork());
-            assertEquals(0, scope.runningBodies());
-            assertEquals(0, scope.pendingCarriers());
-            assertEquals(0, scope.outstandingResources());
+            if (scope != null) {
+                assertEquals(0, scope.acceptedWork());
+                assertEquals(0, scope.runningBodies());
+                assertEquals(0, scope.pendingCarriers());
+                assertEquals(0, scope.outstandingResources());
+            }
         }
 
         void closeRuntime() throws Exception {

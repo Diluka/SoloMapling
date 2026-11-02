@@ -25,7 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import soloMapling.ArtificialPlayer.GCMoveSystem.BotMobHitboxProvider;
-import soloMapling.beidou.CharacterTestContext;
+import soloMapling.beidou.InventoryMetadataTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.context.WorldEpoch;
@@ -35,8 +35,9 @@ import soloMapling.game.execution.ExecutionScope;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.List;
-import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -51,19 +52,18 @@ class NativeContactDamageActionsTest {
     private Client client;
     private MapleMap map;
     private Monster target;
-    private MonsterStats stats;
     private Equip armor;
     private GameContext.SceneRef scene;
     private ExecutionScope scope;
     private CharacterCommandLane lane;
     private CharacterCommandLane.ControlPermit permit;
-    private DirectExecutor executor;
+    private ThreadPoolExecutor executor;
     private MockedStatic<Server> servers;
     private MockedStatic<SkillFactory> skills;
     private MockedStatic<BotMobHitboxProvider> bodies;
 
     @BeforeEach void fixture() throws Exception {
-        CharacterTestContext.install();
+        InventoryMetadataTestContext.install();
         Job.values();
         WorldEpoch.onWorldStarted();
         try (var providers = mockStatic(DataProviderFactory.class)) {
@@ -105,7 +105,7 @@ class NativeContactDamageActionsTest {
         when(map.getCharacterById(41)).thenReturn(actor);
         actor.setMap(map);
         actor.setMapId(10000);
-        stats = new MonsterStats();
+        var stats = new MonsterStats();
         stats.hp = 1000;
         stats.PADamage = 100;
         stats.name = "contact-material";
@@ -132,15 +132,31 @@ class NativeContactDamageActionsTest {
         var ref = new GameContext.CharacterRef(WorldEpoch.snapshot().token(), actor, client, world, channel);
         scene = new GameContext.SceneRef(ref, map, null, null);
         scope = new ExecutionScope(ref.epoch(), new ExecutionScope.Limits(4, 1, 2, 1));
-        executor = new DirectExecutor();
+        executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), body ->
+                new Thread(() -> {
+                    try (var workerServer = mockStatic(Server.class);
+                         var workerSkills = mockStatic(SkillFactory.class);
+                         var workerBodies = mockStatic(BotMobHitboxProvider.class)) {
+                        workerServer.when(Server::getInstance).thenReturn(server);
+                        workerBodies.when(() -> BotMobHitboxProvider.getMobBounds(target)).thenAnswer(call ->
+                                new Rectangle(target.getPosition().x - 10, target.getPosition().y - 20, 20, 20));
+                        body.run();
+                    }
+                }, "contact-test-lane"));
         lane = new CharacterCommandLane(4, 1, executor);
         permit = lane.bindGrantedPermit(scope, ref, lane.declareGrant(scope),
                 () -> NativeContextChecks.requireSceneCurrent(server, scene));
     }
 
-    @AfterEach void cleanup() {
+    @AfterEach void cleanup() throws InterruptedException {
         if (lane != null) lane.close();
-        if (executor != null) executor.shutdown();
+        if (executor != null) {
+            executor.shutdown();
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+                assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+            }
+        }
         if (bodies != null) bodies.close();
         if (skills != null) skills.close();
         if (servers != null) servers.close();
@@ -149,8 +165,6 @@ class NativeContactDamageActionsTest {
     }
 
     @Test void nativeBodyContactLosesHpAndUsesActualEquipmentDefense() {
-        var previous = mock(Client.class);
-        ThreadLocalUtil.setCurrentClient(previous);
         var first = contact();
         assertTrue(first.dispatched());
         assertFalse(first.handlerError());
@@ -161,7 +175,6 @@ class NativeContactDamageActionsTest {
         assertEquals(90, first.hpLost());
         assertEquals(10, actor.getHp());
         assertEquals(0, first.mpLost());
-        assertSame(previous, ThreadLocalUtil.getCurrentClient());
 
         actor.updateHpMp(100, 50);
         armor.setWdef((short) 100);
@@ -192,7 +205,7 @@ class NativeContactDamageActionsTest {
         target.setPosition(new Point(100, 0));
         assertNull(contact());
         target.setPosition(new Point(0, 0));
-        stats.friendly = true;
+        target.getStats().setFriendly(true);
         assertNull(contact());
         assertEquals(100, actor.getHp());
         assertEquals(50, actor.getMp());
@@ -207,10 +220,13 @@ class NativeContactDamageActionsTest {
                 scope.requestCancel(cancelCaller ? caller : contact);
                 return true;
             }).when(client).isLoggedIn();
-            scope.runTracked(caller, () -> lane.submit(contact, permit, () -> {
-                try { NativeContactDamageActions.contact(server, scene, caller, contact, Long.MAX_VALUE); }
-                catch (CancellationException stopped) { cancelled.set(stopped); }
-            }, () -> {}));
+            scope.runTracked(caller, () -> {
+                lane.submit(contact, permit, () -> {
+                    try { NativeContactDamageActions.contact(server, scene, caller, contact, Long.MAX_VALUE); }
+                    catch (CancellationException stopped) { cancelled.set(stopped); }
+                }, () -> {});
+                contact.completion().toCompletableFuture().join();
+            });
             caller.completion().toCompletableFuture().join();
             contact.completion().toCompletableFuture().join();
             assertNotNull(cancelled.get());
@@ -227,7 +243,11 @@ class NativeContactDamageActionsTest {
         var result = new AtomicReference<NativeContactDamageActions.ContactResult>();
         var failure = new AtomicReference<Throwable>();
         lane.submit(work, permit, () -> {
-            try { result.set(NativeContactDamageActions.contact(server, scene, work, work, Long.MAX_VALUE)); }
+            try {
+                var previous = ThreadLocalUtil.getCurrentClient();
+                result.set(NativeContactDamageActions.contact(server, scene, work, work, Long.MAX_VALUE));
+                assertSame(previous, ThreadLocalUtil.getCurrentClient());
+            }
             catch (RuntimeException | Error problem) { failure.set(problem); }
         }, () -> {});
         work.completion().toCompletableFuture().join();
@@ -236,13 +256,4 @@ class NativeContactDamageActionsTest {
         return result.get();
     }
 
-    private static final class DirectExecutor extends AbstractExecutorService {
-        private boolean stopped;
-        @Override public void shutdown() { stopped = true; }
-        @Override public List<Runnable> shutdownNow() { stopped = true; return List.of(); }
-        @Override public boolean isShutdown() { return stopped; }
-        @Override public boolean isTerminated() { return stopped; }
-        @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return stopped; }
-        @Override public void execute(Runnable command) { command.run(); }
-    }
 }

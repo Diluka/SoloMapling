@@ -189,6 +189,13 @@ class RecoveryControlModuleTest {
             fixture.recoveryRef = fixture.runtime.activate(fixture.recoveryRef);
             eventually(() -> fixture.actor.getHp() == 60 && fixture.actor.getMp() == 26);
             assertEquals("RUNNING", fixture.recovery.status().state().name());
+
+            // Resume immediately when drain is reported, without first waiting for IDLE publication.
+            var paused = fixture.runtime.stop(fixture.recoveryRef, CharacterRuntime.StopMode.PAUSE);
+            assertEquals(ExecutionScope.DrainResult.DRAINED, paused.await(Duration.ofSeconds(5)));
+            fixture.recoveryRef = fixture.runtime.activate(fixture.recoveryRef);
+            eventually(() -> fixture.recovery.status().state() == RecoveryStatus.State.RUNNING
+                    && fixture.recovery.status().checks() > 0);
             fixture.recovery.stop();
             fixture.assertRecoveryDrained();
         }

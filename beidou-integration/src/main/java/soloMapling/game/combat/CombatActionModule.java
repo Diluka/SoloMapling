@@ -191,6 +191,20 @@ public final class CombatActionModule implements ActionModule {
             synchronized (this) { active = null; }
             if (task.interrupted) Thread.currentThread().interrupt();
         }
+        // A contact body can leave the lane before its carrier publishes the failure.
+        // Only that recorded failure is reconsidered after draining; completed effects remain facts.
+        var contactFailure = task.contactFailure.get();
+        if (contactFailure instanceof Halt stopped) {
+            outcome = stopped.outcome;
+            reason = stopped.getMessage();
+        } else if (contactFailure instanceof GameContext.Invalid changed) {
+            outcome = Outcome.CONTEXT_CHANGED;
+            reason = changed.reason().name();
+        } else if (contactFailure instanceof Error fatal) {
+            throw fatal;
+        } else if (contactFailure instanceof RuntimeException failed) {
+            throw failed;
+        }
         return result(task, outcome, reason);
     }
 

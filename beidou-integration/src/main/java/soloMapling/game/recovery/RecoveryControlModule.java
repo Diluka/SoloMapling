@@ -79,6 +79,8 @@ public final class RecoveryControlModule implements ControlModule {
     @Override public synchronized void onUnloaded() { context = null; }
 
     public synchronized RecoveryStartResult start() {
+        // Scope drain may be observed before the old carrier's completion callbacks run.
+        if (active != null && active.task.work().isSettled()) finished(active);
         if (active != null) {
             return new RecoveryStartResult(active.state == RecoveryStatus.State.STOPPING
                     ? RecoveryStartResult.Outcome.BUSY : RecoveryStartResult.Outcome.ALREADY_RUNNING, snapshot(active));
