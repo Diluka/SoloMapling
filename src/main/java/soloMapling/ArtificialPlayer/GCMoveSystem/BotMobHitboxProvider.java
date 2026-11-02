@@ -27,7 +27,7 @@ import static soloMapling.ArtificialPlayer.GCMoveSystem.BotWzXml.getIntValue;
 // distinct mob id - bounded by monster species, not by mob/bot count - and the cache is cleared if
 // the WZ root path changes. Used by the bot contact-damage overlap check.
 // Extracted from GreenCatMS and converted from a getInstance() singleton to all-static. Credit: NutNNut.
-final class BotMobHitboxProvider {
+public final class BotMobHitboxProvider {
     private static final Logger log = LoggerFactory.getLogger(BotMobHitboxProvider.class);
 
     // Sentinel stored when a mob has no usable hitbox frame, so we don't re-parse/re-log every tick
@@ -44,7 +44,7 @@ final class BotMobHitboxProvider {
     private BotMobHitboxProvider() {
     }
 
-    static Rectangle getMobBounds(Monster mob) {
+    public static Rectangle getMobBounds(Monster mob) {
         if (mob == null) {
             return null;
         }
