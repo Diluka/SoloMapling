@@ -108,7 +108,7 @@ python3 beidou-integration/scripts/build.py --help
 ## #263 类型配置与 #122 导航接入
 
 - 当前源码通过 `solomapling.robot-population-config` 读取单个路径或有序文件列表；未指定时仅读取内置默认文件。后文件按类型名完整替换同名 `types`，按类型名覆盖 `initial_population`，合并后一次编译装配计划及核对引用。每轮世界启动只创建一次初始人口；运行期通过 `robots.create/remove` 增减完整实例，文件与实例模块组合保持固定。
-- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/combat/native-actions/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主策略放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
+- 已有 MCP 普通专用角色固定引用 `mcp_test` 类型，保留原 profile、原生来源和当前位置。默认文件只包含长期使用的 `mcp_test`，显式装配 `mcp-control/navigation/combat/native-actions/potions/robot-population`，初始数量0；以后新增非自主模块同步默认和本地配置及验收，自主策略放入对应业务类型。`navigation_probe` 等测试类型定义在 Git 忽略的 `RobotPopulation.local.yaml`，按需显式加载；现有一代人口计划继续保留。
 - `navigation.moveTo(x,y)` 在同一实际场景同步完成规划、移动、抵达判断及本次收尾；可选调用参数`timeout_ms`取1..120000ms，实际取与模块配置期限的较小值，供组合动作传递剩余预算。规划和物理预测复用旧导航实现，实际帧沿原生移动入口和导航提供者自己的新work进入原角色lane；调用work已在执行中，不能二次提交。旧move/stop入口使用同一导航提供者。
 - 脚本默认期限30秒、最大120秒，调用者取消持续关联到提供者work。导航自身默认30秒、8px容差、3秒无进展；真实抵达、失败、已发生位移和实际停止分别核验。源码和部署结果以#122/#263证据为准，参考 `docs/robot-runtime/population.md`、`navigation.md` 及脚本调试技能。
 
@@ -194,6 +194,12 @@ python3 beidou-integration/scripts/build.py --help
 - 复活在原生派发点确认死亡；原本存活、实际复活、事件接管仍未复活及未知后态分别表达。合法换图后继续沿原CharacterRef及epoch确认HP和新场景，既发效果保留；处理器返回、事件裁决、真实复活及事件后续任务完成分别核对。模块只收尾本次原lane工作，EIM/EM仍归原所有者，不能把Future/operation已终态当实际排空。
 - 兼容层用Solo普通Java回调承载延时金币/机关掉落，避免ITD lambda引用不存在的宿主synthetic方法；原事件脚本的 `respawn(eim,MapleMap)` 转交原int重载。官方submodule与脚本保持原样。
 - 长期 `mcp_test` 显式装配combat与native-actions；临时测试类型和材料只放未提交的RobotPopulation.local.yaml。完整公共契约、职业清单、脚本使用与实际交付证据见 `docs/robot-runtime/modules.md`、`combat.md`、`combat-jobs.md`、`native-actions.md` 及对应Issue；源码与各层实测状态分别记录。
+## #279 药剂动作一期候选
+
+- `PotionActionModule` 类型为 `potions`，通过同一类型化 `ModuleFunction` 导出 `potions.use(itemId)`，可独立于战斗装配。支持项枚举维护2000004特殊药水与2050004万能疗伤药的ID、冷却组和说明；药效来自北斗WZ与绑定角色原有 `AbstractPlayerInteraction.useItem`，无需库存且不扣药水。
+- `restore` 与 `cleanse` 两组默认各5000ms，配置分别为 `restore_cooldown_ms`、`cleanse_cooldown_ms`。同一次原lane短命令内检查冷却、施药、确认真实HP/MP及异常后态并记录对应组CD；无效果、未适配项及派发前取消保持已有CD，生效后取消保留事实。暂停/恢复不重置冷却，不同角色分别维护。
+- 药剂使用提供者原scope、ControlPermit与角色唯一lane；导出work已在执行，效果短命令另取原scope新work并等待实际结算。模块只收尾自己的工作与资源，疾病到期任务沿原生所有权。默认和本地 `mcp_test` 随本切片共同验收，候选、隔离及实际部署状态按#279证据记录；公共契约见 `docs/robot-runtime/potions.md`，战斗补给联合验收由#272消费。
+
 ## 导航抵达容差
 
 - `arrival_tolerance_px` 支持4～32767px，默认8px；配置边界拒绝小于现有地面4px停靠距离的值，不自动钳制，也不修改原路径规划、物理积分及停靠算法。实际交付以#269的分层验收证据为准。

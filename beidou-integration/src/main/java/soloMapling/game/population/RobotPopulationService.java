@@ -11,6 +11,7 @@ import soloMapling.game.combat.CombatActionModule;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.nativeaction.NativeActionModule;
+import soloMapling.game.potion.PotionActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeModule;
 
@@ -49,6 +50,7 @@ public final class RobotPopulationService {
         registry.register(NavigationActionModule.DEFINITION, NavigationActionModule::parseConfig);
         registry.register(CombatActionModule.DEFINITION, CombatActionModule::parseConfig);
         registry.register(NativeActionModule.DEFINITION, NativeActionModule::parseConfig);
+        registry.register(PotionActionModule.DEFINITION, PotionActionModule::parseConfig);
         registry.register(RobotPopulationModule.definition(this), ignored -> null);
     }
 
