@@ -1,6 +1,6 @@
 # 机器人模块定义与共享函数
 
-本文面向接入模块的开发者，描述 #205 的模块契约、#270 的动作/策略入口及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航、战斗、原生动作、药剂和世界人口能力模块；具体业务类型按配置选择模块。持续交战见[#271 战斗参考](combat.md)，普通复活见[#275 原生动作参考](native-actions.md)，恢复与异常解除见[#279 药剂参考](potions.md)。
+本文面向接入模块的开发者，描述 #205 的模块契约、#270 的操作调用与 #286 的动作/控制职责名称，以及 #263/#122 的类型装配和导航接入。候选实现、源码测试、隔离验收和实际部署分别按 Issue 记录确认。当前源码提供 MCP 控制、导航、战斗、原生动作、药剂和世界人口能力模块；具体业务类型按配置选择模块。持续交战见[#271 战斗参考](combat.md)，普通复活见[#275 原生动作参考](native-actions.md)，恢复与异常解除见[#279 药剂参考](potions.md)。
 
 ## 定义与实例配置
 
@@ -10,10 +10,25 @@
 |---|---|
 | [`RuntimeModule`](../../beidou-integration/src/main/java/soloMapling/game/runtime/RuntimeModule.java) | `onActivated/onStopping/onUnloaded` 由运行体管理装载、停止与卸载 |
 | [`ActionModule`](../../beidou-integration/src/main/java/soloMapling/game/runtime/ActionModule.java) | 动作能力的装载与组合单元，在既定目标和约束内规划执行，可以提供多个不同操作 |
-| [`StrategyModule`](../../beidou-integration/src/main/java/soloMapling/game/runtime/StrategyModule.java) | 选择或切换业务任务目标及约束，决定发起、继续或中断，并消费具体动作操作 |
+| [`ControlModule`](../../beidou-integration/src/main/java/soloMapling/game/runtime/ControlModule.java) | 选择或切换业务任务目标及约束，安排任务顺序和动作模块调度，决定发起、继续或中断 |
 | [`ModuleFunction<M, I, R>`](../../beidou-integration/src/main/java/soloMapling/game/runtime/ModuleFunction.java) | 单项操作的输入、结果、参数与结果说明、完成条件、handler及JSON适配 |
 
-动作与策略接口都继承 `RuntimeModule`，表达模块职责。`I`、`R` 归属于每项操作，同一模块可以提供不同输入、结果和完成条件的异构操作。通用 MCP 控制模块接受外部 Agent 或脚本的决策，世界人口模块投影世界服务入口，两者继续直接实现 `RuntimeModule`。
+动作与控制接口都继承 `RuntimeModule`，表达模块职责。`I`、`R` 归属于每项操作，同一模块可以提供不同输入、结果和完成条件的异构操作。通用 MCP 控制模块接受外部 Agent 或脚本的决策，世界人口模块投影世界服务入口，两者继续直接实现 `RuntimeModule`。
+
+```mermaid
+classDiagram
+    class RuntimeModule {
+        <<interface>>
+    }
+    class ActionModule {
+        <<interface>>
+    }
+    class ControlModule {
+        <<interface>>
+    }
+    RuntimeModule <|-- ActionModule
+    RuntimeModule <|-- ControlModule
+```
 
 模块使用三个对象接入运行体：
 
@@ -31,9 +46,9 @@
 
 机器人装配方案及配置随源码维护，通过对应测试和验收确认模块之间的组合。每个机器人按方案创建模块；正常工作周期内模块组合固定，模块的任务、状态和能力可用性随运行变化。
 
-[`RobotPopulation.yaml`](population.md) 的 `types` 声明每个类型的模块组合及参数，加载时转换成装配计划。现有 MCP 普通专用角色固定使用 `mcp_test` 类型；后续新增非自主动作模块时更新该类型的显式配置，自主策略模块保留在其业务类型中。
+[`RobotPopulation.yaml`](population.md) 的 `types` 声明每个类型的模块组合及参数，加载时转换成装配计划。现有 MCP 普通专用角色固定使用 `mcp_test` 类型；后续新增非自主动作模块时更新该类型的显式配置，自主控制模块保留在其业务类型中。
 
-策略模块负责选择角色活动目标、约束与顺序，动作模块完成已经确定的任务。动作可以持续执行、安排多个步骤，并为完成本次目标派生子目标、组合调用其他动作；这些选择属于执行规划。具体职责和调用关系由装配方案确定，`controls` 声明模块执行原生动作所需的控制资源。队伍人数、店铺访客数、牌桌席位及模块内部任务数量由各自业务规则管理。
+控制模块负责选择角色活动目标、约束与任务顺序，并组织动作模块调度；动作模块完成已经确定的任务。动作可以持续执行、安排多个步骤，并为完成本次目标派生子目标、组合调用其他动作；这些选择属于执行规划。具体职责和调用关系由装配方案确定，`controls` 声明模块执行原生动作所需的控制资源。队伍人数、店铺访客数、牌桌席位及模块内部任务数量由各自业务规则管理。
 
 - 工厂或首次激活失败时，运行体进入本实例的卸载收尾。生命周期 hook、scope 工作、资源和 Grant 真实结束后撤下导出登记。
 - 暂停或停用保留实例、配置和导出声明；相关导出显示不可用。
