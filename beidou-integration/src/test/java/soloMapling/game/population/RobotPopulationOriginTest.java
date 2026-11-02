@@ -105,7 +105,7 @@ class RobotPopulationOriginTest {
         doReturn(portal).when(map).getPortal(0);
         var footholds = new FootholdTree(new Point(-500, -500), new Point(500, 500));
         footholds.insert(new Foothold(new Point(-100, 180), new Point(100, 220), 1));
-        doReturn(footholds).when(map).getFootholds();
+        map.setFootholds(footholds);
         MapManager maps = mock(MapManager.class);
         when(channel.getMapFactory()).thenReturn(maps);
         when(maps.getMap(10000)).thenReturn(map);
@@ -180,7 +180,7 @@ class RobotPopulationOriginTest {
 
     @Test
     void spawnWithoutGroundFailsBeforeTemplateCreationOrPublication() {
-        doReturn(new FootholdTree(new Point(-500, -500), new Point(500, 500))).when(map).getFootholds();
+        map.setFootholds(new FootholdTree(new Point(-500, -500), new Point(500, 500)));
         var opening = runtime.acceptOpeningWork();
         runtime.submitOpening(opening, () -> EnvironmentRobotOrigin.receive(runtime, opening, specification()), () -> {});
         assertEquals("robot_spawn_ground_unavailable",
