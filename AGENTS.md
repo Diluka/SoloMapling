@@ -236,3 +236,12 @@ python3 beidou-integration/scripts/build.py --help
 - NativeCombatActions的有限可信伤害输入沿原生近战/魔法/施法handler派发，真实成本和阻断状态在派发前核对；原生HPMP、Buff、冷却、死亡、EXP、任务和掉落分别确认。Warrior首批按匹配WZ的1001003/4/5登记，旧常量及V1路径继续作为对应版本来源。
 - contact_physical_v1在当前BEGINNER或冒险家Warrior/Mage原生分支的交战期间处理物理接触入伤，复用WZ身体框及有限物防输入，通过TakeDamageHandler结算真实HPMP、MagicGuard、反伤和死亡。入伤的ModuleTask归战斗原scope，关联本次调用/期限，交战返回前实际退出；恢复控制只观察并消费药剂。
 - 结果保留既有交战字段并增加current_job/job_changes、真实资源、已适配技能最近事实及接触入伤摘要，native_attack_fact_scope/native_buff_fact_scope/contact_hit_fact_scope说明各自有界范围，累计次数与最近结果分别解释。普通MCP与环境来源消费同一后端并保留各自登录/收益/存档资格。覆盖清单见docs/robot-runtime/combat-jobs.md；#272/#127的大阶段继续按职业、技能族和后续范围推进，本轮源码、隔离、正式及客户端验证分别留证。
+
+## #292 基础狩猎售物日程源码契约
+
+- `training-schedule` 实现 `ControlModule`，由专用 `training_basic` 配置创建、激活后自动推进训练场Ⅰ狩猎拾取、真实容量触发、到杂货店出售和返回；默认初始数量0。恢复模块保持独立运行。日程持阶段与有界周期摘要，原生角色/背包仍为事实来源；源码、隔离、正式与真人客户端证据按Issue分别登记。
+- `travel.plan` 只读当前版本WZ门户拓扑、稳定最少跳规划；普通 `native.enterPortal` 沿原生准入、实际换图与对应地图进入完成，同角色重新取得实际场景。真实跨图正常关闭旧NPC脚本Context，MCP后续调用新建Context；Java日程不依赖该脚本的持续存在。
+- `loot.collect` 通过当前导航和已有原生拾取后端完成有限地物收集。狩猎按交战后或实际等待空档调度拾取，保持原生年龄/归属/容量规则，真实入包和调用返回分别确认。#293背包快照和容量/出售规则共享原生数据，实际合堆包含owner/flag/pet等原生条件，不维护第二库存。
+- `shop.open/sell/close` 解析实际普通NPC并复用原生商店打开/出售/关闭，保持调用者受管CM。清单指定包/槽/期望ID/数量，保留优先规则由配置生成候选，最终价格及资格归原生；可充能弹药部分售出拒绝原生整栈越卖。商店只清理自己打开的精确交互。
+- 日程常规动作使用同运行体目录及原scope/work/lane，短work通过 `acceptWork(parentWork)` 继承取消和宿主结算。`provider(operation)` 仅在有效上下文按同宿主精确声明解析已装载协作者；停用后的收尾使用事前持有的具体提供者与精确活动/交互ID，等待真实退出，不在停止的调用者上重新发普通动作或建立第二账本。
+- 默认 `mcp_test` 加入旅行、拾取和商店动作，装载本身不启动专用日程。长期类型与临时测试配置分别保留，人口数量及正式玩家资料遵守原约定。完整选图、其他日程和成长覆盖继续由#91推进。

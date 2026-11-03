@@ -39,19 +39,22 @@ solomapling:
 
 | 类型 | 装配与用途 |
 |---|---|
-| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`potions`、`hunting-control`、`recovery-control`、`robot-population`；为已有MCP专用角色装配调试能力，继续使用原生普通角色来源 |
+| `mcp_test` | `mcp-control`、`navigation`、`combat`、`native-actions`、`potions`、`hunting-control`、`recovery-control`、`robot-population`、`travel`、`loot`、`shop`；为已有MCP专用角色装配调试能力，继续使用原生普通角色来源 |
+| `training_basic` | 环境来源、旅行、导航、原生门户、战斗、拾取、商店、狩猎、恢复与 `training-schedule`；从射手村开始固定训练场与杂货店循环，默认初始数量0 |
 
 `mcp_test` 的默认初始数量为 `0`，MCP 角色仍由 `actor_open` 打开。
 
 当前源码的 `combat` 模块默认 `config.timeout_ms: 30000`，通过 `combat.engage` 接受一次指定目标的持续交战。当前职业范围、参数与结果见[战斗参考](combat.md)，实际目录和部署状态按当前环境核对。
 
-`native-actions` 模块使用空配置 `{}`，首环导出普通复活操作 `native.revive`。原生事件、标准回城及角色后态的结果契约见[原生动作参考](native-actions.md)。
+`native-actions` 模块使用空配置 `{}`，导出普通复活操作 `native.revive` 与普通门户 `native.enterPortal`。原生事件、标准回城及角色后态见[原生动作参考](native-actions.md)，原生准入、跨图和地图进入完成见[门户参考](portals.md)。
 
 `potions` 模块独立导出 `potions.use`，使用指定的已适配物品药效并维护恢复、异常解除两组冷却；两组默认各5000ms，可分别配置 `restore_cooldown_ms` 与 `cleanse_cooldown_ms`。该模块可独立于战斗装配，参数、原生效果及结果见[药剂参考](potions.md)。
 
 `hunting-control` 默认 `style: AUTO`，装载及恢复激活后保持 `IDLE`，由 `hunting.start` 开始本场景活动；`hunting.stop` 等活动真实收尾后回待命。`recovery-control` 每次激活自动监控HP/MP和可解异常，显式 `recovery.stop` 后待命，`recovery.start` 或重新激活会再次开始。结束狩猎不结束恢复，配置及状态见[狩猎](hunting.md)和[恢复](recovery.md)参考。
 
 后续能力由各机器人类型明确选择，长期MCP调试能力随 `mcp_test` 共同维护和验收。MCP接入代码只引用固定类型名，模块组合在这份配置中维护。
+
+`travel` 只规划地图间线路，`loot` 和 `shop` 提供按次动作。`mcp_test` 装载这些动作后保持原角色行为，日程由专用 `training_basic` 类型装配。其 `training-schedule` 最后激活，自动协调训练场狩猎拾取、真实容量条件、到店出售和返回；恢复独立运行。配置及受阻、启停语义见[基础练级日程](training-schedule.md)，容量和出售候选见[背包事实](inventory.md)。该类型初始数量0；配置人口或创建实例并激活后，日程持续推进。临时验收类型和材料放本地覆盖文件。
 
 ## 本地临时类型
 

@@ -35,6 +35,67 @@ types:
       population:
         type: robot-population
         config: {}
+      travel:
+        type: travel
+        config: {}
+      loot:
+        type: loot
+        config: {}
+      shop:
+        type: shop
+        config: {}
+
+  training_basic:
+    character:
+      template: fmbot
+      spawn: {world: 0, channel: 1, map: 100000000}
+    modules:
+      navigation:
+        type: navigation
+        config:
+          arrival_tolerance_px: 8
+          timeout_ms: 120000
+          stalled_timeout_ms: 3000
+      combat:
+        type: combat
+        config: {}
+      native:
+        type: native-actions
+        config: {}
+      potions:
+        type: potions
+        config: {}
+      loot:
+        type: loot
+        config: {}
+      hunting:
+        type: hunting-control
+        config: {}
+      shop:
+        type: shop
+        config: {}
+      travel:
+        type: travel
+        config: {}
+      recovery:
+        type: recovery-control
+        config: {}
+      schedule:
+        type: training-schedule
+        config:
+          training_map_id: 104040000
+          shop_map_id: 100000102
+          shop_npc_id: 1011100
+          hunting_style: PATROL
+          capacity:
+            inventory_types: [ETC]
+            minimum_free_slots: 0
+          sale:
+            allowed_item_ids: [4000000, 4000011, 4000016, 4000017, 4000021]
+            retained_item_ids: []
+            retained_quantities: {}
+          check_interval_ms: 500
 
 initial_population:
   mcp_test: 0
+  training_basic: 0

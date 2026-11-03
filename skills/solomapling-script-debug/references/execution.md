@@ -71,6 +71,14 @@ modules.call("hunting.start", {style: "AUTO", duration_ms: 30000});
 
 观察当前角色、运行体有界事件及真实战斗后态，分别确认持续活动、用药和工作退出。停止具体活动保持角色与模块；结束整个角色由 `actor_close` 沿根关闭流程完成。
 
+## 基础狩猎售物日程
+
+`training_basic` 是按配置自动激活的独立环境类型，创建后由 `training-schedule` 持续组织训练场狩猎拾取、容量触发、普通门户旅行、商店出售和返回。沿已有 `robots.create` 创建该类型即可开始，正常运行由服务器模块推进；临时验收使用本地初始数量0的独立类型。阶段、配置、受阻和停止契约见[基础练级日程](../../../docs/robot-runtime/training-schedule.md)。
+
+独立调试时，`travel.plan` 仅返回静态门户路线；在实际入口处用 `native.enterPortal` 进入普通门户。真实跨图会沿原生规则关闭旧CM，当前操作返回实际新场景后，该脚本Context可能已为CLOSED；下一段刷新角色/场景并新建Context。保持原请求和实际结果，不能用旧context_id或盲目重复过图。
+
+`loot.collect` 接受实际地物OID集合；`shop.open/sell/close` 在走近实际NPC后操作普通商店，出售输入明确背包类别、槽位、期望ID和数量。二者分别确认实际入包、扣物和金币变化，接口见[拾取](../../../docs/robot-runtime/loot.md)和[商店](../../../docs/robot-runtime/shop.md)。商店动作保留当前受管CM，完成商店关闭后可沿原Context继续。
+
 ## 一次调用完成同场景导航
 
 从实际场景确定目标坐标后，在同一 `invoke` 中提交：
