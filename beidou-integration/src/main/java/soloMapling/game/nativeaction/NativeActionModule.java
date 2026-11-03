@@ -1,7 +1,10 @@
 package soloMapling.game.nativeaction;
 
 import org.gms.net.server.Server;
+import soloMapling.game.action.NativePortalActions;
 import soloMapling.game.action.NativeReviveActions;
+import soloMapling.game.action.PortalRequest;
+import soloMapling.game.action.PortalResult;
 import soloMapling.game.action.ReviveRequest;
 import soloMapling.game.action.ReviveResult;
 import soloMapling.game.context.NativeContextChecks;
@@ -13,6 +16,7 @@ import soloMapling.game.runtime.ModuleFunction;
 
 import java.util.List;
 import java.util.Map;
+import java.math.BigDecimal;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -27,9 +31,16 @@ public final class NativeActionModule implements ActionModule {
             "本次原生处理及提供者短命令真实退出后返回；事件接管后的后续任务继续由原生事件所有者管理。",
             (module, arguments) -> ReviveRequest.NORMAL,
             (module, context, work, input) -> module.revive(input, context, work), ReviveResult::toMap);
+    public static final ModuleFunction<NativeActionModule, PortalRequest, PortalResult> ENTER_PORTAL = new ModuleFunction<>(
+            "native.enterPortal", "进入当前实际场景的普通门户，沿原生准入、跨图和地图进入完成流程执行。",
+            List.of(new ModuleFunction.Parameter("portalId", ModuleFunction.Type.INTEGER, true, "当前实际场景的门户ID")),
+            "返回实际来源与目标场景/位置、出口与入口、原生派发和地图进入完成事实。",
+            "本次原生跨图、对应地图进入完成处理和提供者短work真实退出后返回。",
+            (module, arguments) -> new PortalRequest(new BigDecimal(arguments.get("portalId").toString()).intValueExact()),
+            (module, context, work, input) -> module.enterPortal(input, context, work), PortalResult::toMap);
     public static final ModuleDefinition<Config, NativeActionModule> DEFINITION = new ModuleDefinition<>(
-            "native-actions", Set.of("revive"), new ExecutionScope.Limits(8, 2, 2, 1),
-            config -> new NativeActionModule(Server.getInstance()), List.of(REVIVE));
+            "native-actions", Set.of("revive", "portal"), new ExecutionScope.Limits(8, 2, 2, 1),
+            config -> new NativeActionModule(Server.getInstance()), List.of(REVIVE, ENTER_PORTAL));
 
     private final Server server;
 
@@ -60,6 +71,36 @@ public final class NativeActionModule implements ActionModule {
         if (failure.get() instanceof RuntimeException unavailable) throw unavailable;
         if (failure.get() instanceof Error fatal) throw fatal;
         if (result.get() == null) throw new CancellationException("revive_work_not_entered");
+        return result.get();
+    }
+
+    public PortalResult enterPortal(PortalRequest input, CharacterRuntime.ModuleContext context,
+                                     ExecutionScope.WorkHandle work) {
+        var scene = context.prepareNative("portal", work, () -> {},
+                (lane, permit, original, character) -> NativeContextChecks.captureScene(server, character));
+        var result = new AtomicReference<PortalResult>();
+        var failure = new AtomicReference<Throwable>();
+        var step = context.acceptWork(work);
+        try {
+            context.submit("portal", step, () -> {}, () -> {
+                try { result.set(NativePortalActions.enterPortal(server, scene, work, input)); }
+                catch (RuntimeException | Error stopped) { failure.set(stopped); }
+            }, () -> {});
+        } catch (RuntimeException rejected) {
+            step.reject();
+            throw rejected;
+        }
+        step.completion().toCompletableFuture().join();
+        if (failure.get() instanceof RuntimeException unavailable) throw unavailable;
+        if (failure.get() instanceof Error fatal) throw fatal;
+        if (result.get() == null && work.cancelRequested()) {
+            return new PortalResult(PortalResult.Outcome.CANCELLED, scene.actor().character().getId(),
+                    scene.actor().epoch().value(), input.portalId(), null, null, null, null,
+                    new PortalResult.Dispatch(false, false, false),
+                    new PortalResult.Transition(false, false, false, false, false), null, true,
+                    "portal_cancelled_before_dispatch");
+        }
+        if (result.get() == null) throw new CancellationException("portal_work_not_entered");
         return result.get();
     }
 }
