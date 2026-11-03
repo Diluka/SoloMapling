@@ -67,6 +67,17 @@ public final class NativeItemActions {
         });
     }
 
+    /** The finite ordinary-item pickup contract, shared by action preparation and loot selection. */
+    public static boolean supportsPickup(Item item) {
+        if (item == null) return false;
+        var type = ItemConstants.getInventoryType(item.getItemId());
+        return item.getQuantity() > 0 && !ItemId.isNxCard(item.getItemId())
+                && item.getItemId() / 10000 != 243
+                && !ItemInformationProvider.getInstance().isConsumeOnPickup(item.getItemId())
+                && item.getPetId() < 0
+                && type != InventoryType.UNDEFINED && type != InventoryType.EQUIPPED;
+    }
+
     private static NativeBasicResult pickup(NativeBasicActions.Context context, NativeItemAction.Pickup request) {
         context.requireCurrent();
         Character actor = context.actor().character();
@@ -77,14 +88,10 @@ public final class NativeItemActions {
         try {
             if (map.getMapObject(request.objectId()) != ground || ground.isPickedUp()) throw invalid("ground_item_changed");
             Item item = ground.getItem();
-            ItemInformationProvider information = ItemInformationProvider.getInstance();
-            if (ground.getMeso() != 0 || item == null || item.getQuantity() < 1
-                    || ItemId.isNxCard(item.getItemId()) || item.getItemId() / 10000 == 243
-                    || information.isConsumeOnPickup(item.getItemId()) || item.getPetId() >= 0) {
+            if (ground.getMeso() != 0 || !supportsPickup(item)) {
                 throw invalid("unsupported_pickup_item");
             }
             InventoryType type = ItemConstants.getInventoryType(item.getItemId());
-            if (type == InventoryType.UNDEFINED || type == InventoryType.EQUIPPED) throw invalid("unsupported_pickup_item");
             Point actorPosition = actor.getPosition(), dropPosition = ground.getPosition();
             if (Math.abs((long) actorPosition.x - dropPosition.x) > 800
                     || Math.abs((long) actorPosition.y - dropPosition.y) > 600) throw invalid("ground_item_out_of_range");
