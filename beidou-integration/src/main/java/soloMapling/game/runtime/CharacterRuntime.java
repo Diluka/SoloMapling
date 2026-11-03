@@ -416,8 +416,31 @@ public final class CharacterRuntime {
             }, callerWork);
         }
 
+        /** Resolves a typed collaborator from this host's exact shared declaration. */
+        public <M extends RuntimeModule> Optional<M> provider(ModuleFunction<M, ?, ?> operation) {
+            Objects.requireNonNull(operation);
+            synchronized (monitor) {
+                requireActive(this, null);
+                var provider = functionOwners.get(operation.name());
+                if (provider == null || functionUnavailable(provider) != null
+                        || provider.functions.get(operation.name()).declaration() != operation) {
+                    return Optional.empty();
+                }
+                // Binding this exact declaration already fixed the module type at mount time.
+                @SuppressWarnings("unchecked")
+                var instance = (M) provider.module;
+                return Optional.of(instance);
+            }
+        }
+
         public ExecutionScope.WorkHandle acceptWork() {
             return acceptWork(null, null);
+        }
+
+        /** A short step owned here and cancelled with this module's enclosing call. */
+        public ExecutionScope.WorkHandle acceptWork(ExecutionScope.WorkHandle parentWork) {
+            requireOwn(parentWork);
+            return acceptWork(scope, parentWork);
         }
 
         private ExecutionScope.WorkHandle acceptWork(ExecutionScope callerScope, ExecutionScope.WorkHandle callerWork) {

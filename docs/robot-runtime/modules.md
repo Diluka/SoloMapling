@@ -102,7 +102,9 @@ modules.call("example.counter.next", {label: "本次调用"});
 
 Java 可使用 `context.call(NavigationActionModule.MOVE_TO, new MoveToRequest(x, y, remainingMs), callerWork)`，获得 `ModuleCall<NavigationResult>`；`status/reason` 表达目录可用性，`result` 保留操作的具体业务类型。该入口在当前注册的精确操作声明上调用同一handler，直接消费已构造的业务输入。JSON入口才执行schema校验与输入转换，随后共享相同的提供者工作与完成语义。
 
-Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。默认 `mcp_test` 提供 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md)、[`native.revive`](native-actions.md)、[`potions.use`](potions.md)、[`hunting.start/stop`](hunting.md)、[`recovery.start/stop`](recovery.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP通过 `script_run` 承接原生上下文中的脚本调用；北斗对象API的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
+Java `ModuleContext.help()` / `call()` 与北斗引擎内的 `modules.help()` / `modules.call(name, args)` 消费同一目录。帮助可列出已挂载但暂不可用的导出，内容取决于该类型的实际装配。默认 `mcp_test` 提供 [`navigation.moveTo`](navigation.md)、[`combat.engage`](combat.md)、[`native.revive`](native-actions.md)、[`native.enterPortal`](portals.md)、[`travel.plan`](travel.md)、[`loot.collect`](loot.md)、[`shop.open/sell/close`](shop.md)、[`potions.use`](potions.md)、[`hunting.start/stop`](hunting.md)、[`recovery.start/stop`](recovery.md) 及 [`robots.create/remove`](population.md#脚本创建与移除)。MCP通过 `script_run` 承接原生上下文中的脚本调用；北斗对象API的查阅沿[脚本调试技能](../../skills/solomapling-script-debug/SKILL.md)导航实际源码。
+
+持续活动的 Java 组合方可在有效上下文中用 `context.provider(operation)`，按本宿主当前目录和精确声明取得类型化提供者。它只解析协作者，正常动作仍由其具体方法或 `context.call` 执行。需要在调用方停用后收尾时，事先持有的实例配合精确活动或交互ID，只结束本次启动的工作；提供者仍使用自己的原作用域与资源清理许可。普通短步用 `context.acceptWork(parentWork)` 继承当前调用的取消，同时保留宿主结算事件；这两项接线共用既有工作账本。
 
 ## 最小协议示例
 

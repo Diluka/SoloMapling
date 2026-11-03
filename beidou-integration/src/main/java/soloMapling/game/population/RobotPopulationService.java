@@ -10,12 +10,16 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.combat.CombatActionModule;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.hunting.HuntingControlModule;
+import soloMapling.game.loot.LootActionModule;
 import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.nativeaction.NativeActionModule;
 import soloMapling.game.recovery.RecoveryControlModule;
 import soloMapling.game.potion.PotionActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RuntimeModule;
+import soloMapling.game.shop.ShopActionModule;
+import soloMapling.game.training.TrainingScheduleControlModule;
+import soloMapling.game.travel.TravelPlanModule;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -55,6 +59,10 @@ public final class RobotPopulationService {
         registry.register(HuntingControlModule.DEFINITION, HuntingControlModule::parseConfig);
         registry.register(RecoveryControlModule.DEFINITION, RecoveryControlModule::parseConfig);
         registry.register(PotionActionModule.DEFINITION, PotionActionModule::parseConfig);
+        registry.register(TravelPlanModule.DEFINITION, TravelPlanModule::parseConfig);
+        registry.register(LootActionModule.DEFINITION, LootActionModule::parseConfig);
+        registry.register(ShopActionModule.DEFINITION, ShopActionModule::parseConfig);
+        registry.register(TrainingScheduleControlModule.DEFINITION, TrainingScheduleControlModule::parseConfig);
         registry.register(RobotPopulationModule.definition(this), ignored -> null);
     }
 

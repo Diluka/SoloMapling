@@ -56,6 +56,8 @@ stateDiagram-v2
 
 来源为旧 [`GrindBrain`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/GrindBrain.java)、[`CampStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/CampStrategy.java)、[`PatrolStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/PatrolStrategy.java)、[`RoamStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/RoamStrategy.java) 和 [`StackStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/StackStrategy.java)。实际路径和位移继续受当前导航能力约束。
 
+装配 `loot` 后，狩猎在已完成交战或确实等待目标的空档扫描实际普通地物，通过[拾取动作](loot.md)有限收集；延迟生成的掉落在后续扫描中发现。首次有目标时仍先交战，未装拾取提供者的旧组合继续原交战流程。容量不足、已入包事实和当前拾取结果由有界摘要提供；回城阈值及售物决定由[日程](training-schedule.md)消费真实背包事实。`stop(expectedActivityId)` 是Java组合方只结束自己启动活动的入口，当前活动已变化时返回准确状态，脚本 `hunting.stop` 保留既有语义。
+
 驻点占用、个人区段和楼层分配使用同一 [`BotSpotClaims`](../../src/main/java/soloMapling/ArtificialPlayer/BotSpotClaims.java) 登记来源。活动只持有本实例登记，换点、场景结束及停止时释放自己的占用。当前键为 `mapId + spotId`，首期按普通共享场景核验，跨频道和实例协调覆盖分别记录。
 
 ## 持续调度与目标保持

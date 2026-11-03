@@ -1,6 +1,8 @@
 package soloMapling.game.hunting;
 
 import org.gms.net.server.Server;
+import org.gms.server.maps.MapItem;
+import org.gms.server.maps.MapObjectType;
 import soloMapling.ArtificialPlayer.BotGrindSystem.GrindStyle;
 import soloMapling.ArtificialPlayer.BotGrindSystem.HuntingPlanner;
 import soloMapling.ArtificialPlayer.BotGrindSystem.SpotFinder;
@@ -10,6 +12,10 @@ import soloMapling.game.combat.CombatResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.action.NativeItemActions;
+import soloMapling.game.loot.LootActionModule;
+import soloMapling.game.loot.LootRequest;
+import soloMapling.game.loot.LootResult;
 import soloMapling.game.navigation.MoveToRequest;
 import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.navigation.NavigationResult;
@@ -22,6 +28,7 @@ import soloMapling.game.runtime.ModuleTask;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
@@ -38,6 +45,10 @@ public final class HuntingControlModule implements ControlModule {
     public static final Config DEFAULT_CONFIG = new Config(HuntingStartOptions.Style.AUTO);
     private static final int CHECK_INTERVAL_MS = 250;
     private static final int ACTION_TIMEOUT_MS = 30_000;
+    private static final int LOOT_SETTLE_MS = 1_500;
+    private static final int LOOT_SCAN_INTERVAL_MS = 1_000;
+    private static final int LOOT_SEARCH_PX = 900;
+    private static final int LOOT_SAME_LEDGE_Y = 120;
     public static final ModuleFunction<HuntingControlModule, HuntingStartOptions, HuntingStartResult> START =
             new ModuleFunction<>("hunting.start", "开始一次当前场景内的连续狩猎，返回后活动独立于调用脚本继续。",
                     List.of(new ModuleFunction.Parameter("style", ModuleFunction.Type.STRING, false,
@@ -66,7 +77,7 @@ public final class HuntingControlModule implements ControlModule {
     private Activity active;
     private long sequence;
     private HuntingSnapshot last = new HuntingSnapshot(State.IDLE, 0, null, null, null,
-            0, 0, 0, 0, "not_started", Map.of());
+            0, 0, 0, 0, 0, 0, 0, false, null, null, "not_started", Map.of());
 
     public HuntingControlModule(Config config, Server server) { this.config = config; this.server = server; }
 
@@ -116,9 +127,22 @@ public final class HuntingControlModule implements ControlModule {
     }
 
     public HuntingStopResult stop() {
+        return stopActivity(null);
+    }
+
+    /** A composed controller may stop only the activity it started, including while that caller is stopping. */
+    public HuntingStopResult stop(long expectedActivityId) {
+        return stopActivity(expectedActivityId);
+    }
+
+    private HuntingStopResult stopActivity(Long expectedActivityId) {
         Activity activity;
         synchronized (this) {
             activity = active;
+            if (expectedActivityId != null && (activity == null || activity.id != expectedActivityId)) {
+                return new HuntingStopResult(HuntingStopResult.Outcome.ACTIVITY_CHANGED,
+                        "activity_changed", activity == null ? last : snapshot(activity, activity.state));
+            }
             if (activity == null) return new HuntingStopResult(HuntingStopResult.Outcome.ALREADY_IDLE,
                     last.endReason(), last);
         }
@@ -130,13 +154,17 @@ public final class HuntingControlModule implements ControlModule {
     }
 
     /** Safe current/recent activity facts for controllers and source-backed diagnostics. */
-    public synchronized HuntingSnapshot snapshot() { return active == null ? last : snapshot(active, active.state); }
+    public synchronized HuntingSnapshot snapshot() {
+        if (active != null) finish(active);
+        return active == null ? last : snapshot(active, active.state);
+    }
 
     private void requestStop(Activity activity, String reason) {
         synchronized (activity) {
             if (activity.endReason == null) activity.endReason = reason;
             activity.state = State.STOPPING;
             if (activity.action != null) activity.action.task.cancel();
+            if (activity.loot != null) activity.loot.task.cancel();
             activity.task.cancel();
         }
     }
@@ -194,6 +222,7 @@ public final class HuntingControlModule implements ControlModule {
                         activity.action = null;
                         activity.lastTarget = -1;
                         activity.kills += outcome.kills();
+                        activity.lootAfterEngagement = action.decision.kind() == HuntingPlanner.Kind.FIGHT;
                         if (outcome.unavailable()) { activity.endReason = "required_capability_unavailable"; break; }
                         if (outcome.endReason() != null) { activity.endReason = outcome.endReason(); break; }
                         observe(activity, () -> {
@@ -207,13 +236,34 @@ public final class HuntingControlModule implements ControlModule {
                             return true;
                         });
                     }
+                } else if (activity.loot != null) {
+                    var loot = activity.loot;
+                    if (loot.task.work().isSettled()) {
+                        var result = loot.result.join();
+                        activity.loot = null;
+                        recordLoot(activity, result);
+                        activity.lootAfterEngagement = false;
+                        if (result.outcome() == LootResult.Outcome.INDETERMINATE) {
+                            activity.endReason = "loot_indeterminate"; break;
+                        }
+                        if (result.outcome() == LootResult.Outcome.CONTEXT_CHANGED) {
+                            activity.endReason = "context_changed"; break;
+                        }
+                        if (result.outcome() == LootResult.Outcome.DEAD) {
+                            activity.endReason = "dead"; break;
+                        }
+                    }
+                } else if (activity.lootAfterEngagement && launchLoot(activity)) {
+                    // A completed engagement gets one collection pass before another combat decision.
                 } else {
+                    activity.lootAfterEngagement = false;
                     var decision = observe(activity, () -> {
                         var selected = activity.planner.decide(System.currentTimeMillis());
                         activity.placement = activity.planner.snapshot();
                         return selected;
                     });
-                    if (decision.kind() != HuntingPlanner.Kind.WAIT) launch(activity, decision);
+                    if (decision.kind() == HuntingPlanner.Kind.WAIT) launchLoot(activity);
+                    else launch(activity, decision);
                 }
                 try { Thread.sleep(CHECK_INTERVAL_MS); }
                 catch (InterruptedException stopped) { break; }
@@ -223,9 +273,8 @@ public final class HuntingControlModule implements ControlModule {
             if (activity.endReason == null) activity.endReason = "context_changed";
         } catch (CancellationException stopped) {
             if (activity.endReason == null) activity.endReason = "cancelled";
-        } catch (IllegalStateException stopped) {
-            // Pause/close can revoke this context between a checkpoint and the next directory/lane admission.
-            if (!work.cancelRequested() && activity.context.scope().isActive()) throw stopped;
+        } catch (CharacterRuntime.Invalid | ExecutionScope.Invalid stopped) {
+            if (!lifecycleRejection(stopped) || !providerStopping(activity.context, work)) throw stopped;
             if (activity.endReason == null) activity.endReason = "cancelled";
         } finally {
             activity.state = State.STOPPING;
@@ -238,6 +287,13 @@ public final class HuntingControlModule implements ControlModule {
                 }
                 activity.action = null;
             }
+            var loot = activity.loot;
+            if (loot != null) {
+                loot.task.cancel();
+                loot.task.await();
+                if (loot.result.isDone() && !loot.result.isCompletedExceptionally()) recordLoot(activity, loot.result.join());
+                activity.loot = null;
+            }
             if (activity.planner != null) {
                 activity.planner.release();
                 activity.placement = activity.planner.snapshot();
@@ -249,6 +305,80 @@ public final class HuntingControlModule implements ControlModule {
             activity.context.recordActivity(work, activity.endReason, "ENDED");
             activity.admission.complete(HuntingStartResult.Outcome.UNAVAILABLE);
         }
+    }
+
+    private static boolean lifecycleRejection(RuntimeException failure) {
+        return failure instanceof CharacterRuntime.Invalid runtime
+                && Set.of("module_not_active", "stale_module_reference").contains(runtime.reason())
+                || failure instanceof ExecutionScope.Invalid scope && "scope_not_active".equals(scope.reason());
+    }
+
+    private static boolean providerStopping(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) {
+        if (work.cancelRequested() || !context.scope().isActive()) return true;
+        // Entry STOPPING is authoritative even while onStopping has not yet cancelled the scope's work.
+        try { context.help(); return false; }
+        catch (CharacterRuntime.Invalid | ExecutionScope.Invalid stopped) {
+            if (!lifecycleRejection(stopped)) throw stopped;
+            return true;
+        }
+    }
+
+    private boolean launchLoot(Activity activity) {
+        if (System.nanoTime() < activity.nextLootScan) return false;
+        activity.nextLootScan = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(LOOT_SCAN_INTERVAL_MS);
+        boolean available = activity.context.help().stream().anyMatch(function -> LootActionModule.COLLECT.name().equals(function.get("name"))
+                && Boolean.TRUE.equals(function.get("available")));
+        if (!available) return false;
+        var objects = observe(activity, () -> {
+            var actor = activity.scene.actor().character();
+            var position = actor.getPosition();
+            return activity.scene.map().getMapObjectsInRange(position, (double) LOOT_SEARCH_PX * LOOT_SEARCH_PX,
+                            List.of(MapObjectType.ITEM)).stream().map(MapItem.class::cast)
+                    .filter(ground -> {
+                        ground.lockItem();
+                        try {
+                            return !ground.isPickedUp() && ground.getMeso() == 0
+                                    && NativeItemActions.supportsPickup(ground.getItem())
+                                    && System.currentTimeMillis() - ground.getDropTime() >= LOOT_SETTLE_MS
+                                    && Math.abs((long) ground.getPosition().y - position.y) <= LOOT_SAME_LEDGE_Y
+                                    && ground.canBePickedBy(actor);
+                        } finally { ground.unlockItem(); }
+                    }).sorted(Comparator.comparingDouble((MapItem ground) -> position.distanceSq(ground.getPosition()))
+                            .thenComparingInt(MapItem::getObjectId))
+                    .limit(LootRequest.MAX_OBJECTS).map(MapItem::getObjectId).toList();
+        });
+        if (objects.isEmpty()) return false;
+        synchronized (activity) {
+            if (activity.task.work().cancelRequested() || activity.state == State.STOPPING) return false;
+            var loot = new LootAttempt();
+            int timeout = activity.durationMs == null ? ACTION_TIMEOUT_MS
+                    : (int) Math.max(1, Math.min(ACTION_TIMEOUT_MS, activity.durationMs - elapsed(activity)));
+            loot.task = new ModuleTask(activity.context, "hunting-loot", work -> {
+                try {
+                    var call = activity.context.call(LootActionModule.COLLECT, new LootRequest(objects, timeout), work);
+                    loot.result.complete(call.status() == ModuleCall.Status.UNAVAILABLE
+                            ? new LootResult(LootResult.Outcome.UNAVAILABLE, call.reason(), List.of(), 0) : call.result());
+                } catch (RuntimeException | Error failure) { loot.result.completeExceptionally(failure); }
+            });
+            loot.task.completion().whenComplete((ignored, failure) -> {
+                if (!loot.result.isDone()) loot.result.complete(new LootResult(LootResult.Outcome.CANCELLED,
+                        "loot_not_entered", List.of(), 0));
+            });
+            activity.loot = loot;
+            activity.lootCalls++;
+            activity.context.recordActivity(activity.task.work(), "collecting", Integer.toString(objects.size()));
+            loot.task.start();
+        }
+        return true;
+    }
+
+    private void recordLoot(Activity activity, LootResult result) {
+        activity.collectedObjects += result.collectedObjects();
+        activity.collectedQuantity += result.collectedQuantity();
+        activity.lootOutcome = result.outcome();
+        activity.lootReason = result.reason();
+        activity.nextLootScan = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(LOOT_SCAN_INTERVAL_MS);
+        activity.context.recordActivity(activity.task.work(), "loot_finished", result.outcome().name());
     }
 
     private void launch(Activity activity, HuntingPlanner.Decision decision) {
@@ -317,11 +447,9 @@ public final class HuntingControlModule implements ControlModule {
         var value = new AtomicReference<T>();
         var failure = new AtomicReference<Throwable>();
         var entered = new AtomicBoolean();
-        var step = activity.context.acceptWork();
+        var step = activity.context.acceptWork(activity.task.work());
         try {
-            activity.context.submit("hunting-observe", step, () -> {
-                if (activity.task.work().cancelRequested()) throw new CancellationException("hunting_cancelled");
-            }, () -> {
+            activity.context.submit("hunting-observe", step, () -> {}, () -> {
                 entered.set(true);
                 try {
                     if (activity.task.work().cancelRequested()) throw new CancellationException("hunting_cancelled");
@@ -362,7 +490,10 @@ public final class HuntingControlModule implements ControlModule {
     private static HuntingSnapshot snapshot(Activity activity, State state) {
         return new HuntingSnapshot(state, activity.id, activity.requestedStyle.name(), activity.style,
                 activity.durationMs, state == State.IDLE ? activity.elapsedMs : elapsed(activity),
-                activity.engagements, activity.kills, activity.navigationCalls, activity.endReason, activity.placement);
+                activity.engagements, activity.kills, activity.navigationCalls,
+                activity.lootCalls, activity.collectedObjects, activity.collectedQuantity,
+                activity.loot != null,
+                activity.lootOutcome, activity.lootReason, activity.endReason, activity.placement);
     }
 
     private static final class Activity {
@@ -377,6 +508,7 @@ public final class HuntingControlModule implements ControlModule {
         volatile GameContext.SceneRef scene;
         volatile HuntingPlanner planner;
         volatile Action action;
+        volatile LootAttempt loot;
         volatile String style;
         volatile String endReason;
         volatile Map<String, Object> placement = Map.of();
@@ -384,6 +516,13 @@ public final class HuntingControlModule implements ControlModule {
         volatile int engagements;
         volatile int kills;
         volatile int navigationCalls;
+        volatile int lootCalls;
+        volatile int collectedObjects;
+        volatile int collectedQuantity;
+        volatile LootResult.Outcome lootOutcome;
+        volatile String lootReason;
+        long nextLootScan;
+        boolean lootAfterEngagement;
         int lastTarget = -1;
 
         Activity(long id, CharacterRuntime.ModuleContext context, HuntingStartOptions.Style requestedStyle, Long durationMs) {
@@ -399,5 +538,9 @@ public final class HuntingControlModule implements ControlModule {
         ModuleTask task;
         String cancelReason;
         Action(HuntingPlanner.Decision decision) { this.decision = decision; }
+    }
+    private static final class LootAttempt {
+        final CompletableFuture<LootResult> result = new CompletableFuture<>();
+        ModuleTask task;
     }
 }

@@ -5,6 +5,7 @@ import org.gms.client.Client;
 import org.gms.client.Job;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
+import org.gms.client.inventory.Item;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -12,6 +13,7 @@ import org.gms.net.server.world.World;
 import org.gms.server.life.Monster;
 import org.gms.server.life.MonsterStats;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.MapItem;
 import org.gms.soloacceptance.actor.McpControlModule;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +27,10 @@ import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.combat.CombatActionModule;
 import soloMapling.game.combat.CombatRequest;
 import soloMapling.game.combat.CombatResult;
+import soloMapling.game.action.NativeItemActions;
+import soloMapling.game.loot.LootActionModule;
+import soloMapling.game.loot.LootRequest;
+import soloMapling.game.loot.LootResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -45,9 +51,11 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -207,6 +215,101 @@ class HuntingControlModuleTest {
         }
     }
 
+    @Test void mountedLootDoesNotRunUntilHuntingAndDiscoversADelayedDropDuringALull() throws Exception {
+        try (var fixture = new Fixture(false, true, true)) {
+            var order = new CopyOnWriteArrayList<String>();
+            var combatCompleted = new CountDownLatch(1);
+            var defeated = mock(CombatResult.class);
+            when(defeated.outcome()).thenReturn(CombatResult.Outcome.TARGET_DEAD);
+            when(defeated.hits()).thenReturn(List.of());
+            when(fixture.combat.execute(any(), any(), any())).thenAnswer(call -> {
+                order.add("combat");
+                fixture.dropVisible.set(false);
+                when(fixture.monster.isAlive()).thenReturn(false);
+                combatCompleted.countDown();
+                return defeated;
+            });
+            fixture.dropVisible.set(true);
+            Thread.sleep(100);
+            verify(fixture.loot, never()).collect(any(), any(), any());
+            fixture.dropVisible.set(false);
+            when(fixture.loot.collect(any(), any(), any())).thenAnswer(call -> {
+                order.add("loot");
+                LootRequest request = call.getArgument(0);
+                assertEquals(List.of(fixture.drop.getObjectId()), request.objectIds());
+                fixture.dropVisible.set(false);
+                return new LootResult(LootResult.Outcome.COMPLETED, null,
+                        List.of(new LootResult.ItemResult(fixture.drop.getObjectId(), 4000000, 3, 3,
+                                LootResult.ItemOutcome.COLLECTED, null,
+                                soloMapling.game.action.NativeActionResult.Outcome.SUCCEEDED, true)), 10);
+            });
+            // An old visible drop must not preempt the first available combat decision.
+            fixture.dropVisible.set(true);
+            assertEquals(HuntingStartResult.Outcome.STARTED, fixture.hunting.start(
+                    new HuntingStartOptions(HuntingStartOptions.Style.ROAM, null)).outcome());
+            assertTrue(combatCompleted.await(5, TimeUnit.SECONDS));
+            fixture.dropVisible.set(true);
+            eventually(() -> fixture.hunting.snapshot().collectedQuantity() == 3);
+            var observed = fixture.hunting.snapshot();
+            assertEquals(1, observed.lootCalls());
+            assertEquals(1, observed.collectedObjects());
+            assertEquals(LootResult.Outcome.COMPLETED, observed.lootOutcome());
+            assertEquals(1, observed.engagements());
+            assertEquals(List.of("combat", "loot"), order);
+            fixture.hunting.stop();
+            fixture.assertHuntingDrained();
+        }
+    }
+
+    @Test void stoppingHuntingCancelsLootAndWaitsForItsActualExitWithEarlierEntriesRetained() throws Exception {
+        try (var fixture = new Fixture(false, false, true)) {
+            fixture.dropVisible.set(true);
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var lootWork = new AtomicReference<ExecutionScope.WorkHandle>();
+            when(fixture.loot.collect(any(), any(), any())).thenAnswer(call -> {
+                lootWork.set(call.getArgument(2)); entered.countDown(); awaitEvenWhenCancelled(release);
+                return new LootResult(LootResult.Outcome.CANCELLED, "loot_cancelled",
+                        List.of(new LootResult.ItemResult(fixture.drop.getObjectId(), 4000000, 2, 2,
+                                LootResult.ItemOutcome.COLLECTED, null,
+                                soloMapling.game.action.NativeActionResult.Outcome.SUCCEEDED, true)), 10);
+            });
+            CompletableFuture<HuntingStopResult> stopping;
+            try {
+                fixture.hunting.start(new HuntingStartOptions(HuntingStartOptions.Style.ROAM, null));
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                stopping = CompletableFuture.supplyAsync(fixture.hunting::stop);
+                eventually(() -> lootWork.get().cancelRequested());
+                assertFalse(stopping.isDone());
+                assertEquals(HuntingControlModule.State.STOPPING, fixture.hunting.snapshot().state());
+                assertTrue(fixture.hunting.snapshot().collecting());
+            } finally { release.countDown(); }
+            assertEquals(HuntingStopResult.Outcome.STOPPED, stopping.get(5, TimeUnit.SECONDS).outcome());
+            assertEquals(2, fixture.hunting.snapshot().collectedQuantity());
+            assertEquals(1, fixture.hunting.snapshot().collectedObjects());
+            fixture.assertHuntingDrained();
+        }
+    }
+
+    @Test void composedStopWorksAfterCallerPauseAndCannotStopASuccessorActivity() throws Exception {
+        try (var fixture = new Fixture(false, false)) {
+            long owned = fixture.caller.call(HuntingControlModule.START,
+                    new HuntingStartOptions(HuntingStartOptions.Style.ROAM, null)).result().activity().activityId();
+            assertEquals(ExecutionScope.DrainResult.DRAINED,
+                    fixture.runtime.stop(fixture.callerRef, CharacterRuntime.StopMode.PAUSE).await(Duration.ofSeconds(5)));
+            assertEquals(HuntingControlModule.State.HUNTING, fixture.hunting.snapshot().state());
+            assertEquals(HuntingStopResult.Outcome.STOPPED, fixture.hunting.stop(owned).outcome());
+            long successor = fixture.hunting.start(new HuntingStartOptions(HuntingStartOptions.Style.ROAM, null))
+                    .activity().activityId();
+            var stale = fixture.hunting.stop(owned);
+            assertEquals(HuntingStopResult.Outcome.ACTIVITY_CHANGED, stale.outcome());
+            assertEquals(successor, stale.activity().activityId());
+            assertEquals(HuntingControlModule.State.HUNTING, stale.activity().state());
+            assertEquals(HuntingStopResult.Outcome.STOPPED, fixture.hunting.stop(successor).outcome());
+            fixture.assertHuntingDrained();
+        }
+    }
+
     private static void eventually(BooleanSupplier condition) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
@@ -239,13 +342,21 @@ class HuntingControlModuleTest {
         final CharacterRuntime.ModuleContext caller;
         final HuntingControlModule hunting;
         final CombatActionModule combat = mock(CombatActionModule.class);
+        final LootActionModule loot = mock(LootActionModule.class);
+        final MapItem drop = mock(MapItem.class);
+        final AtomicBoolean dropVisible = new AtomicBoolean();
         final Monster monster = mock(Monster.class);
         final MapleMap map = mock(MapleMap.class);
         final MapGrindProfile profile;
         final MapGrindProfile previousProfile;
         CharacterRuntime.ModuleRef huntingRef;
+        final CharacterRuntime.ModuleRef callerRef;
 
         Fixture(boolean campable, boolean withMonster) throws Exception {
+            this(campable, withMonster, false);
+        }
+
+        Fixture(boolean campable, boolean withMonster, boolean withLoot) throws Exception {
             var server = mock(Server.class);
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -277,6 +388,13 @@ class HuntingControlModuleTest {
             when(monster.getPosition()).thenAnswer(call -> new Point(30, 0));
             when(map.getAllMonsters()).thenReturn(withMonster ? List.of(monster) : List.of());
             when(map.getMapObject(monster.getObjectId())).thenReturn(monster);
+            when(drop.getObjectId()).thenReturn(800001);
+            when(drop.getPosition()).thenReturn(new Point(10, 0));
+            when(drop.getDropTime()).thenReturn(System.currentTimeMillis() - 2_000);
+            when(drop.getItem()).thenReturn(new Item(4000000, (short) 0, (short) 3));
+            when(drop.canBePickedBy(actor)).thenReturn(true);
+            when(map.getMapObjectsInRange(any(), anyDouble(), anyList()))
+                    .thenAnswer(call -> dropVisible.get() ? List.of(drop) : List.of());
             profile = new MapGrindProfile(mapId, -250, 250, 500, campable ? 4 : 0,
                     campable ? .008 : 0, campable ? List.of(new Spot(new Point(0, 0), -1, 250, 4, 4, 500, 2))
                     : List.of(), campable ? 1 : 0, 0, MapGrindProfile.Regime.SPARSE, !campable,
@@ -284,9 +402,11 @@ class HuntingControlModuleTest {
             previousProfile = profiles().put(mapId, profile);
             var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), command ->
                     new Thread(() -> {
-                        try (var singleton = mockStatic(Server.class); var geometry = mockStatic(GCMovement.class)) {
+                        try (var singleton = mockStatic(Server.class); var geometry = mockStatic(GCMovement.class);
+                             var pickup = mockStatic(NativeItemActions.class)) {
                             singleton.when(Server::getInstance).thenReturn(server);
                             geometry.when(() -> GCMovement.reachableRegions(any(), anyInt(), anyInt())).thenReturn(Set.of());
+                            pickup.when(() -> NativeItemActions.supportsPickup(any(Item.class))).thenReturn(true);
                             command.run();
                         }
                     }));
@@ -308,8 +428,9 @@ class HuntingControlModuleTest {
                 runtime.reserveOrigin(opening).adopt(binding); runtime.bindAdoptedOrigin();
             }, () -> {});
             opening.completion().toCompletableFuture().join();
-            caller = runtime.mount(McpControlModule.DEFINITION,
-                    new ModuleSelection<>("mcp", Map.of(), true)).instance().context();
+            var mcp = runtime.mount(McpControlModule.DEFINITION, new ModuleSelection<>("mcp", Map.of(), true));
+            caller = mcp.instance().context();
+            callerRef = mcp.reference();
             var combatDefinition = new ModuleDefinition<CombatActionModule.Config, CombatActionModule>(
                     CombatActionModule.DEFINITION.typeId(), CombatActionModule.DEFINITION.controls(),
                     CombatActionModule.DEFINITION.limits(), config -> combat, CombatActionModule.DEFINITION.exports());
@@ -319,6 +440,12 @@ class HuntingControlModuleTest {
                     NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
                     NavigationActionModule.DEFINITION.limits(), config -> navigation, NavigationActionModule.DEFINITION.exports());
             runtime.mount(navigationDefinition, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
+            if (withLoot) {
+                var lootDefinition = new ModuleDefinition<LootActionModule.Config, LootActionModule>(
+                        LootActionModule.DEFINITION.typeId(), LootActionModule.DEFINITION.controls(),
+                        LootActionModule.DEFINITION.limits(), config -> loot, LootActionModule.DEFINITION.exports());
+                runtime.mount(lootDefinition, new ModuleSelection<>("loot", LootActionModule.DEFAULT_CONFIG, true));
+            }
             hunting = new HuntingControlModule(HuntingControlModule.DEFAULT_CONFIG, server);
             var definition = new ModuleDefinition<HuntingControlModule.Config, HuntingControlModule>(
                     HuntingControlModule.DEFINITION.typeId(), HuntingControlModule.DEFINITION.controls(),
