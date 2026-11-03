@@ -156,14 +156,30 @@ public final class LootActionModule implements ActionModule {
             outcome = LootResult.Outcome.CANCELLED; reason = "loot_cancelled";
         } catch (GameContext.Invalid changed) {
             outcome = LootResult.Outcome.CONTEXT_CHANGED; reason = changed.reason().name();
-        } catch (IllegalStateException stopped) {
-            if (!work.cancelRequested() && context.scope().isActive()) throw stopped;
+        } catch (CharacterRuntime.Invalid | ExecutionScope.Invalid stopped) {
+            if (!lifecycleRejection(stopped) || !providerStopping(context, work)) throw stopped;
             outcome = LootResult.Outcome.CANCELLED; reason = "loot_cancelled";
         } finally {
             synchronized (this) { active = null; }
             if (job.interrupted) Thread.currentThread().interrupt();
         }
         return new LootResult(outcome, reason, results, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.started));
+    }
+
+    private static boolean lifecycleRejection(RuntimeException failure) {
+        return failure instanceof CharacterRuntime.Invalid runtime
+                && Set.of("module_not_active", "stale_module_reference").contains(runtime.reason())
+                || failure instanceof ExecutionScope.Invalid scope && "scope_not_active".equals(scope.reason());
+    }
+
+    private static boolean providerStopping(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) {
+        if (work.cancelRequested() || !context.scope().isActive()) return true;
+        // The host marks the entry STOPPING before its hook cancels the work and drains this scope.
+        try { context.help(); return false; }
+        catch (CharacterRuntime.Invalid | ExecutionScope.Invalid stopped) {
+            if (!lifecycleRejection(stopped)) throw stopped;
+            return true;
+        }
     }
 
     private NativeBasicResult pickUp(Job job, int objectId) {

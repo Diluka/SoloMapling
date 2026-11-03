@@ -274,10 +274,11 @@ class HuntingControlModuleTest {
                                 LootResult.ItemOutcome.COLLECTED, null,
                                 soloMapling.game.action.NativeActionResult.Outcome.SUCCEEDED, true)), 10);
             });
-            fixture.hunting.start(new HuntingStartOptions(HuntingStartOptions.Style.ROAM, null));
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            var stopping = CompletableFuture.supplyAsync(fixture.hunting::stop);
+            CompletableFuture<HuntingStopResult> stopping;
             try {
+                fixture.hunting.start(new HuntingStartOptions(HuntingStartOptions.Style.ROAM, null));
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                stopping = CompletableFuture.supplyAsync(fixture.hunting::stop);
                 eventually(() -> lootWork.get().cancelRequested());
                 assertFalse(stopping.isDone());
                 assertEquals(HuntingControlModule.State.STOPPING, fixture.hunting.snapshot().state());

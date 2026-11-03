@@ -273,9 +273,8 @@ public final class HuntingControlModule implements ControlModule {
             if (activity.endReason == null) activity.endReason = "context_changed";
         } catch (CancellationException stopped) {
             if (activity.endReason == null) activity.endReason = "cancelled";
-        } catch (IllegalStateException stopped) {
-            // Pause/close can revoke this context between a checkpoint and the next directory/lane admission.
-            if (!work.cancelRequested() && activity.context.scope().isActive()) throw stopped;
+        } catch (CharacterRuntime.Invalid | ExecutionScope.Invalid stopped) {
+            if (!lifecycleRejection(stopped) || !providerStopping(activity.context, work)) throw stopped;
             if (activity.endReason == null) activity.endReason = "cancelled";
         } finally {
             activity.state = State.STOPPING;
@@ -305,6 +304,22 @@ public final class HuntingControlModule implements ControlModule {
             activity.elapsedMs = elapsed(activity);
             activity.context.recordActivity(work, activity.endReason, "ENDED");
             activity.admission.complete(HuntingStartResult.Outcome.UNAVAILABLE);
+        }
+    }
+
+    private static boolean lifecycleRejection(RuntimeException failure) {
+        return failure instanceof CharacterRuntime.Invalid runtime
+                && Set.of("module_not_active", "stale_module_reference").contains(runtime.reason())
+                || failure instanceof ExecutionScope.Invalid scope && "scope_not_active".equals(scope.reason());
+    }
+
+    private static boolean providerStopping(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) {
+        if (work.cancelRequested() || !context.scope().isActive()) return true;
+        // Entry STOPPING is authoritative even while onStopping has not yet cancelled the scope's work.
+        try { context.help(); return false; }
+        catch (CharacterRuntime.Invalid | ExecutionScope.Invalid stopped) {
+            if (!lifecycleRejection(stopped)) throw stopped;
+            return true;
         }
     }
 

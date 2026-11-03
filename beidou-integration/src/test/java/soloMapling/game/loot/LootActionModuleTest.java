@@ -47,6 +47,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -160,9 +161,10 @@ class LootActionModuleTest {
             fixture.lootContext.submit("loot", blocker, () -> {}, () -> {
                 entered.countDown(); awaitEvenWhenInterrupted(release);
             }, () -> {});
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            var result = CompletableFuture.supplyAsync(() -> fixture.collect(new LootRequest(List.of(drop.getObjectId()), 20)));
+            CompletableFuture<LootResult> result;
             try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                result = CompletableFuture.supplyAsync(() -> fixture.collect(new LootRequest(List.of(drop.getObjectId()), 20)));
                 Thread.sleep(60);
                 assertFalse(result.isDone());
                 assertEquals(0, fixture.bags.get(InventoryType.ETC).countById(4000000));
@@ -170,6 +172,30 @@ class LootActionModuleTest {
             assertEquals(LootResult.Outcome.TIMED_OUT, result.get(5, TimeUnit.SECONDS).outcome());
             assertFalse(drop.isPickedUp());
             fixture.assertDrained();
+        }
+    }
+
+    @Test void providerPauseAfterAnEntryRetainsFactsWhenTheNextReadIsNotAdmitted() throws Exception {
+        try (var fixture = new Fixture()) {
+            var first = fixture.ground(4000000, 3, new Point(0, 0), true);
+            var next = fixture.ground(4000001, 1, new Point(200, 0), true);
+            var reads = new AtomicInteger();
+            var pause = new AtomicReference<CharacterRuntime.ModuleStop>();
+            doAnswer(call -> {
+                if (reads.incrementAndGet() == 1) {
+                    pause.set(fixture.runtime.stop(fixture.lootRef, CharacterRuntime.StopMode.PAUSE));
+                }
+                return fixture.objects.get(next.getObjectId());
+            }).when(fixture.map).getMapObject(next.getObjectId());
+            var stopped = fixture.collect(new LootRequest(List.of(first.getObjectId(), next.getObjectId()), 5_000));
+            assertEquals(LootResult.Outcome.CANCELLED, stopped.outcome());
+            assertEquals(1, stopped.collectedObjects());
+            assertEquals(3, stopped.collectedQuantity());
+            assertEquals(3, fixture.bags.get(InventoryType.ETC).countById(4000000));
+            assertFalse(next.isPickedUp());
+            assertEquals(ExecutionScope.DrainResult.DRAINED, pause.get().await(Duration.ofSeconds(5)));
+            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            assertEquals(0, fixture.lootContext.scope().snapshot().acceptedWork());
         }
     }
 
@@ -195,6 +221,7 @@ class LootActionModuleTest {
         final CharacterRuntime runtime;
         final CharacterRuntime.ModuleContext caller;
         final CharacterRuntime.ModuleContext lootContext;
+        final CharacterRuntime.ModuleRef lootRef;
         final ThreadPoolExecutor executor;
         final MockedStatic<Server> singleton;
         final MockedStatic<ItemInformationProvider> metadata;
@@ -266,8 +293,9 @@ class LootActionModuleTest {
                         new NavigationResult.Progress(new NavigationResult.Position(target.x(), target.y()),
                                 new NavigationResult.Position(target.x(), target.y()), true, 2, 10, List.of("WALK")));
             });
-            var loot = runtime.mount(LootActionModule.DEFINITION, new ModuleSelection<>("loot", LootActionModule.DEFAULT_CONFIG, true));
-            lootContext = runtime.context(loot.reference());
+            var mounted = runtime.mount(LootActionModule.DEFINITION, new ModuleSelection<>("loot", LootActionModule.DEFAULT_CONFIG, true));
+            lootRef = mounted.reference();
+            lootContext = runtime.context(lootRef);
         }
 
         MapItem ground(int itemId, int quantity, Point point, boolean owned) {
