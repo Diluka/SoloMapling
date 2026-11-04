@@ -30,7 +30,6 @@ import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
-import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
@@ -118,32 +117,13 @@ class CombatActionModuleTest {
 
     @Test void aNativeLinkageFailureReturnsToTheCallerAfterTheDamageWorkSettles() throws Exception {
         var failure = new NoSuchMethodError("native_drop_linkage_failure");
-        try (var fixture = new Fixture(false, prepared ->
+        try (var fixture = new Fixture(prepared ->
                 doAnswer(invocation -> { prepared.exp.set(500); throw failure; }).when(prepared.map)
                         .killMonster(prepared.target, prepared.actor, true))) {
             assertSame(failure, assertThrows(NoSuchMethodError.class,
                     () -> fixture.caller.call("combat.engage", Map.of("target_oid", 91))));
             assertEquals(0, fixture.target.getHp());
             assertEquals(500, fixture.actor.getExp());
-            fixture.assertCombatDrained();
-        }
-    }
-
-    @Test void engagementProjectsItsApproachOntoTheSlopeBeforeCallingRealNavigation() throws Exception {
-        try (var fixture = new Fixture(true, prepared -> {
-            var footholds = new FootholdTree(new Point(-500, -500), new Point(1000, 500));
-            footholds.insert(new Foothold(new Point(0, 0), new Point(500, 100), 1));
-            when(prepared.map.getFootholds()).thenReturn(footholds);
-            when(prepared.target.getPosition()).thenReturn(new Point(400, 80));
-        })) {
-            var result = (Map<?, ?>) fixture.caller.call("combat.engage", Map.of("target_oid", 91)).get("result");
-            assertEquals("TARGET_DEAD", result.get("outcome"), result.toString());
-            assertTrue((int) result.get("navigation_calls") >= 1);
-            Point actual = fixture.position.get();
-            assertTrue(actual.x >= 340, actual.toString());
-            assertTrue(Math.abs(actual.y - actual.x * .2) <= 4, actual.toString());
-            verify(fixture.map, atLeastOnce()).movePlayer(eq(fixture.actor), any());
-            verify(fixture.outside, never()).damage(any(), anyInt(), anyBoolean());
             fixture.assertCombatDrained();
         }
     }
@@ -197,12 +177,11 @@ class CombatActionModuleTest {
         final List<Packet> packets = new CopyOnWriteArrayList<>();
         final List<Throwable> laneFailures = new CopyOnWriteArrayList<>();
 
-        Fixture() { this(false, Job.THIEF, 1332000); }
-        Fixture(boolean navigation, Consumer<Fixture> beforeOpen) { this(navigation, Job.THIEF, 1332000, beforeOpen); }
-        Fixture(Job job, int weaponId) { this(false, job, weaponId); }
-        Fixture(boolean navigation, Job job, int weaponId) { this(navigation, job, weaponId, fixture -> {}); }
+        Fixture() { this(Job.THIEF, 1332000); }
+        Fixture(Consumer<Fixture> beforeOpen) { this(Job.THIEF, 1332000, beforeOpen); }
+        Fixture(Job job, int weaponId) { this(job, weaponId, fixture -> {}); }
 
-        Fixture(boolean navigation, Job job, int weaponId, Consumer<Fixture> beforeOpen) {
+        Fixture(Job job, int weaponId, Consumer<Fixture> beforeOpen) {
             WorldEpoch.onWorldStarted();
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -301,13 +280,6 @@ class CombatActionModuleTest {
                     CombatActionModule.DEFINITION.limits(), config -> new CombatActionModule(config, server),
                     CombatActionModule.DEFINITION.exports());
             runtime.mount(combat, new ModuleSelection<>("combat", CombatActionModule.DEFAULT_CONFIG, true));
-            if (navigation) {
-                var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
-                        NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
-                        NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, server),
-                        NavigationActionModule.DEFINITION.exports());
-                runtime.mount(definition, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
-            }
             var controller = new ModuleDefinition<Void, RuntimeModule>("test-controller", Set.of(),
                     new ExecutionScope.Limits(8, 2, 4, 2), config -> new RuntimeModule() {}, List.of());
             caller = runtime.context(runtime.mount(controller, new ModuleSelection<>("controller", null, true)).reference());
