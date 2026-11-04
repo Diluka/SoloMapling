@@ -22,7 +22,7 @@ public final class CharacterDamage {
         task = binding.startTask("scene-contact-" + binding.characterRef().character().getId(), this::run);
     }
 
-    public void stop() { task.cancel(); }
+    public void stop() { if (task != null) task.cancel(); }
 
     private void run(ExecutionScope.WorkHandle work) {
         var context = binding.context();

@@ -500,7 +500,7 @@ class TrainingScheduleControlModuleTest {
             if (failure.get() instanceof RuntimeException exception) throw exception;
         }
         private ReviveResult.State reviveState() {
-            return new ReviveResult.State(alive.get(), alive.get() ? 200 : 0, 80, mapId(), position.get().x, position.get().y);
+            return new ReviveResult.State(alive.get(), alive.get() ? 200 : 0, 80, mapId(), position.get().x, position.get().y, false);
         }
         private ReviveResult reviveResult(ReviveResult.Outcome outcome, ReviveResult.EventRoute route,
                                           ReviveResult.State before, ReviveResult.State after) {
@@ -508,7 +508,9 @@ class TrainingScheduleControlModuleTest {
             return new ReviveResult(outcome, id, runtime.acceptedEpoch().toString(), before, after,
                     new ReviveResult.Dispatch(true, true, false),
                     new ReviveResult.Event(route, true, true, standard, standard, standard, standard, standard,
-                            standard ? TOWN : null), before.mapId() != after.mapId(), false, null);
+                            standard ? TOWN : null),
+                    new ReviveResult.Transition(standard, standard, standard, false, standard),
+                    before.mapId() != after.mapId(), false, null);
         }
         private PortalResult.Endpoint endpoint(MapleMap map, Portal portal) {
             return new PortalResult.Endpoint(map.getId(), portal.getId(), portal.getName(), portal.getPosition().x, portal.getPosition().y);

@@ -32,6 +32,10 @@ if (call.status() == ModuleCall.Status.SUCCEEDED) {
 
 处理器返回 `void`，内部还可能捕获异常，因此 `handler_returned` 只说明本次派发返回。结果确认在同一 `CharacterRef` 和原世界代次下重新读取当前场景及角色状态。普通复活造成的合法换图按本操作允许的转换确认，不用旧地图对象拒绝已发生的复活；真正的来源或世界代次失效仍保留未知结果或原契约错误。
 
+确认本次原生派发已经进入新地图或产生换图状态后，若 `changing_maps=true`，共享原生地图进入适配会在原角色 lane 内派发 `PlayerMapTransitionHandler`。普通门户和普通复活共用这个精确场景确认入口，沿原生流程结束换图状态及控制者/对象刷新。取消已经发生的复活仍完成其地图进入确认；世界或角色资格失效则拒绝继续原生调用。没有本次转换事实时，不借复活请求完成外来的换图。
+
+`REVIVED` 保留已经确认的生命事实。地图进入确认失败或其后读取失败时，结果保留此前确认的存活、HP及场景事实，并用独立 `transition_*`、`acknowledgement_*` 与 `reason` 表达未完成部分，不自动重放复活。调用方分别读取实际生命状态与地图进入状态；`changing_maps=false` 只证明当前地图转换已结束，其他动作仍遵守各自资格。
+
 合法换图还可能结束当前 NPC 脚本 Context。`native.revive` 的原生执行完成与外层脚本能否继续分别核对：读取实际 `script_run` 结果和最新角色状态，Context 仍 OPEN 时按原 ID 继续；已关闭时按后续任务选择新的原生环境。
 
 ## 结果与证据
@@ -42,7 +46,7 @@ if (call.status() == ModuleCall.Status.SUCCEEDED) {
 |---|---|
 | `outcome`、可选 `reason` | 本次业务结果及具体原因 |
 | `character_id`、`epoch` | 本次精确角色及原世界代次 |
-| `before`、`after` | 各含 `alive/hp/mp/map_id/x/y`；尚未派发或后态不可读时相应值可为 `null` |
+| `before`、`after` | 各含 `alive/hp/mp/map_id/x/y/changing_maps`；尚未派发或后态不可读时相应值可为 `null` |
 | `dispatch_started` | 已通过派发前检查并进入原生处理器 |
 | `handler_returned`、`handler_error` | 本次处理器返回及其错误证据，分别于业务后态表达 |
 | `event_route` | `NOT_PRESENT/STANDARD_ALLOWED/TAKEN_OVER/UNCONFIRMED` |
@@ -50,6 +54,9 @@ if (call.status() == ModuleCall.Status.SUCCEEDED) {
 | `standard_respawn_started/returned` | 处理器标准 `respawn(int)` 路径的开始与返回证据 |
 | `respawn_started/returned` | 实际 `respawn(EventInstanceManager, int)` 步骤的开始与返回，包括事件内调用 |
 | `requested_return_map` | 已观察到的原生重生目标地图，未观察到时为 `null` |
+| `transition_observed` | 本次原生派发后观察到实际场景变化或新的换图状态 |
+| `acknowledgement_started/returned/error` | 地图进入确认的原生派发、返回及错误事实 |
+| `transition_complete` | 已观察本次转换，确认处理无错误且最后读取 `changing_maps=false` |
 | `scene_changed`、`cancel_requested` | 本次观察到的场景转换及取消请求事实 |
 | `event_work_completion` | 事件被调用时为 `OWNER_MANAGED_UNOBSERVED`，否则为 `NOT_APPLICABLE` |
 
@@ -69,7 +76,7 @@ if (call.status() == ModuleCall.Status.SUCCEEDED) {
 
 `native-actions` 声明独立 `revive` 控制入口，与 MCP、导航及战斗各自合法 Grant 并存。目录的调用 work 已在提供者受管载体执行；实际复活短命令使用提供者 scope 的新 work，进入同一角色原有唯一 lane，并等待它真实结算。原生派发沿既有限状态检查、ThreadLocal恢复与请求缓冲释放边界。
 
-调用者取消、期限、模块停止及根关闭沿现有调用关系传递。派发前取消阻止点击；派发后的取消不撤回已经发生的复活、换图或资料变化。函数完成条件是本次原生处理及提供者短命令实际退出，scope/work结算与操作结果分别核对。模块只收尾自己的工作和观察资源，原生事件及其共享任务保留原所有权。角色最终保存与退出由根来源负责。
+调用者取消、期限、模块停止及根关闭沿现有调用关系传递。派发前取消阻止点击；派发后的取消不撤回已经发生的复活、换图或资料变化。函数完成条件是本次原生处理、已发生转换的地图进入确认及提供者短命令实际退出，scope/work结算与操作结果分别核对。模块只收尾自己的工作和观察资源，原生事件及其共享任务保留原所有权。角色最终保存与退出由根来源负责。
 
 死亡、事件裁决及消耗材料场景在专用 fixture 或独立副本准备，准备变化与本次操作效果分开归因。验收分别记录真实存活、HP/MP、地图/位置、标准及事件路径、取消前后事实、正常保存重开，以及源码、隔离、部署和真人客户端范围。
 
