@@ -95,6 +95,7 @@ public final class SceneCaptureService {
         String reason = "capture_failed";
         boolean released = false;
         boolean fileComplete = false;
+        boolean headerWritten = false;
         SceneCaptureEvents.Subscription subscription = null;
         Map<String, Object> tailEvents = Map.of();
         Map<String, Object> unwrittenEvents = Map.of();
@@ -113,11 +114,12 @@ public final class SceneCaptureService {
             header.put("static_scene", staticScene(target));
             header.put("event_coverage", SceneCaptureEvents.coverage());
             bytes += write(output, header);
+            headerWritten = true;
             while (true) {
                 if (recording.cancelRequested) { reason = "cancelled"; break; }
-                if (frames > 0 && System.nanoTime() >= deadline) { reason = "duration_elapsed"; break; }
                 if (subscription.sceneDisposed()) { reason = "scene_destroyed"; break; }
                 observations.requireCaptureCurrent(target);
+                if (frames > 0 && System.nanoTime() >= deadline) { reason = "duration_elapsed"; break; }
                 var frameStarted = Instant.now();
                 var frame = new LinkedHashMap<>(SceneCaptureFrames.frame(target.map()));
                 observations.requireCaptureCurrent(target);
@@ -161,6 +163,7 @@ public final class SceneCaptureService {
             reason = recording.cancelRequested ? "cancelled" : "interrupted";
         } catch (ObservationException unavailable) {
             reason = unavailable.reason();
+            if (!headerWritten) throw unavailable;
         } catch (IOException transport) {
             reason = "output_failed";
             throw transport;
@@ -193,7 +196,7 @@ public final class SceneCaptureService {
             summary.put("sampling_stopped", true);
             summary.put("subscription_released", released);
             try {
-                if (!"output_failed".equals(reason) && !"capture_failed".equals(reason)) {
+                if (headerWritten && !"output_failed".equals(reason) && !"capture_failed".equals(reason)) {
                     var end = new LinkedHashMap<>(summary);
                     end.put("events", tailEvents);
                     if (!unwrittenEvents.isEmpty()) end.put("unwritten_frame_events", unwrittenEvents);
