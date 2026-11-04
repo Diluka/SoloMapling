@@ -52,7 +52,7 @@
 
 `end` 和后端终态将以下事实分别表达：
 
-- `file_complete`：已成功写出完整的结束记录。目标失效或主动取消也可以有结构完整的文件。
+- `file_complete`：后端已将完整结束记录写入本次HTTP流。目标失效或主动取消也可以写出完整end；此字段单独不能证明MCP宿主文件已经落盘。
 - `completed_normally`、`recording_complete`：本次按请求时长完成；提前取消、失效或大小限制为 false。
 - `sampling_stopped`：本次采样循环已实际退出。
 - `subscription_released`：本次原场景事件订阅已同步解除。
@@ -63,3 +63,5 @@
 HTTP 内部入口为 `POST /solo/acceptance/v1/scene/snapshot`、`POST /scene/record`、`GET /scene/record/{capture_id}` 和 `POST /scene/record/{capture_id}/cancel`，均以 `/solo/acceptance/v1` 为前缀并绑定管理员身份。采样直接在本次流的服务载体执行，没有脱离连接继续运行的后台 sampler。取消只唤醒本次载体，终态在真实收尾后登记；查询不允许用其他 owner 的 ID 读取或取消。
 
 MCP 中断、连接或文件写入失败时，桥关闭流并按已收到的 `capture_id` 请求取消、查询真实终态。只有已确认 `sampling_stopped` 与 `subscription_released` 才能报告后端停止。尚未收到 ID、查询失败或超时均保留停止未确认，已有文件保持部分状态。正常录制完成与覆盖完整分别验收，采集本身不得改变角色、controller 或游戏活动。
+
+宿主文件完整性以MCP调用结果、文件实际包含的end及成功关闭文件为准。真实写盘失败时，后端可能已把end写入流并在终态保留 `file_complete=true`，同时本地文件仍缺少end；此时MCP返回写盘错误及 `recording_complete=false`，已经确认的后端停止事实仍可为 `CONFIRMED`。不要用后端流写出事实覆盖本地文件失败。
