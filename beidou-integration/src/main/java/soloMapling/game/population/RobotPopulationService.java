@@ -88,6 +88,7 @@ public final class RobotPopulationService {
     }
 
     private static Assembly assemble(RobotPopulationConfig.RobotType type, CharacterRuntime runtime) {
+        runtime.initializeSceneMembership(Server.getInstance());
         Map<String, CharacterRuntime.MountedModule<?>> modules = new LinkedHashMap<>();
         for (var module : type.modules()) modules.put(module.instanceId(), module.mount().apply(runtime));
         return new Assembly(Collections.unmodifiableMap(modules));
@@ -124,7 +125,6 @@ public final class RobotPopulationService {
             try {
                 EnvironmentRobotOrigin.receive(instance.runtime(), opening, type.character());
                 instance.runtime().bindAdoptedOrigin();
-                instance.runtime().initializeSceneMembership(Server.getInstance());
                 assemble(type, instance.runtime());
                 initialized.set(true);
             } catch (RuntimeException | Error exception) {
