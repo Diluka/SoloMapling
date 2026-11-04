@@ -146,25 +146,8 @@ public final class SpotFinder {
                 id -> estimateShareCapacity(MapMobIndex.spawnPoints(id))));
     }
 
-    // Cluster raw WZ spawn points (same merge metric + per-ledge split + tiling as clusterSpawns, with
-    // the WZ foothold group standing in for the nav region) and count the resulting spots. Pure math —
-    // public for the headless distribution tests.
-    public static int estimateSpotCount(List<MapMobIndex.SpawnPos> spawnPoints) {
-        if (spawnPoints == null || spawnPoints.isEmpty()) {
-            return 0;
-        }
-        int count = 0;
-        for (List<SpawnPt> c : estimateClusters(spawnPoints)) {
-            for (List<SpawnPt> g : partitionByLedge(c)) {
-                count += (robustHalfSpreadX(g) <= SPOT_RADIUS_MAX) ? 1 : tileByX(g, 2 * SPOT_RADIUS_MAX).size();
-            }
-        }
-        return count;
-    }
-
-    // Same clustering, summed as share capacity (each spot/slice contributes its width-derived shareCap).
-    // Pure math — public for the headless distribution tests.
-    public static int estimateShareCapacity(List<MapMobIndex.SpawnPos> spawnPoints) {
+    // Estimate total share capacity from WZ spawn clusters and their per-ledge slices.
+    private static int estimateShareCapacity(List<MapMobIndex.SpawnPos> spawnPoints) {
         if (spawnPoints == null || spawnPoints.isEmpty()) {
             return 0;
         }
