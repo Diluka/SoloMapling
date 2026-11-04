@@ -313,13 +313,26 @@ class NavigationActionModuleTest {
     }
 
     @Test void pausingNavigationWhileAirborneSettlesItsMotionBeforeTheModuleSuspends() throws Exception {
+        var airborne = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
         var fixture = fixture(98_982_102, new Point(-50, 0),
-                List.of(foothold(-200, 0, 0, 0, 1), foothold(20, -40, 230, -40, 2)), List.of());
+                List.of(foothold(-200, 0, 0, 0, 1), foothold(20, -40, 230, -40, 2)), List.of(), configured -> {
+                    doAnswer(call -> {
+                        if (configured.position.get().y < -5 && airborne.getCount() != 0) {
+                            airborne.countDown();
+                            assertTrue(release.await(NavigationActionModule.DEFAULT_CONFIG.timeoutMs(), TimeUnit.MILLISECONDS));
+                        }
+                        return null;
+                    }).when(configured.map).movePlayer(eq(configured.character), any());
+                });
         var result = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(150, -40)));
-        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-        while (fixture.position.get().y >= -5 && System.nanoTime() < until) Thread.sleep(5);
-        assertTrue(fixture.position.get().y < -5);
-        var stopped = fixture.runtime.stop(fixture.module.context().reference(), CharacterRuntime.StopMode.PAUSE);
+        CharacterRuntime.ModuleStop stopped;
+        try {
+            assertTrue(airborne.await(NavigationActionModule.DEFAULT_CONFIG.timeoutMs(), TimeUnit.MILLISECONDS));
+            assertTrue(fixture.position.get().y < -5);
+            stopped = fixture.runtime.stop(fixture.module.context().reference(), CharacterRuntime.StopMode.PAUSE);
+            assertFalse(stopped.complete(), "the admitted native body must exit before pause completes");
+        } finally { release.countDown(); }
         assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
         var facts = result.get(5, TimeUnit.SECONDS);
         assertEquals("CANCELLED", facts.get("outcome"));
