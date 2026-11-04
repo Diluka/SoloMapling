@@ -3,6 +3,7 @@ package soloMapling.game.navigation;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.client.Disease;
+import org.gms.client.Job;
 import org.gms.client.BuffStat;
 import org.gms.client.inventory.Inventory;
 import org.gms.client.inventory.InventoryType;
@@ -34,6 +35,7 @@ import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -46,11 +48,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -112,12 +116,16 @@ class NavigationActionModuleTest {
 
     @Test void iceAndBothNativeShoeEffectsShareTheOrdinaryGroundProfileWhenProtected() {
         var ordinary = fixture(98_982_121, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
-        var ice = fixture(98_982_122, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
-        var natural = fixture(98_982_123, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
-        var scrolled = fixture(98_982_124, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of());
-        for (var fixture : List.of(ice, natural, scrolled)) when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
-        natural.shoe.set(shoe(1072239, 0));
-        scrolled.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+        var ice = fixture(98_982_122, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of(),
+                fixture -> when(fixture.map.getFootholdSpeed()).thenReturn(0.2f));
+        var natural = fixture(98_982_123, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of(), fixture -> {
+            when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
+            fixture.shoe.set(shoe(1072239, 0));
+        });
+        var scrolled = fixture(98_982_124, new Point(0, 0), List.of(foothold(-300, 0, 400, 0, 1)), List.of(), fixture -> {
+            when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
+            fixture.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+        });
         for (var fixture : List.of(ordinary, ice, natural, scrolled)) {
             var result = fixture.moveTo(new Point(120, 0));
             assertEquals("ARRIVED", result.get("outcome"), result.toString());
@@ -133,16 +141,17 @@ class NavigationActionModuleTest {
     }
 
     @Test void effectiveShoeChangeStopsTheIcePlanWhileOrdinaryGroundKeepsTheSamePlan() {
-        var ice = fixture(98_982_125, new Point(0, 0), List.of(foothold(-300, 0, 450, 0, 1)), List.of());
-        when(ice.map.getFootholdSpeed()).thenReturn(0.2f);
         var changedAt = new AtomicReference<Point>();
-        doAnswer(call -> {
-            if (ice.movements.size() == 8) {
-                changedAt.set(new Point(ice.position.get()));
-                ice.shoe.set(shoe(1072001, ItemConstants.SPIKES));
-            }
-            return null;
-        }).when(ice.map).movePlayer(eq(ice.character), any());
+        var ice = fixture(98_982_125, new Point(0, 0), List.of(foothold(-300, 0, 450, 0, 1)), List.of(), fixture -> {
+            when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
+            doAnswer(call -> {
+                if (fixture.movements.size() == 8) {
+                    changedAt.set(new Point(fixture.position.get()));
+                    fixture.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+                }
+                return null;
+            }).when(fixture.map).movePlayer(eq(fixture.character), any());
+        });
         var changed = ice.moveTo(new Point(300, 0));
         assertEquals("BLOCKED", changed.get("outcome"), changed.toString());
         assertEquals("attributes_changed", changed.get("reason"));
@@ -152,11 +161,12 @@ class NavigationActionModuleTest {
         assertEquals(0, ice.module.context().scope().resources().snapshot().outstanding());
         assertEquals("ARRIVED", ice.moveTo(new Point(0, 0)).get("outcome"));
 
-        var ordinary = fixture(98_982_126, new Point(0, 0), List.of(foothold(-300, 0, 450, 0, 1)), List.of());
-        doAnswer(call -> {
-            if (ordinary.movements.size() == 8) ordinary.shoe.set(shoe(1072001, ItemConstants.SPIKES));
-            return null;
-        }).when(ordinary.map).movePlayer(eq(ordinary.character), any());
+        var ordinary = fixture(98_982_126, new Point(0, 0), List.of(foothold(-300, 0, 450, 0, 1)), List.of(), fixture -> {
+            doAnswer(call -> {
+                if (fixture.movements.size() == 8) fixture.shoe.set(shoe(1072001, ItemConstants.SPIKES));
+                return null;
+            }).when(fixture.map).movePlayer(eq(fixture.character), any());
+        });
         assertEquals("ARRIVED", ordinary.moveTo(new Point(160, 0)).get("outcome"),
                 "a pure anti-slip change on ordinary ground does not change the effective profile");
     }
@@ -170,8 +180,8 @@ class NavigationActionModuleTest {
                     : shape == 1 ? List.of(foothold(-150, -80, 150, -80, 1), foothold(-250, 0, 250, 0, 2))
                     : List.of(foothold(-200, -180, 200, -180, 1), foothold(-200, 0, 200, 0, 2));
             var fixture = fixture(98_982_127 + shape, from, footholds,
-                    shape == 2 ? List.of(new Rope(0, -180, 0, true)) : List.of());
-            when(fixture.map.getFootholdSpeed()).thenReturn(0.2f);
+                    shape == 2 ? List.of(new Rope(0, -180, 0, true)) : List.of(),
+                    configured -> when(configured.map.getFootholdSpeed()).thenReturn(0.2f));
             var result = fixture.moveTo(target);
             assertEquals("ARRIVED", result.get("outcome"), result.toString());
             assertEquals(true, result.get("stable"));
@@ -235,26 +245,27 @@ class NavigationActionModuleTest {
     }
 
     @Test void nativeMapMovementRulesAndMidRouteStunStopFurtherNavigationInput() {
-        var fixture = fixture(98_982_105, new Point(0, 0),
-                List.of(foothold(-200, 0, 400, 0, 1)), List.of());
-        when(fixture.character.getTotalMoveSpeedStat()).thenReturn(200);
-        when(fixture.character.getTotalJumpStat()).thenReturn(123);
-        when(fixture.map.getFieldLimit()).thenReturn((int) FieldLimit.MOVEMENTSKILLS.getValue());
         var stunned = new AtomicBoolean();
-        when(fixture.character.hasDisease(Disease.STUN)).thenAnswer(call -> stunned.get());
         var calls = new AtomicInteger();
         var maximumStep = new AtomicInteger();
         var previous = new AtomicInteger();
         var stoppedAt = new AtomicReference<Point>();
-        doAnswer(call -> {
-            Point actual = fixture.position.get();
-            maximumStep.accumulateAndGet(actual.x - previous.getAndSet(actual.x), Math::max);
-            if (calls.incrementAndGet() == 10) {
-                stoppedAt.set(new Point(actual));
-                stunned.set(true);
-            }
-            return null;
-        }).when(fixture.map).movePlayer(eq(fixture.character), any());
+        var fixture = fixture(98_982_105, new Point(0, 0),
+                List.of(foothold(-200, 0, 400, 0, 1)), List.of(), configured -> {
+            when(configured.character.getTotalMoveSpeedStat()).thenReturn(200);
+            when(configured.character.getTotalJumpStat()).thenReturn(123);
+            when(configured.map.getFieldLimit()).thenReturn((int) FieldLimit.MOVEMENTSKILLS.getValue());
+            when(configured.character.hasDisease(Disease.STUN)).thenAnswer(call -> stunned.get());
+            doAnswer(call -> {
+                Point actual = configured.position.get();
+                maximumStep.accumulateAndGet(actual.x - previous.getAndSet(actual.x), Math::max);
+                if (calls.incrementAndGet() == 10) {
+                    stoppedAt.set(new Point(actual));
+                    stunned.set(true);
+                }
+                return null;
+            }).when(configured.map).movePlayer(eq(configured.character), any());
+        });
         var result = fixture.moveTo(new Point(300, 0));
         assertEquals("BLOCKED", result.get("outcome"));
         assertEquals("movement_actor_immobilized", result.get("reason"));
@@ -287,8 +298,64 @@ class NavigationActionModuleTest {
                 .filter(row -> row.instanceId().equals("pathfinder")).findFirst().orElseThrow().state());
     }
 
+    @Test void deathDuringNavigationStopsMotionWithoutReplacingTheNativeLifePose() {
+        var diedAt = new AtomicReference<Point>();
+        var fixture = fixture(98_982_132, new Point(0, 0),
+                List.of(foothold(-200, 0, 400, 0, 1)), List.of(), configured -> {
+            when(configured.character.getHp()).thenAnswer(call -> {
+                if (configured.movements.size() >= 6 && diedAt.get() == null) {
+                    diedAt.set(new Point(configured.position.get()));
+                    configured.hp.set(0);
+                    configured.stance.set(18);
+                }
+                return configured.hp.get();
+            });
+        });
+
+        var result = fixture.moveTo(new Point(300, 0));
+
+        assertEquals("BLOCKED", result.get("outcome"), result.toString());
+        assertEquals("movement_actor_dead", result.get("reason"));
+        assertNotNull(diedAt.get());
+        assertEquals(diedAt.get(), fixture.position.get());
+        assertEquals(18, fixture.stance.get());
+        assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
+    }
+
+    @Test void leavingTheSceneWaitsForTheOriginalNavigationBodyAndWorkToSettle() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var fixture = fixture(98_982_133, new Point(0, 0),
+                List.of(foothold(-200, 0, 400, 0, 1)), List.of(), configured -> {
+            doAnswer(call -> {
+                entered.countDown();
+                assertTrue(release.await(5, TimeUnit.SECONDS));
+                return null;
+            }).when(configured.map).movePlayer(eq(configured.character), any());
+        });
+        var binding = SceneRuntimeManager.current(fixture.server, fixture.module.context().characterRef());
+        var navigation = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(300, 0)));
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            fixture.runtime.beginClose(Optional.empty());
+            assertFalse(binding.scene().closed());
+            assertEquals("CLOSING", binding.scene().snapshot().get("state"));
+            assertFalse(fixture.runtime.whenModulesDrained().toCompletableFuture().isDone());
+        } finally {
+            release.countDown();
+        }
+        navigation.get(5, TimeUnit.SECONDS);
+        fixture.runtime.whenModulesDrained().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertTrue(binding.scene().closed());
+    }
+
     private Fixture fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes) {
-        var fixture = new Fixture(mapId, from, footholds, ropes);
+        return fixture(mapId, from, footholds, ropes, configured -> { });
+    }
+
+    private Fixture fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes,
+                            Consumer<Fixture> configure) {
+        var fixture = new Fixture(mapId, from, footholds, ropes, configure);
         fixtures.add(fixture);
         return fixture;
     }
@@ -304,13 +371,14 @@ class NavigationActionModuleTest {
         final MapleMap map = mock(MapleMap.class);
         final AtomicReference<Point> position;
         final AtomicInteger stance = new AtomicInteger(4);
+        final AtomicInteger hp = new AtomicInteger(50);
         final AtomicReference<Item> shoe = new AtomicReference<>();
         final List<Point> movements = new ArrayList<>();
         final CharacterRuntime runtime;
         final NavigationActionModule module;
         final CharacterRuntime.ModuleContext caller;
 
-        Fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes) {
+        Fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes, Consumer<Fixture> configure) {
             position = new AtomicReference<>(new Point(from));
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -329,7 +397,10 @@ class NavigationActionModuleTest {
             when(client.getPlayer()).thenReturn(character);
             when(client.getChannel()).thenReturn(1);
             when(client.isLoggedIn()).thenReturn(true);
-            when(character.getHp()).thenReturn(50);
+            when(character.getHp()).thenAnswer(call -> hp.get());
+            when(character.isAlive()).thenAnswer(call -> hp.get() > 0);
+            var job = Job.BEGINNER;
+            when(character.getJob()).thenReturn(job);
             when(character.getChair()).thenReturn(-1);
             when(character.getTotalMoveSpeedStat()).thenReturn(100);
             when(character.getTotalJumpStat()).thenReturn(100);
@@ -350,6 +421,7 @@ class NavigationActionModuleTest {
             when(character.getStance()).thenAnswer(call -> stance.get());
             doAnswer(call -> { position.set(new Point(call.getArgument(0))); movements.add(new Point(position.get())); return null; }).when(character).setPosition(any());
             doAnswer(call -> { stance.set(call.getArgument(0)); return null; }).when(character).setStance(anyInt());
+            configure.accept(this);
             var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8, 1,
                     new ExecutionScope.Limits(16, 2, 16, 2)), lane);
@@ -358,6 +430,7 @@ class NavigationActionModuleTest {
                 @Override public String kind() { return "navigation-test"; }
                 @Override public Object identity() { return character; }
                 @Override public GameContext.CharacterRef characterRef() { return actor; }
+                @Override public Optional<Server> clientSimulationServer() { return Optional.of(server); }
                 @Override public void requireCurrent() { }
                 @Override public Map<String, Object> observe() { return Map.of("character_id", 41); }
                 @Override public ReleaseProof release(ScopeResources.DrainPermit permit) {

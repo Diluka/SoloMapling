@@ -10,6 +10,7 @@ import org.gms.scripting.npc.NPCConversationManager;
 import org.gms.model.pojo.NextLevelContext;
 import org.gms.soloacceptance.ObservationException;
 import org.springframework.http.HttpStatus;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 import java.util.List;
 import java.util.Map;
@@ -56,6 +57,8 @@ public final class AcceptanceClient extends Client {
 
     @Override
     public void sendPacket(Packet packet) {
+        org.gms.client.Character character = getPlayer();
+        if (character != null) SceneRuntimeManager.packet(character, packet);
         long epoch = dialogue.epoch();
         PacketEventBuffer.Receipt receipt = packets.accept(packet, getLanguage());
         if (receipt == null) return;

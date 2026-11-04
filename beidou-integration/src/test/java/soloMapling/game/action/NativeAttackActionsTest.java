@@ -256,7 +256,7 @@ class NativeAttackActionsTest {
     }
 
     private NativeBasicActions.CommandHandle prepare(ExecutionScope.WorkHandle work) {
-        return NativeAttackActions.prepareAttack(server, lane, permit, work, scene, new NativeAttackAction(501));
+        return NativeAttackActions.prepareAttack(server, lane, permit, work, scene, new NativeAttackAction(501), facingLeft -> { });
     }
     private NativeBasicResult run() {
         var handle = prepare(scope.acceptWork()); NativeBasicActions.submit(handle); executor.runNext();

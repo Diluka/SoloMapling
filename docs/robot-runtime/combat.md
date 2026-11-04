@@ -50,19 +50,19 @@ modules.call("combat.engage", {
 
 伤害输入由可信有限policy按真实属性、装备与技能数据生成，结果保留 `damage_policy` 及原生派发事实：普攻沿 `basic_melee_v1`，已适配近战技能使用 `native_physical_skill_v1`，魔法使用 `native_magic_skill_v1`，真实自身Buff使用 `native_self_buff_v1`。原生近战、魔法或施法handler负责对应技能结算，并由 `MapleMap.damageMonster` 处理怪物HP、死亡、经验、任务与掉落。完整职业技能及客户端算法按后续切片扩展；当前覆盖以声明的分支和技能为准。
 
-## 交战期间的接触入伤
+## 场景常驻接触入伤
 
-首期 `contact_physical_v1` 在当前BEGINNER或冒险家Warrior/Mage真实分支的交战期间观察实际怪物与角色碰撞，包含接敌导航等待时间。它复用WZ怪物身体框，以角色脚点向上50px的竖向探测线与怪物下半身体框检查接触，沿模块实例的2500ms节拍派发有限物理受击输入；节拍跨本实例的不同目标保留，职业变化后按当前分支继续判断。
+`CharacterSceneModule` 的 `CharacterDamage` 在角色有效入场后持续观察接触，当前支持BEGINNER或冒险家Warrior/Mage的 `contact_physical_v1` 范围。待命、接敌、狩猎停止和商店活动均保持该场景职责；单次交战不再拥有受击循环。
 
-基础输入按怪物PADamage减去已穿装备WDEF及WDEF Buff之和的一半计算，最小为1；随后通过原生 `TakeDamageHandler` 结算MagicGuard、反伤、防御被动、真实HP/MP与死亡。此policy声明的是交战期间的接触受击范围，怪物追击、完整技能AI及客户端回避计算继续按后续支持扩展。
+它复用WZ怪物身体框，以角色脚点向上50px的竖向探测线与怪物下半身体框检查接触，按角色唯一的2500ms节拍派发有限物理受击输入。节拍跨目标、交战和换图保留。基础输入按怪物PADamage减去已穿装备WDEF及WDEF Buff之和的一半计算，最小为1；原生 `TakeDamageHandler` 结算MagicGuard、反伤、防御被动、真实HP/MP与死亡。完整客户端回避和复杂伤害模型继续按后续切片扩展。
 
-入伤工作归战斗模块原scope的独立 `ModuleTask`，与交战调用及其期限保持关联；派发前复核本次调用和当前场景。交战结束时先停止并等待该工作真实退出，再返回。恢复控制只观察真实后态并请求药剂，原生入伤和资源消耗分别留证。
+常驻工作归角色的 `scene-client` 原scope，每次观察和受击通过角色原有唯一lane执行。离场、世界停止和根关闭取消并等待对应工作真实退出；死亡留在原图时继续作为场景成员，读取原生存活事实并同步死亡/恢复姿态。恢复控制只观察真实后态并请求药剂。
 
 ## 接敌与收尾
 
-不可直接命中时，通过当前运行体的 `navigation.moveTo` 调用接敌，传递本次剩余期限，并等待导航实际结果。方向、攻击和受击短命令使用角色原有唯一lane；交战循环和停止等待在受管载体执行。
+不可直接命中时，通过当前运行体的 `navigation.moveTo` 调用接敌，传递本次剩余期限，并等待导航实际结果。方向、攻击和场景受击短命令使用角色原有唯一lane；交战循环和停止等待在受管载体执行。
 
-取消、期限、目标失效、场景变化、暂停、卸载和根关闭均停止新的派发，并等待已受理短命令、接敌导航及入伤工作真实结算。已发生的HP/MP、命中、死亡或收益事实保留。同一实例已有交战时，新调用返回 `BUSY`。
+取消、期限、目标失效、场景变化、暂停、卸载和根关闭均停止新的派发，并等待本交战已受理短命令和接敌导航真实结算；场景被动受击按成员生命周期继续。已发生的HP/MP、命中、死亡或收益事实保留。同一实例已有交战时，新调用返回 `BUSY`。
 
 ## 结果与事实范围
 
@@ -78,8 +78,8 @@ modules.call("combat.engage", {
 | `native_attacks`、`native_buffs` | 每项已适配技能最近的原生结果，包括实际等级、policy、派发、资源及命中事实 |
 | `native_attack_attempts`、`native_buff_attempts` | 本次原生攻击及Buff的累计尝试次数 |
 | `native_attack_fact_scope`、`native_buff_fact_scope` | `LATEST_PER_SKILL`，上述列表分别保留每技能最近事实 |
-| `contact_hits`、`contact_hit_count` | 最近一次接触结果及本次受击输入的派发次数，HP/MP变化读取具体结果 |
-| `contact_hit_fact_scope` | `LAST`，接触列表保留最后一次事实 |
+| `contact_hits`、`contact_hit_count` | 本交战期间场景后台最近一次接触结果及派发次数增量，HP/MP变化读取具体结果 |
+| `contact_hit_fact_scope` | `LAST_SCENE_BACKGROUND_DURING_ENGAGEMENT`，接触列表保留本次观察窗口内最后一次场景事实 |
 | `navigation_calls` | 接敌导航调用次数 |
 | `level_before/after`、`exp_before/after` | 实际等级及经验前后值 |
 | `elapsed_ms`、`execution_stopped` | 本次耗时与执行是否真实退出 |

@@ -6,6 +6,8 @@ import org.gms.client.inventory.InventoryType;
 import org.gms.net.server.Server;
 import soloMapling.game.action.PortalRequest;
 import soloMapling.game.action.PortalResult;
+import soloMapling.game.action.ReviveRequest;
+import soloMapling.game.action.ReviveResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
@@ -57,7 +59,7 @@ import soloMapling.game.training.TrainingScheduleStatus.State;
 public final class TrainingScheduleControlModule implements ControlModule {
     public record Config(int trainingMapId, int shopMapId, int shopNpcId,
                          HuntingStartOptions.Style huntingStyle, CapacityRule capacity, SaleRules sale,
-                         int checkIntervalMs) {
+                         int checkIntervalMs, boolean reviveOnDeath) {
         public Config {
             if (trainingMapId < 0 || shopMapId < 0 || trainingMapId == shopMapId || shopNpcId < 1
                     || checkIntervalMs < 1) throw new IllegalArgumentException("invalid_training_schedule_config");
@@ -66,7 +68,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
 
     public static final Config DEFAULT_CONFIG = new Config(104040000, 100000102, 1011100,
             HuntingStartOptions.Style.PATROL, new CapacityRule(Set.of(InventoryType.ETC), 0),
-            new SaleRules(Set.of(), Set.of(), Map.of()), 500);
+            new SaleRules(Set.of(), Set.of(), Map.of()), 500, true);
     public static final ModuleDefinition<Config, TrainingScheduleControlModule> DEFINITION = new ModuleDefinition<>(
             "training-schedule", Set.of("training-observe"), new ExecutionScope.Limits(8, 1, 2, 1),
             config -> new TrainingScheduleControlModule(config, Server.getInstance()), List.of());
@@ -76,7 +78,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
     private static final int MAX_SALE_FACTS = 8;
     private static final int MAX_QUANTITY_FACTS = 16;
     private static final Set<String> COLLABORATORS = Set.of("hunting.start", "hunting.stop", "loot.collect",
-            "travel.plan", "navigation.moveTo", "native.enterPortal", "shop.open", "shop.sell", "shop.close");
+            "travel.plan", "navigation.moveTo", "native.enterPortal", "native.revive", "shop.open", "shop.sell", "shop.close");
 
     private final Config config;
     private final Server server;
@@ -101,7 +103,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
 
     public static Config parseConfig(Map<String, Object> values) {
         var names = Set.of("training_map_id", "shop_map_id", "shop_npc_id", "hunting_style", "capacity", "sale",
-                "check_interval_ms");
+                "check_interval_ms", "revive_on_death");
         if (!names.containsAll(values.keySet())) throw new IllegalArgumentException("unknown_training_schedule_config");
         var capacity = object(values.getOrDefault("capacity", Map.of()), "capacity");
         if (!Set.of("inventory_types", "minimum_free_slots").containsAll(capacity.keySet())) {
@@ -116,6 +118,9 @@ public final class TrainingScheduleControlModule implements ControlModule {
         var retained = object(sale.getOrDefault("retained_quantities", Map.of()), "retained_quantities");
         var quantities = new LinkedHashMap<Integer, Integer>();
         retained.forEach((id, quantity) -> quantities.put(integer(id), integer(quantity)));
+        if (!(values.getOrDefault("revive_on_death", DEFAULT_CONFIG.reviveOnDeath()) instanceof Boolean reviveOnDeath)) {
+            throw new IllegalArgumentException("invalid_training_revive_on_death");
+        }
         return new Config(integer(values.getOrDefault("training_map_id", DEFAULT_CONFIG.trainingMapId())),
                 integer(values.getOrDefault("shop_map_id", DEFAULT_CONFIG.shopMapId())),
                 integer(values.getOrDefault("shop_npc_id", DEFAULT_CONFIG.shopNpcId())),
@@ -123,7 +128,8 @@ public final class TrainingScheduleControlModule implements ControlModule {
                 new CapacityRule(types, integer(capacity.getOrDefault("minimum_free_slots", 0))),
                 new SaleRules(itemIds(sale.getOrDefault("allowed_item_ids", List.of())),
                         itemIds(sale.getOrDefault("retained_item_ids", List.of())), quantities),
-                integer(values.getOrDefault("check_interval_ms", DEFAULT_CONFIG.checkIntervalMs())));
+                integer(values.getOrDefault("check_interval_ms", DEFAULT_CONFIG.checkIntervalMs())),
+                reviveOnDeath);
     }
 
     private static Map<String, Object> object(Object value, String name) {
@@ -217,7 +223,21 @@ public final class TrainingScheduleControlModule implements ControlModule {
         try {
             while (!work.cancelRequested()) {
                 var facts = observe(activity);
-                synchronized (this) { activity.currentMapId = facts.mapId(); }
+                synchronized (this) {
+                    activity.currentMapId = facts.mapId();
+                    if (facts.alive() && activity.deathObserved && activity.state != State.STOPPING
+                            && !work.cancelRequested()) {
+                        activity.deathObserved = false;
+                        activity.reviveAttempted = false;
+                        activity.stage = Stage.STARTING;
+                        activity.blockedOn = null;
+                        if (!activity.lootIndeterminate && !activity.saleIndeterminate && !activity.portalIndeterminate) {
+                            activity.state = State.RUNNING;
+                            activity.reason = null;
+                        }
+                        activity.context.recordActivity(work, "revived", "STARTING");
+                    }
+                }
                 var condition = condition(activity, facts);
                 synchronized (this) {
                     if (activity.state == State.BLOCKED && (activity.lootIndeterminate || activity.saleIndeterminate || activity.portalIndeterminate || condition.equals(activity.blockedOn))) {
@@ -229,7 +249,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
                 if (activity.state == State.STOPPING) break;
                 if (activity.state != State.BLOCKED) {
                     String blocked;
-                    if (!facts.alive()) blocked = "dead";
+                    if (!facts.alive()) blocked = recoverDeath(activity, work);
                     else if (facts.changingMaps()) blocked = "map_transition_pending";
                     else {
                         if (activity.stage == Stage.STARTING) {
@@ -310,6 +330,27 @@ public final class TrainingScheduleControlModule implements ControlModule {
                 activity.context.recordActivity(work, activity.reason, "ENDED");
             }
         }
+    }
+
+    private String recoverDeath(Activity activity, ExecutionScope.WorkHandle work) {
+        stopHunting(activity);
+        closeShop(activity);
+        activity.deathObserved = true;
+        if (!config.reviveOnDeath()) return "dead_waiting_external_revive";
+        // An accepted native event may finish later. Observe it rather than replaying its side effects.
+        if (activity.reviveAttempted) return activity.reviveWaitReason;
+        var revived = activity.context.call(NativeActionModule.REVIVE, ReviveRequest.NORMAL, work);
+        if (revived.status() == ModuleCall.Status.UNAVAILABLE) return "revive_" + revived.reason();
+        var result = revived.result();
+        activity.reviveAttempted = result.dispatch().started();
+        activity.context.recordActivity(work, "revive_" + result.outcome().name().toLowerCase(java.util.Locale.ROOT), "RECOVERING");
+        if (result.outcome() == ReviveResult.Outcome.REVIVED || result.outcome() == ReviveResult.Outcome.ALREADY_ALIVE) {
+            stage(activity, Stage.STARTING);
+            return null;
+        }
+        activity.reviveWaitReason = result.event().route() == ReviveResult.EventRoute.TAKEN_OVER
+                ? "revive_waiting_event" : "revive_" + result.outcome().name().toLowerCase(java.util.Locale.ROOT);
+        return activity.reviveWaitReason;
     }
 
     private String hunt(Activity activity, ExecutionScope.WorkHandle work, Observation facts) {
@@ -653,6 +694,9 @@ public final class TrainingScheduleControlModule implements ControlModule {
         boolean lootIndeterminate;
         boolean saleIndeterminate;
         boolean portalIndeterminate;
+        boolean deathObserved;
+        boolean reviveAttempted;
+        String reviveWaitReason;
         Cycle cycle;
         Activity(long id, CharacterRuntime.ModuleContext context) { this.id = id; this.context = context; }
     }

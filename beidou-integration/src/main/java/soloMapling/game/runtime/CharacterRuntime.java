@@ -6,6 +6,8 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
+import soloMapling.game.scene.SceneMembershipModule;
+import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
 import soloMapling.game.script.nativeenv.NativeScriptExecution;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -36,6 +38,11 @@ public final class CharacterRuntime {
     public static boolean ownsNativeRole(org.gms.client.Character character) {
         synchronized (ROLE_OWNERS) { return ROLE_OWNERS.containsKey(character); }
     }
+
+    /** Native map hooks resolve the existing host; they never create another character runtime. */
+    public static CharacterRuntime nativeOwner(org.gms.client.Character character) {
+        synchronized (ROLE_OWNERS) { return ROLE_OWNERS.get(character); }
+    }
     private final Object monitor = new Object();
     private final Object generation = new Object();
     private final String id = "runtime-" + UUID.randomUUID();
@@ -64,6 +71,7 @@ public final class CharacterRuntime {
     private String originKind;
     private Integer characterId;
     private CharacterCommandLane.Snapshot closedLane;
+    private volatile SceneMembershipModule sceneMembership;
 
     public record Options(int commandCapacity, int cleanupReserve, ExecutionScope.Limits rootLimits) {
         public Options {
@@ -214,12 +222,22 @@ public final class CharacterRuntime {
             state = State.BOUND;
             events.append(RuntimeEvents.Kind.BOUND, null, 0, null, null, null);
         }
+        exact.clientSimulationServer().ifPresent(server -> {
+            sceneMembership = mount(SceneMembershipModule.DEFINITION,
+                    new ModuleSelection<>("scene-client", new SceneMembershipModule.Config(this, server, ref), true)).instance();
+        });
+    }
+
+    public void refreshSceneMembership() {
+        SceneMembershipModule membership = sceneMembership;
+        if (state == State.BOUND && membership != null) membership.refresh();
     }
 
     /** This is a fresh origin projection, not a runtime-maintained copy of native role fields. */
     public Map<String, Object> observeOrigin() {
         RoleBinding exact = requireBound();
         Map<String, Object> facts = new LinkedHashMap<>(Objects.requireNonNull(exact.observe()));
+        if (sceneMembership != null) facts.put("scene_runtime", SceneRuntimeManager.snapshot(characterRef.character()));
         exact.requireCurrent();
         synchronized (monitor) {
             require(state == State.BOUND && binding == exact, "runtime_binding_changed");
@@ -761,7 +779,7 @@ public final class CharacterRuntime {
             finished = lane;
             finished.close();
             closedLane = finished.snapshot();
-            lane = null; admission = null; binding = null; openingWork = null; originIdentity = null;
+            lane = null; admission = null; binding = null; openingWork = null; originIdentity = null; sceneMembership = null;
             state = State.CLOSED;
             events.append(RuntimeEvents.Kind.CLOSED, null, 0, null, null, null);
         }

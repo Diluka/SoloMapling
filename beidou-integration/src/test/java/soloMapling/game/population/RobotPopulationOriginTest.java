@@ -219,7 +219,13 @@ class RobotPopulationOriginTest {
 
     private void close() {
         runtime.beginClose(Optional.empty());
-        executor.drain();
+        var drained = runtime.whenModulesDrained().toCompletableFuture();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!drained.isDone() && System.nanoTime() < deadline) {
+            executor.drain();
+            Thread.yield();
+        }
+        assertTrue(drained.isDone(), "scene work must exit before native origin cleanup");
         if (!runtime.originReleased()) {
             var cleanup = runtime.acquireOriginCleanup();
             runtime.submitOriginCleanup(cleanup, () -> runtime.releaseOrigin(cleanup), () -> {});
@@ -239,10 +245,19 @@ class RobotPopulationOriginTest {
         private final ArrayDeque<Runnable> queue = new ArrayDeque<>();
         private boolean stopped;
         @Override public int commandQueueCapacity() { return 8; }
-        void drain() { while (!queue.isEmpty()) queue.removeFirst().run(); }
+        void drain() {
+            while (true) {
+                Runnable next;
+                synchronized (queue) { next = queue.pollFirst(); }
+                if (next == null) return;
+                next.run();
+            }
+        }
         @Override public void execute(Runnable command) {
-            if (stopped || queue.size() >= 8) throw new RejectedExecutionException();
-            queue.addLast(command);
+            synchronized (queue) {
+                if (stopped || queue.size() >= 8) throw new RejectedExecutionException();
+                queue.addLast(command);
+            }
         }
         @Override public void shutdown() { stopped = true; }
         @Override public List<Runnable> shutdownNow() { shutdown(); var pending = new ArrayList<>(queue); queue.clear(); return pending; }

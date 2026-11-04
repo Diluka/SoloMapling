@@ -3,7 +3,7 @@ package soloMapling.game.combat;
 import org.gms.client.Job;
 import org.gms.client.Character;
 import org.gms.client.inventory.WeaponType;
-import soloMapling.game.action.NativeCombatActions;
+import soloMapling.game.scene.AbilitySceneModule;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackConfig;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackProfile;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotBuffConfig;
@@ -20,7 +20,7 @@ public final class CombatJobTree {
     public enum AttackKind { SINGLE, AOE, ULTIMATE }
 
     public record AttackPlan(Job providerJob, AttackKind kind, BotAttackProfile profile, boolean undeadOnly,
-                             NativeCombatActions.Plan nativePlan) {
+                             AbilitySceneModule.Plan nativePlan) {
         public boolean nativeRules() { return nativePlan != null; }
         public int reachX() { return nativeRules() ? nativePlan.reachX() : profile.reachX; }
         public int reachY() { return nativeRules() ? nativePlan.reachY() : profile.reachY; }
@@ -97,18 +97,19 @@ public final class CombatJobTree {
             if (kind == AttackKind.ULTIMATE) return Optional.empty();
             if (actor.getJob().isA(Job.WARRIOR)) {
                 int skillId = kind == AttackKind.AOE ? 1001005 : 1001004;
-                var plan = NativeCombatActions.plan(actor, skillId);
+                var plan = AbilitySceneModule.plan(actor, skillId);
                 if (plan != null) return Optional.of(new AttackPlan(Job.WARRIOR, kind, null, false, plan));
             } else if (actor.getJob().isA(Job.MAGICIAN) && kind == AttackKind.SINGLE) {
                 for (int skillId : List.of(2001005, 2001004)) {
-                    var plan = NativeCombatActions.plan(actor, skillId);
+                    var plan = AbilitySceneModule.plan(actor, skillId);
                     if (plan != null) return Optional.of(new AttackPlan(Job.MAGICIAN, kind, null, false, plan));
                 }
             }
-            var basic = kind == AttackKind.SINGLE ? NativeCombatActions.plan(actor, 0) : null;
+            var basic = kind == AttackKind.SINGLE ? AbilitySceneModule.plan(actor, 0) : null;
             return basic == null ? Optional.empty()
                     : Optional.of(new AttackPlan(Job.BEGINNER, kind, null, false, basic));
         }
+        if (weapon == null || weapon == WeaponType.NOT_A_WEAPON) return Optional.empty();
         if (undeadTarget && kind == AttackKind.AOE && healing != null) {
             return Optional.of(new AttackPlan(healing.job(), kind, BotAttackConfig.healUndead(), true, null));
         }
@@ -125,7 +126,7 @@ public final class CombatJobTree {
                 ? Optional.of(new AttackPlan(Job.BEGINNER, kind, basicFallback, false, null)) : Optional.empty();
     }
 
-    static boolean nativeMode(Character actor) {
+    public static boolean nativeMode(Character actor) {
         Job job = actor.getJob();
         return job == Job.BEGINNER || job.isA(Job.WARRIOR) || job.isA(Job.MAGICIAN);
     }

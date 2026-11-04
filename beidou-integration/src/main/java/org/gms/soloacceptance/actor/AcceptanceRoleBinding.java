@@ -10,6 +10,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import org.gms.net.server.Server;
 
 /** Ordinary MCP origin policy around one exact native handle; runtime owns its resource ledger. */
 final class AcceptanceRoleBinding implements RoleBinding {
@@ -25,6 +27,7 @@ final class AcceptanceRoleBinding implements RoleBinding {
     @Override public String kind() { return "mcp_acceptance"; }
     @Override public Object identity() { return handle; }
     @Override public GameContext.CharacterRef characterRef() { return handle.characterRef(); }
+    @Override public Optional<Server> clientSimulationServer() { return backend.clientSimulationServer(); }
     @Override public void requireCurrent() { backend.requireCurrentRole(handle); }
 
     @Override public Map<String, Object> observe() {

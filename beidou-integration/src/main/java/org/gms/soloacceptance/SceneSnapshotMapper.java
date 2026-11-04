@@ -10,6 +10,7 @@ import org.gms.server.maps.MapleMap;
 import org.gms.server.maps.Portal;
 import org.gms.server.maps.Reactor;
 import soloMapling.beidou.BotRegistry;
+import soloMapling.game.scene.EnvironmentSceneModule;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -34,7 +35,7 @@ final class SceneSnapshotMapper {
         }
 
         // getMapObjects already acquires the native read lock and returns a copy.
-        List<MapObject> objects = new ArrayList<>(map.getMapObjects());
+        List<MapObject> objects = new ArrayList<>(EnvironmentSceneModule.objects(map));
         objects.removeIf(object -> object == null);
         objects.sort(Comparator.comparingInt(MapObject::getObjectId));
         Map<String, Integer> unsupported = new LinkedHashMap<>();

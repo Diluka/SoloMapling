@@ -2,15 +2,14 @@ package soloMapling.game.action;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import org.gms.client.BuffStat;
 import org.gms.client.Character;
-import org.gms.client.Disease;
 import org.gms.client.inventory.WeaponType;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.handlers.CloseRangeDamageHandler;
 import org.gms.server.life.Monster;
 import org.gms.server.maps.MapleMap;
 import soloMapling.game.context.GameContext;
+import soloMapling.game.scene.AbilitySceneModule;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 
@@ -18,6 +17,7 @@ import java.awt.Point;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import static soloMapling.game.action.NativeActionResult.Outcome.*;
 
@@ -31,18 +31,19 @@ public final class NativeAttackActions {
         return Map.of("damage_policy", NativeAttackDamagePolicy.ID, "skill", 0, "targets", 1, "damage_lines", 1,
                 "maximum_horizontal_distance", MAXIMUM_HORIZONTAL_DISTANCE,
                 "maximum_vertical_distance", MAXIMUM_VERTICAL_DISTANCE,
-                "supported_weapon_types", NativeAttackDamagePolicy.WEAPONS,
+                "supported_weapon_types", AbilitySceneModule.SUPPORTED_MELEE_WEAPONS,
                 "native_damage_attribution", true, "client_calculation_equivalent", false);
     }
 
     public static NativeBasicActions.CommandHandle prepareAttack(Server server, CharacterCommandLane lane,
             CharacterCommandLane.ControlPermit permit, ExecutionScope.WorkHandle work, GameContext.SceneRef scene,
-            NativeAttackAction action) {
+            NativeAttackAction action, Consumer<Boolean> presentFacing) {
         Objects.requireNonNull(action);
-        return NativeBasicActions.prepare(server, lane, permit, work, scene, "attack", context -> attack(context, action));
+        return NativeBasicActions.prepare(server, lane, permit, work, scene, "attack", context -> attack(context, action, presentFacing));
     }
 
-    private static NativeBasicResult attack(NativeBasicActions.Context context, NativeAttackAction action) {
+    private static NativeBasicResult attack(NativeBasicActions.Context context, NativeAttackAction action,
+                                            Consumer<Boolean> presentFacing) {
         Character actor = context.actor().character();
         MapleMap map = context.scene().map();
         Monster target = map.getMonsterByOid(action.targetOid());
@@ -59,6 +60,7 @@ public final class NativeAttackActions {
             if (map.getMonsterByOid(action.targetOid()) != target) {
                 throw new NativeActionService.Invalid("attack_target_changed");
             }
+            presentFacing.accept(targetPosition.x < actorPosition.x);
             context.dispatch(new CloseRangeDamageHandler(), attackPacket(action.targetOid(), roll.damage(),
                     roll.attributes().weaponType(), targetPosition.x < actorPosition.x));
             evidence = probe.fact();
@@ -89,9 +91,7 @@ public final class NativeAttackActions {
     }
 
     private static void requireTarget(Character actor, MapleMap map, Monster target, int oid) {
-        if (!actor.isAlive() || actor.isBanned() || actor.hasDisease(Disease.STUN) || actor.hasDisease(Disease.SEDUCE)
-                || actor.getBuffedValue(BuffStat.MONSTER_RIDING) != null
-                || actor.getBuffEffect(BuffStat.MORPH) != null && actor.getBuffEffect(BuffStat.MORPH).isMorphWithoutAttack()) {
+        if (AbilitySceneModule.attackRejection(actor, 0) != null) {
             throw new NativeActionService.Invalid("attack_actor_state_rejected");
         }
         if (target == null || target.getObjectId() != oid || target.getMap() != map || !target.isAlive()
