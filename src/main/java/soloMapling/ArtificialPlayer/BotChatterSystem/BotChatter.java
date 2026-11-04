@@ -53,8 +53,8 @@ public final class BotChatter {
     public static volatile long CHATTER_COOLDOWN_MIN_MS = 30_000;
     public static volatile long CHATTER_COOLDOWN_MAX_MS = 90_000;
     // Reading pace between turns.
-    public static volatile long TURN_PAUSE_MIN_MS = 2_200;
-    public static volatile long TURN_PAUSE_MAX_MS = 3_800;
+    private static final long TURN_PAUSE_MIN_MS = 2_200;
+    private static final long TURN_PAUSE_MAX_MS = 3_800;
     // Chance a spoken turn is punctuated by a friendly emote.
     public static volatile double CHATTER_EMOTE_CHANCE = 0.25;
 
