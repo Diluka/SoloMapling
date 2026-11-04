@@ -133,7 +133,7 @@ public final class NativeActorBackend {
         profiles.resolve(profileId, world, channel);
     }
 
-    java.util.Optional<Server> clientSimulationServer() { return java.util.Optional.of(servers.get()); }
+    Server clientSimulationServer() { return servers.get(); }
 
     public void validateChat(NativeActorHandle handle, String text) {
         requireOrdinaryActor(handle);

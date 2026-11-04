@@ -1,5 +1,6 @@
 package soloMapling.game.runtime;
 
+import org.gms.net.server.Server;
 import soloMapling.game.action.NativeActionFact;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
@@ -222,10 +223,12 @@ public final class CharacterRuntime {
             state = State.BOUND;
             events.append(RuntimeEvents.Kind.BOUND, null, 0, null, null, null);
         }
-        exact.clientSimulationServer().ifPresent(server -> {
-            sceneMembership = mount(SceneMembershipModule.DEFINITION,
-                    new ModuleSelection<>("scene-client", new SceneMembershipModule.Config(this, server, ref), true)).instance();
-        });
+    }
+
+    /** Native source assembly attaches its scene client after binding the origin. */
+    public void initializeSceneMembership(Server server) {
+        sceneMembership = mount(SceneMembershipModule.DEFINITION,
+                new ModuleSelection<>("scene-client", new SceneMembershipModule.Config(this, server, characterRef), true)).instance();
     }
 
     public void refreshSceneMembership() {

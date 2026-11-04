@@ -87,6 +87,7 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         var world = WorldEpoch.snapshot();
         return binding.active() && !closed && !scene.closed() && drivers.contains(binding)
                 && world.active() && world.token() == scene.epoch()
+                && !binding.characterRef().character().isChangingMaps()
                 && binding.context().scope().isActive() && supports(monster);
     }
 
@@ -172,6 +173,7 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
     private void tick(SceneActorBinding binding, ExecutionScope.WorkHandle work) {
         binding.requireCurrent();
         var character = binding.characterRef().character();
+        if (character.isChangingMaps()) return;
         var monsters = scene.environment().monsters();
         motions.keySet().removeIf(monster -> scene.map().getMonsterByOid(monster.getObjectId()) != monster);
         for (var monster : monsters) {
@@ -256,6 +258,10 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
                     if (!changed.reason().equals("monster_controller_changed")) throw changed;
                     motion.controller = null;
                     continue;
+                }
+                if (!result.mapReady()) {
+                    motion.controller = null;
+                    return;
                 }
                 motion.confirmedX = result.xAfter();
                 motion.confirmedY = result.yAfter();

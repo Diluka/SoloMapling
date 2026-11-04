@@ -96,6 +96,7 @@ final class AcceptanceActorExecution {
     void bindActor(NativeActorHandle exactHandle) {
         if (adoptedHandle() != exactHandle) throw unverified();
         runtime.bindAdoptedOrigin();
+        runtime.initializeSceneMembership(backend.clientSimulationServer());
         var assembly = population.assemble("mcp_test", runtime);
         var mounted = assembly.find(McpControlModule.class).orElseThrow();
         module = mounted.instance();

@@ -1,5 +1,6 @@
 package soloMapling.game.population;
 
+import org.gms.net.server.Server;
 import org.gms.soloacceptance.actor.McpControlModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -123,6 +124,7 @@ public final class RobotPopulationService {
             try {
                 EnvironmentRobotOrigin.receive(instance.runtime(), opening, type.character());
                 instance.runtime().bindAdoptedOrigin();
+                instance.runtime().initializeSceneMembership(Server.getInstance());
                 assemble(type, instance.runtime());
                 initialized.set(true);
             } catch (RuntimeException | Error exception) {

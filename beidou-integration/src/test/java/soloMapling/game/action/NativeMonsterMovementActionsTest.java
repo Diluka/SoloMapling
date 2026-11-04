@@ -77,9 +77,22 @@ class NativeMonsterMovementActionsTest {
             database.when(DatabaseConnection::getConnection).thenReturn(connection);
             MonsterInformationProvider.getInstance();
             var work = scope.acceptWork();
+            when(actor.isChangingMaps()).thenReturn(true);
+            var pending = NativeMonsterMovementActions.move(server, scene, work, monster,
+                    (short) 1, new Point(5, 0), 50, 2, 1, 100);
+            assertFalse(pending.mapReady());
+            assertFalse(pending.dispatched());
+            assertFalse(pending.handlerError());
+            assertEquals(new Point(0, 0), monster.getPosition());
+            verify(map, never()).moveMonster(any(), any());
+            packets.verifyNoInteractions();
+
+            // The scene owner completes entry; the movement edge only reads the native readiness fact.
+            when(actor.isChangingMaps()).thenReturn(false);
             var result = NativeMonsterMovementActions.move(server, scene, work, monster,
                     (short) 1, new Point(5, 0), 50, 2, 1, 100);
 
+            assertTrue(result.mapReady());
             assertTrue(result.dispatched());
             assertFalse(result.handlerError());
             assertTrue(result.positionConfirmed());
@@ -87,6 +100,25 @@ class NativeMonsterMovementActionsTest {
             verify(map).moveMonster(monster, new Point(5, 0));
             packets.verify(() -> PacketCreator.moveMonster(eq(501), anyBoolean(), anyInt(), anyInt(), anyInt(),
                     anyInt(), eq(new Point(0, 0)), any(), anyLong()));
+
+            // A transition between initial admission and final dispatch remains a known, unstarted frame.
+            when(actor.isChangingMaps()).thenReturn(false, true);
+            var notDispatched = NativeMonsterMovementActions.move(server, scene, work, monster,
+                    (short) 2, new Point(10, 0), 50, 2, 1, 100);
+            assertFalse(notDispatched.mapReady());
+            assertFalse(notDispatched.dispatched());
+            assertFalse(notDispatched.handlerError());
+            assertEquals(new Point(5, 0), monster.getPosition());
+
+            when(actor.isChangingMaps()).thenReturn(false);
+            doThrow(new IllegalStateException("native_handler_failure")).when(map).getMapObject(501);
+            var failedHandler = NativeMonsterMovementActions.move(server, scene, work, monster,
+                    (short) 3, new Point(10, 0), 50, 2, 1, 100);
+            assertTrue(failedHandler.mapReady());
+            assertTrue(failedHandler.dispatched());
+            assertTrue(failedHandler.handlerError());
+            assertFalse(failedHandler.positionConfirmed());
+            doReturn(monster).when(map).getMapObject(501);
 
             doReturn(null).when(monster).getController();
             assertThrows(NativeActionService.Invalid.class, () -> NativeMonsterMovementActions.move(server, scene,

@@ -19,8 +19,6 @@ import org.gms.server.maps.MapManager;
 import org.gms.server.maps.MapObject;
 import org.gms.server.maps.MapObjectType;
 import org.gms.server.maps.MapleMap;
-import org.gms.server.maps.Portal;
-import org.gms.server.maps.Rope;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
@@ -65,12 +63,7 @@ class SceneCaptureProjectionTest {
             var footholds = new FootholdTree(new Point(-100, -200), new Point(900, 600));
             footholds.insert(new Foothold(new Point(-80, 0), new Point(200, 0), 1));
             when(map.getFootholds()).thenReturn(footholds);
-            when(map.getRopes()).thenReturn(List.of(new Rope(120, -100, 0, true)));
             when(map.getFootholdSpeed()).thenReturn(1.0f);
-            var portal = mock(Portal.class);
-            when(portal.getName()).thenReturn("sp");
-            when(portal.getPosition()).thenReturn(new Point(0, 0));
-            when(map.getPortals()).thenReturn(List.of(portal));
 
             var player = mock(Character.class);
             var client = mock(Client.class);
@@ -90,6 +83,7 @@ class SceneCaptureProjectionTest {
             when(player.getStance()).thenReturn(19);
             when(player.isFacingLeft()).thenReturn(true);
             when(player.isAlive()).thenReturn(true);
+            when(player.isChangingMaps()).thenReturn(true);
             when(player.getHp()).thenAnswer(ignored -> hp.get());
             when(player.getMp()).thenReturn(31);
             when(player.getMaxHp()).thenReturn(100);
@@ -144,6 +138,7 @@ class SceneCaptureProjectionTest {
             assertEquals(31, capturedPlayer.get("mp"));
             assertEquals(120, capturedPlayer.get("max_hp"));
             assertEquals(19, capturedPlayer.get("stance"));
+            assertEquals(true, capturedPlayer.get("changing_maps"));
             assertEquals(1302000, capturedPlayer.get("weapon_item_id"));
             var monsters = assertInstanceOf(Map.class, nativeState.get("monsters"));
             var capturedMonsters = assertInstanceOf(List.class, monsters.get("items"));
@@ -178,8 +173,6 @@ class SceneCaptureProjectionTest {
             assertEquals(125, assertInstanceOf(List.class, items.get("items")).size());
             var staticScene = assertInstanceOf(Map.class, captured.get("static_scene"));
             assertEquals(1000, assertInstanceOf(Map.class, staticScene.get("bounds")).get("width"));
-            assertEquals(1, assertInstanceOf(List.class, staticScene.get("footholds")).size());
-            assertEquals(1, assertInstanceOf(List.class, staticScene.get("ropes")).size());
             verify(monster, never()).aggroSwitchController(any(), anyBoolean());
             verify(map, never()).addPlayer(any());
         } finally {

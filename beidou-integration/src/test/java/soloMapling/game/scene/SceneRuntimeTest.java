@@ -3,17 +3,25 @@ package soloMapling.game.scene;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.client.Job;
+import org.gms.client.BuffStat;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.FootholdTree;
+import org.gms.server.life.Monster;
+import org.gms.util.ThreadLocalUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
+import soloMapling.game.context.NativeContextChecks;
+import soloMapling.game.action.NativeMapEntryActions;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
@@ -29,6 +37,9 @@ import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -36,6 +47,8 @@ import static org.mockito.Mockito.*;
 
 /** Scene ownership through actual role adoption and close; native map/storage remain explicit boundaries. */
 class SceneRuntimeTest {
+    @BeforeAll static void nativeHostContext() { CharacterTestContext.install(); Job.values(); }
+
     private final Server server = mock(Server.class);
     private final World world = mock(World.class);
     private final Channel channel = mock(Channel.class);
@@ -43,7 +56,6 @@ class SceneRuntimeTest {
     private final List<CharacterRuntime> runtimes = new ArrayList<>();
 
     @BeforeEach void startWorld() {
-        CharacterTestContext.install();
         WorldEpoch.onWorldStarted();
         when(server.isOnline()).thenReturn(true);
         when(server.getWorld(0)).thenReturn(world);
@@ -85,6 +97,93 @@ class SceneRuntimeTest {
         assertFalse(SceneRuntimeManager.current(server, sameIdInstance).scene().closed());
     }
 
+    @Test void ordinaryHeadlessEntryAcknowledgesNativelyAndKeepsTheSameMonsterDriverAlive() throws Exception {
+        var map = nativeMap();
+        when(map.getFootholdSpeed()).thenReturn(1.0f);
+        var geometry = new FootholdTree(new Point(-100, -100), new Point(100, 100));
+        geometry.insert(new Foothold(new Point(-100, 0), new Point(100, 0), 1));
+        when(map.getFootholds()).thenReturn(geometry);
+        var monster = mock(Monster.class);
+        when(monster.getId()).thenReturn(100101);
+        when(monster.getMap()).thenReturn(map);
+        when(monster.getPosition()).thenReturn(new Point(0, 0));
+        var changing = new AtomicBoolean(true);
+        var enteredAck = new CountDownLatch(1);
+        var releaseAck = new CountDownLatch(1);
+        var actor = open(44, map, character -> {
+            when(character.isChangingMaps()).thenAnswer(ignored -> changing.get());
+            doAnswer(ignored -> {
+                assertSame(character.getClient(), ThreadLocalUtil.getCurrentClient());
+                enteredAck.countDown();
+                assertTrue(releaseAck.await(5, TimeUnit.SECONDS));
+                changing.set(false);
+                return null;
+            }).when(character).setMapTransitionComplete();
+        }, ignored -> {});
+        var binding = SceneRuntimeManager.current(server, actor);
+        try {
+            assertTrue(enteredAck.await(3, TimeUnit.SECONDS));
+            assertFalse(MonsterSceneModule.canDrive(monster, actor.character()));
+            var taskBefore = binding.backgroundSnapshot().stream()
+                    .filter(task -> task.get("name").equals("scene-monsters-44")).findFirst().orElseThrow();
+            releaseAck.countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!MonsterSceneModule.canDrive(monster, actor.character()) && System.nanoTime() < deadline) Thread.sleep(5);
+            assertFalse(changing.get());
+            assertTrue(MonsterSceneModule.canDrive(monster, actor.character()));
+            var taskAfter = binding.backgroundSnapshot().stream()
+                    .filter(task -> task.get("name").equals("scene-monsters-44")).findFirst().orElseThrow();
+            assertEquals(taskBefore.get("work_id"), taskAfter.get("work_id"));
+            assertEquals("RUNNING", taskAfter.get("body_state"));
+            assertEquals(false, taskAfter.get("settled"));
+        } finally { releaseAck.countDown(); }
+        close(runtimes.getLast());
+        verify(actor.character()).setMapTransitionComplete();
+    }
+
+    @Test void synchronousNativeEntryAcknowledgementIsNotRepeatedByTheQueuedSceneWork() throws Exception {
+        var changing = new AtomicBoolean(true);
+        var actor = open(45, nativeMap(), character -> {
+            when(character.isChangingMaps()).thenAnswer(ignored -> changing.get());
+            doAnswer(ignored -> { changing.set(false); return null; }).when(character).setMapTransitionComplete();
+        }, character -> assertFalse(NativeMapEntryActions.acknowledge(server,
+                NativeContextChecks.captureScene(server, character), () -> {})));
+        var context = SceneRuntimeManager.current(server, actor).context();
+        var afterEntry = context.acceptWork();
+        context.submit(SceneMembershipModule.CONTROL, afterEntry, () -> {}, () -> {}, () -> {});
+        afterEntry.completion().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        close(runtimes.getLast());
+        assertFalse(changing.get());
+        verify(actor.character()).setMapTransitionComplete();
+    }
+
+    @Test void closingWaitsForTheAlreadyDispatchedNativeEntryWorkToActuallyExit() throws Exception {
+        var changing = new AtomicBoolean(true);
+        var enteredAck = new CountDownLatch(1);
+        var releaseAck = new CountDownLatch(1);
+        var actor = open(46, nativeMap(), character -> {
+            when(character.isChangingMaps()).thenAnswer(ignored -> changing.get());
+            doAnswer(ignored -> {
+                enteredAck.countDown();
+                assertTrue(releaseAck.await(5, TimeUnit.SECONDS));
+                changing.set(false);
+                return null;
+            }).when(character).setMapTransitionComplete();
+        }, ignored -> {});
+        var runtime = runtimes.getLast();
+        var scene = SceneRuntimeManager.current(server, actor).scene();
+        try {
+            assertTrue(enteredAck.await(3, TimeUnit.SECONDS));
+            runtime.beginClose(Optional.empty());
+            assertFalse(runtime.whenModulesDrained().toCompletableFuture().isDone());
+            assertFalse(scene.closed());
+            assertEquals("CLOSING", scene.snapshot().get("state"));
+        } finally { releaseAck.countDown(); }
+        close(runtime);
+        assertTrue(scene.closed());
+        verify(actor.character()).setMapTransitionComplete();
+    }
+
     private MapleMap nativeMap() {
         var map = mock(MapleMap.class);
         when(map.getId()).thenReturn(100000000);
@@ -96,6 +195,11 @@ class SceneRuntimeTest {
     }
 
     private GameContext.CharacterRef open(int id, MapleMap map) throws Exception {
+        return open(id, map, ignored -> {}, ignored -> {});
+    }
+
+    private GameContext.CharacterRef open(int id, MapleMap map, Consumer<Character> prepare,
+                                          Consumer<GameContext.CharacterRef> afterBound) throws Exception {
         var character = mock(Character.class);
         var client = mock(Client.class);
         when(character.getId()).thenReturn(id);
@@ -106,8 +210,11 @@ class SceneRuntimeTest {
         when(character.isAlive()).thenReturn(true);
         when(character.isHidden()).thenReturn(true);
         when(character.getHp()).thenReturn(100);
+        when(character.getBuffSource(BuffStat.HOMING_BEACON)).thenReturn(-1);
         when(client.getPlayer()).thenReturn(character);
         when(client.getChannel()).thenReturn(1);
+        when(client.isLoggedIn()).thenReturn(true);
+        prepare.accept(character);
         players.put(id, character);
         var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
         var runtime = new CharacterRuntime(WorldEpoch.snapshot().token(),
@@ -118,7 +225,6 @@ class SceneRuntimeTest {
             @Override public String kind() { return "scene-runtime-test"; }
             @Override public Object identity() { return character; }
             @Override public GameContext.CharacterRef characterRef() { return actor; }
-            @Override public Optional<Server> clientSimulationServer() { return Optional.of(server); }
             @Override public void requireCurrent() { }
             @Override public Map<String, Object> observe() { return Map.of("character_id", id); }
             @Override public ReleaseProof release(ScopeResources.DrainPermit permit) {
@@ -131,6 +237,8 @@ class SceneRuntimeTest {
         runtime.submitOpening(opening, () -> {
             runtime.reserveOrigin(opening).adopt(origin);
             runtime.bindAdoptedOrigin();
+            runtime.initializeSceneMembership(server);
+            afterBound.accept(actor);
         }, () -> {});
         opening.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertEquals(CharacterRuntime.State.BOUND, runtime.snapshot().state());

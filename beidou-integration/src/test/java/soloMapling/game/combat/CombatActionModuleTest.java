@@ -285,7 +285,6 @@ class CombatActionModuleTest {
                 @Override public Object identity() { return actor; }
                 @Override public GameContext.CharacterRef characterRef() { return ref; }
                 @Override public void requireCurrent() { }
-                @Override public Optional<Server> clientSimulationServer() { return Optional.of(server); }
                 @Override public Map<String, Object> observe() { return Map.of("character_id", 41); }
                 @Override public ReleaseProof release(ScopeResources.DrainPermit permit) {
                     permit.requireExecuting(actor); return new ReleaseProof(true);
@@ -294,6 +293,7 @@ class CombatActionModuleTest {
             var opening = runtime.acceptOpeningWork();
             runtime.submitOpening(opening, () -> {
                 runtime.reserveOrigin(opening).adopt(binding); runtime.bindAdoptedOrigin();
+                runtime.initializeSceneMembership(server);
             }, () -> {});
             opening.completion().toCompletableFuture().join();
             var combat = new ModuleDefinition<CombatActionModule.Config, CombatActionModule>(

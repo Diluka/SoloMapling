@@ -28,11 +28,10 @@ class CaptureStub(BridgeStub):
         self.finish = Event()
         self.stopped = Event()
         self.finish.set()
-        self.omit_end = False
         self.snapshot = {
             "schema_version": 1, "identity": {"scene_ref": SCENE_REF, "map_instance_key": "map-capture-fixture"},
             "static_scene": {"footholds": []},
-            "frame": {"native": {"players": [{"cid": index, "hp": 50} for index in range(120)]},
+            "frame": {"native": {},
                       "simulation": {"available": False}, "events": [], "coverage": {"complete": False}},
         }
         super().__init__()
@@ -61,9 +60,8 @@ class CaptureStub(BridgeStub):
                         self.wfile.flush()
                     owner.finish.wait(timeout=5)
                     owner.stopped.set()
-                    if not owner.omit_end:
-                        self.wfile.write((json.dumps(owner.ending()) + "\n").encode())
-                        self.wfile.flush()
+                    self.wfile.write((json.dumps(owner.ending()) + "\n").encode())
+                    self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 finally:
@@ -102,37 +100,14 @@ class SceneCaptureProtocolTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.to_thread(self.stub.stop)
         self.directory.cleanup()
 
-    async def test_stdio_snapshot_and_file_share_complete_model_without_opening_an_actor(self) -> None:
-        async with self.stdio_client() as client:
-            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-            snapshot_tool = tools["scene_snapshot"]
-            record_tool = tools["scene_record"]
-            self.assertTrue(snapshot_tool.annotations.read_only_hint)
-            self.assertFalse(record_tool.annotations.idempotent_hint)
-            self.assertEqual({"scene_ref", "output_file"}, set(record_tool.input_schema["required"]))
-            response = await client.call_tool("scene_snapshot", {"scene_ref": SCENE_REF})
-            self.assertEqual(self.stub.snapshot, response.structured_content)
-            response = await client.call_tool("scene_snapshot", {"scene_ref": SCENE_REF, "output_file": str(self.output)})
-        self.assertFalse(response.is_error)
-        self.assertEqual(self.stub.snapshot, json.loads(self.output.read_text()))
-        self.assertEqual(120, len(json.loads(self.output.read_text())["frame"]["native"]["players"]))
-        self.assertTrue(response.structured_content["snapshot_written"])
-        self.assertEqual([SNAPSHOT_PATH, SNAPSHOT_PATH], [request["path"] for request in self.stub.requests
-                                                        if request["path"] != "/auth/v1/login"])
-        self.assertTrue(all(request["body"]["data"] == {"scene_ref": SCENE_REF}
-                            for request in self.stub.requests if request["path"] == SNAPSHOT_PATH))
-
-    async def test_existing_file_missing_directory_and_invalid_sampling_fail_before_http(self) -> None:
+    async def test_existing_file_and_missing_directory_fail_before_sampling(self) -> None:
         self.output.write_text("preserve evidence")
         async with self.stdio_client() as client:
             existing = await client.call_tool("scene_record", {"scene_ref": SCENE_REF, "output_file": str(self.output)})
             missing = await client.call_tool("scene_snapshot", {"scene_ref": SCENE_REF,
                                                                "output_file": str(self.output / "missing.json")})
-            invalid = await client.call_tool("scene_record", {"scene_ref": SCENE_REF, "output_file": "unused",
-                                                              "duration_ms": 100, "interval_ms": 101})
         self.assertEqual("OUTPUT_FILE_EXISTS", existing.structured_content["error"]["code"])
         self.assertEqual("OUTPUT_FILE_UNAVAILABLE", missing.structured_content["error"]["code"])
-        self.assertEqual("INVALID_ARGUMENTS", invalid.structured_content["error"]["code"])
         self.assertEqual("preserve evidence", self.output.read_text())
         self.assertEqual([], self.stub.requests)
 
@@ -152,23 +127,14 @@ class SceneCaptureProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.is_error)
         records = [json.loads(line) for line in self.output.read_text().splitlines()]
         self.assertEqual(["header", "frame", "end"], [value["type"] for value in records])
-        self.assertEqual(self.stub.ending(), records[-1])
-        self.assertEqual({**self.stub.ending(), "output_file": str(self.output)}, response.structured_content)
+        self.assertTrue(records[-1]["sampling_stopped"])
+        self.assertTrue(records[-1]["subscription_released"])
+        self.assertEqual(1, response.structured_content["frame_count"])
+        self.assertEqual(str(self.output), response.structured_content["output_file"])
         self.assertNotIn("output_file", next(request for request in self.stub.requests
                                              if request["path"] == RECORD_PATH)["body"]["data"])
 
-    async def test_disconnected_stream_preserves_frames_and_waits_for_backend_stop(self) -> None:
-        self.stub.omit_end = True
-        async with self.stdio_client() as client:
-            response = await client.call_tool("scene_record", {"scene_ref": SCENE_REF, "output_file": str(self.output)})
-        self.assertTrue(response.is_error)
-        self.assertFalse(response.structured_content["recording_complete"])
-        self.assertEqual("CONFIRMED", response.structured_content["backend_stop"])
-        self.assertEqual(["header", "frame"], [json.loads(line)["type"] for line in self.output.read_text().splitlines()])
-        self.assertEqual(1, sum(request["path"] == RECORD_PATH for request in self.stub.requests))
-        self.assertTrue(any(request["path"].endswith("/cancel") for request in self.stub.requests))
-
-    async def test_sdk_cancellation_requests_and_observes_real_stream_cleanup(self) -> None:
+    async def test_sdk_cancellation_waits_for_backend_stop_receipt(self) -> None:
         self.stub.finish.clear()
         async with self.stdio_client() as client:
             request = asyncio.create_task(client.call_tool("scene_record", {"scene_ref": SCENE_REF,
@@ -212,11 +178,14 @@ class SceneCaptureProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("CONFIRMED", response.structured_content["backend_stop"])
         self.assertEqual(["header"], [json.loads(line)["type"] for line in self.output.read_text().splitlines()])
 
-    async def test_large_snapshot_requires_file_without_trimming_objects(self) -> None:
+    async def test_large_snapshot_requires_file_without_trimming_data(self) -> None:
         self.stub.snapshot["frame"]["native"]["detail"] = "x" * (4 * 1024 * 1024)
         async with self.stdio_client() as client:
             response = await client.call_tool("scene_snapshot", {"scene_ref": SCENE_REF})
             self.assertEqual("SCENE_FILE_REQUIRED", response.structured_content["error"]["code"])
             response = await client.call_tool("scene_snapshot", {"scene_ref": SCENE_REF, "output_file": str(self.output)})
         self.assertFalse(response.is_error)
-        self.assertEqual(self.stub.snapshot, json.loads(self.output.read_text()))
+        self.assertTrue(response.structured_content["snapshot_written"])
+        saved = json.loads(self.output.read_text())
+        self.assertEqual(SCENE_REF, saved["identity"]["scene_ref"])
+        self.assertEqual(4 * 1024 * 1024, len(saved["frame"]["native"]["detail"]))

@@ -165,6 +165,7 @@ final class SceneCaptureFrames {
             row.put("stance", player.getStance());
             row.put("facing_left", player.isFacingLeft());
             row.put("alive", player.isAlive());
+            row.put("changing_maps", player.isChangingMaps());
             row.put("hp", player.getHp());
             row.put("mp", player.getMp());
             row.put("max_hp", player.getCurrentMaxHp());

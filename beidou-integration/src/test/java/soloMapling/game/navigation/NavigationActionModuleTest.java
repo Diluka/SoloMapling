@@ -473,7 +473,6 @@ class NavigationActionModuleTest {
                 @Override public String kind() { return "navigation-test"; }
                 @Override public Object identity() { return character; }
                 @Override public GameContext.CharacterRef characterRef() { return actor; }
-                @Override public Optional<Server> clientSimulationServer() { return Optional.of(server); }
                 @Override public void requireCurrent() { }
                 @Override public Map<String, Object> observe() { return Map.of("character_id", 41); }
                 @Override public ReleaseProof release(ScopeResources.DrainPermit permit) {
@@ -485,6 +484,7 @@ class NavigationActionModuleTest {
             runtime.submitOpening(opening, () -> {
                 runtime.reserveOrigin(opening).adopt(binding);
                 runtime.bindAdoptedOrigin();
+                runtime.initializeSceneMembership(server);
             }, () -> {});
             opening.completion().toCompletableFuture().join();
             var nav = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(

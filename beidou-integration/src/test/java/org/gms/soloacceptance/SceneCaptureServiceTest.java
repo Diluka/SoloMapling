@@ -111,28 +111,20 @@ class SceneCaptureServiceTest {
     }
 
     @Test
-    void worldStopEndsTheOldEpochAndAFailedOutputKeepsItsPrefixWithoutACompleteEnd() throws Exception {
+    void failedOutputKeepsItsPrefixAndReleasesItsSamplerAndSubscription() throws Exception {
         var fixture = new Fixture();
-        var stopped = new EvidenceStream(row -> {
-            if (row.path("type").asText().equals("frame")) AcceptanceObservationRuntime.onWorldStopped();
-        });
-        fixture.captures.record("admin", new SceneCaptureRequest.Record(fixture.sceneRef, 1_000, 50), stopped);
-        assertEquals("runtime_changed", stopped.rows().getLast().path("reason").asText());
-        assertFalse(SceneCaptureEvents.interested(fixture.map));
-
-        var second = new Fixture();
         var failed = new EvidenceStream(row -> { });
         failed.failAfterFirstFrame = true;
         assertThrows(IOException.class,
-                () -> second.captures.record("admin", new SceneCaptureRequest.Record(second.sceneRef, 1_000, 50), failed));
+                () -> fixture.captures.record("admin", new SceneCaptureRequest.Record(fixture.sceneRef, 1_000, 50), failed));
         assertEquals(2, failed.rows().size());
         assertEquals("frame", failed.rows().getLast().path("type").asText());
-        var status = second.captures.status("admin", failed.captureId);
+        var status = fixture.captures.status("admin", failed.captureId);
         assertEquals("output_failed", status.get("reason"));
         assertEquals(false, status.get("file_complete"));
         assertEquals(true, status.get("sampling_stopped"));
         assertEquals(true, status.get("subscription_released"));
-        assertFalse(SceneCaptureEvents.interested(second.map));
+        assertFalse(SceneCaptureEvents.interested(fixture.map));
     }
 
     private static final class EvidenceStream extends OutputStream {

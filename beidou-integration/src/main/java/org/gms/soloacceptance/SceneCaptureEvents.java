@@ -23,7 +23,7 @@ import java.util.function.Supplier;
 
 /** Read-only native callbacks, retained only while a capture subscribes to the exact loaded map. */
 public final class SceneCaptureEvents {
-    public static final int CAPACITY = 4096;
+    private static final int CAPACITY = 4096;
     private static final Map<MapleMap, Journal> JOURNALS = new IdentityHashMap<>();
     private static final Map<MapleMap, Boolean> DISPOSED = new WeakHashMap<>();
     private static final List<String> SOURCES = List.of(

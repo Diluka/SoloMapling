@@ -17,7 +17,6 @@ import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.RoleBinding;
 
 import java.util.Map;
-import java.util.Optional;
 
 import static soloMapling.FreeMarket.FMShopDescGen.getRandomCharacterIGN;
 
@@ -90,7 +89,6 @@ public final class EnvironmentRobotOrigin implements RoleBinding {
     @Override public String kind() { return "environment_robot"; }
     @Override public Object identity() { return this; }
     @Override public GameContext.CharacterRef characterRef() { return ref; }
-    @Override public Optional<Server> clientSimulationServer() { return Optional.of(server); }
     @Override public void requireCurrent() { BotGameContexts.requireCurrent(server, current); }
 
     @Override public Map<String, Object> observe() {

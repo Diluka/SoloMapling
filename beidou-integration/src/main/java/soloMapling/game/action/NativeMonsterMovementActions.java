@@ -16,7 +16,7 @@ import java.util.concurrent.CancellationException;
 public final class NativeMonsterMovementActions {
     private NativeMonsterMovementActions() { }
 
-    public record MovementResult(boolean dispatched, boolean handlerError, boolean positionConfirmed,
+    public record MovementResult(boolean dispatched, boolean handlerError, boolean positionConfirmed, boolean mapReady,
                                  int objectId, int xBefore, int yBefore, int xAfter, int yAfter) { }
 
     public static MovementResult move(Server server, GameContext.SceneRef scene,
@@ -31,18 +31,28 @@ public final class NativeMonsterMovementActions {
                 .writeByte(1).writeByte(0).writeShortLE(destination.x).writeShortLE(destination.y + 2)
                 .writeShortLE(velocityX).writeShortLE(0).writeShortLE(foothold)
                 .writeByte(stance).writeShortLE(durationMs);
-        boolean handlerError = NativePacketDispatch.dispatch(scene.actor().client(), new MoveLifeHandler(), packet,
+        boolean handlerError;
+        try {
+            handlerError = NativePacketDispatch.dispatch(scene.actor().client(), new MoveLifeHandler(), packet,
                 () -> {
                     if (work.cancelRequested()) throw new CancellationException("monster_movement_cancelled");
                     NativeContextChecks.requireSceneCurrent(server, scene);
+                    if (scene.actor().character().isChangingMaps()) {
+                        throw new NativeActionService.Invalid("monster_map_not_ready");
+                    }
                     if (scene.map().getMonsterByOid(monster.getObjectId()) != monster || !monster.isAlive()
                             || monster.getController() != scene.actor().character()
                             || !MonsterControlCoordinator.canControl(monster, scene.actor().character())) {
                         throw new NativeActionService.Invalid("monster_controller_changed");
                     }
                 }, () -> dispatched[0] = true);
+        } catch (NativeActionService.Invalid pending) {
+            if (dispatched[0] || !pending.reason().equals("monster_map_not_ready")) throw pending;
+            return new MovementResult(false, false, false, false, monster.getObjectId(),
+                    before.x, before.y, before.x, before.y);
+        }
         var after = monster.getPosition();
-        return new MovementResult(dispatched[0], handlerError, destination.equals(after), monster.getObjectId(),
+        return new MovementResult(dispatched[0], handlerError, destination.equals(after), true, monster.getObjectId(),
                 before.x, before.y, after.x, after.y);
     }
 }
