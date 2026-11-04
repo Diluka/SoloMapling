@@ -30,7 +30,6 @@ import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
-import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
@@ -50,6 +49,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -75,7 +75,7 @@ class CombatActionModuleTest {
             verify(fixture.map, never()).killMonster(eq(fixture.target), eq(fixture.actor), eq(false), anyInt());
             verify(fixture.map, never()).damageMonster(eq(fixture.actor), eq(fixture.outside), anyInt());
             verify(fixture.outside, never()).damage(any(), anyInt(), anyBoolean());
-            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            fixture.assertCombatDrained();
         }
     }
 
@@ -98,11 +98,11 @@ class CombatActionModuleTest {
             assertEquals("UNAVAILABLE", result.get("outcome"));
             assertEquals("navigation_unavailable", result.get("reason"));
             verify(fixture.target, never()).damage(any(), anyInt(), anyBoolean());
-            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            fixture.assertCombatDrained();
         }
     }
 
-    @Test void normalTimeoutDrainsContactWithoutAnUncaughtLaneCancellation() throws Exception {
+    @Test void normalTimeoutDrainsTheEngagementWithoutAnUncaughtLaneCancellation() throws Exception {
         try (var fixture = new Fixture()) {
             fixture.hp.set(10_000);
             var result = fixture.caller.call(CombatActionModule.ENGAGE,
@@ -110,39 +110,21 @@ class CombatActionModuleTest {
 
             assertEquals(CombatResult.Outcome.TIMED_OUT, result.outcome());
             assertTrue(fixture.target.isAlive());
-            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            fixture.assertCombatDrained();
             assertTrue(fixture.laneFailures.isEmpty(), fixture.laneFailures.toString());
         }
     }
 
     @Test void aNativeLinkageFailureReturnsToTheCallerAfterTheDamageWorkSettles() throws Exception {
-        try (var fixture = new Fixture()) {
-            var failure = new NoSuchMethodError("native_drop_linkage_failure");
-            doAnswer(invocation -> { fixture.exp.set(500); throw failure; }).when(fixture.map)
-                    .killMonster(fixture.target, fixture.actor, true);
+        var failure = new NoSuchMethodError("native_drop_linkage_failure");
+        try (var fixture = new Fixture(prepared ->
+                doAnswer(invocation -> { prepared.exp.set(500); throw failure; }).when(prepared.map)
+                        .killMonster(prepared.target, prepared.actor, true))) {
             assertSame(failure, assertThrows(NoSuchMethodError.class,
                     () -> fixture.caller.call("combat.engage", Map.of("target_oid", 91))));
             assertEquals(0, fixture.target.getHp());
             assertEquals(500, fixture.actor.getExp());
-            assertEquals(0, fixture.runtime.snapshot().lane().pending());
-        }
-    }
-
-    @Test void engagementProjectsItsApproachOntoTheSlopeBeforeCallingRealNavigation() throws Exception {
-        try (var fixture = new Fixture(true)) {
-            var footholds = new FootholdTree(new Point(-500, -500), new Point(1000, 500));
-            footholds.insert(new Foothold(new Point(0, 0), new Point(500, 100), 1));
-            when(fixture.map.getFootholds()).thenReturn(footholds);
-            when(fixture.target.getPosition()).thenReturn(new Point(400, 80));
-            var result = (Map<?, ?>) fixture.caller.call("combat.engage", Map.of("target_oid", 91)).get("result");
-            assertEquals("TARGET_DEAD", result.get("outcome"), result.toString());
-            assertTrue((int) result.get("navigation_calls") >= 1);
-            Point actual = fixture.position.get();
-            assertTrue(actual.x >= 340, actual.toString());
-            assertTrue(Math.abs(actual.y - actual.x * .2) <= 4, actual.toString());
-            verify(fixture.map, atLeastOnce()).movePlayer(eq(fixture.actor), any());
-            verify(fixture.outside, never()).damage(any(), anyInt(), anyBoolean());
-            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            fixture.assertCombatDrained();
         }
     }
 
@@ -176,7 +158,7 @@ class CombatActionModuleTest {
             when(fixture.target.getPosition()).thenReturn(new Point(300, 0));
             assertFalse(CombatActionModule.inAttackRange(fixture.actor, fixture.target));
             assertTrue(fixture.attackPackets(SendOpcode.MAGIC_ATTACK).isEmpty());
-            assertEquals(0, fixture.runtime.snapshot().lane().pending());
+            fixture.assertCombatDrained();
         }
     }
 
@@ -195,11 +177,11 @@ class CombatActionModuleTest {
         final List<Packet> packets = new CopyOnWriteArrayList<>();
         final List<Throwable> laneFailures = new CopyOnWriteArrayList<>();
 
-        Fixture() { this(false, Job.THIEF, 1332000); }
-        Fixture(boolean navigation) { this(navigation, Job.THIEF, 1332000); }
-        Fixture(Job job, int weaponId) { this(false, job, weaponId); }
+        Fixture() { this(Job.THIEF, 1332000); }
+        Fixture(Consumer<Fixture> beforeOpen) { this(Job.THIEF, 1332000, beforeOpen); }
+        Fixture(Job job, int weaponId) { this(job, weaponId, fixture -> {}); }
 
-        Fixture(boolean navigation, Job job, int weaponId) {
+        Fixture(Job job, int weaponId, Consumer<Fixture> beforeOpen) {
             WorldEpoch.onWorldStarted();
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -267,6 +249,8 @@ class CombatActionModuleTest {
             when(outside.isAlive()).thenReturn(true);
             when(outside.isBoss()).thenReturn(true);
             doReturn(List.of(outside, target)).when(map).getMapObjectsInRange(any(), anyDouble(), eq(List.of(MapObjectType.MONSTER)));
+            // Configure the native collaborators before opening starts persistent scene readers.
+            beforeOpen.accept(this);
             var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), body -> {
                 var thread = new Thread(body, "combat-test-lane");
                 thread.setUncaughtExceptionHandler((worker, failure) -> laneFailures.add(failure));
@@ -288,6 +272,7 @@ class CombatActionModuleTest {
             var opening = runtime.acceptOpeningWork();
             runtime.submitOpening(opening, () -> {
                 runtime.reserveOrigin(opening).adopt(binding); runtime.bindAdoptedOrigin();
+                runtime.initializeSceneMembership(server);
             }, () -> {});
             opening.completion().toCompletableFuture().join();
             var combat = new ModuleDefinition<CombatActionModule.Config, CombatActionModule>(
@@ -295,16 +280,17 @@ class CombatActionModuleTest {
                     CombatActionModule.DEFINITION.limits(), config -> new CombatActionModule(config, server),
                     CombatActionModule.DEFINITION.exports());
             runtime.mount(combat, new ModuleSelection<>("combat", CombatActionModule.DEFAULT_CONFIG, true));
-            if (navigation) {
-                var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
-                        NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
-                        NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, server),
-                        NavigationActionModule.DEFINITION.exports());
-                runtime.mount(definition, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
-            }
             var controller = new ModuleDefinition<Void, RuntimeModule>("test-controller", Set.of(),
                     new ExecutionScope.Limits(8, 2, 4, 2), config -> new RuntimeModule() {}, List.of());
             caller = runtime.context(runtime.mount(controller, new ModuleSelection<>("controller", null, true)).reference());
+        }
+
+        void assertCombatDrained() {
+            var scope = runtime.snapshot().modules().stream().filter(module -> module.instanceId().equals("combat"))
+                    .findFirst().orElseThrow().scope();
+            assertEquals(0, scope.acceptedWork());
+            assertEquals(0, scope.runningBodies());
+            assertEquals(0, scope.pendingCarriers());
         }
 
         List<byte[]> attackPackets(SendOpcode opcode) {

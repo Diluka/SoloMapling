@@ -11,7 +11,8 @@ import org.gms.client.inventory.WeaponType;
 import org.gms.server.ItemInformationProvider;
 import org.gms.server.life.Monster;
 
-import java.util.List;
+import soloMapling.game.scene.AbilitySceneModule;
+
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -23,9 +24,6 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 final class NativeAttackDamagePolicy {
     static final String ID = "basic_melee_v1";
-    static final List<String> WEAPONS = List.of("GENERAL1H_SWING", "GENERAL1H_STAB", "GENERAL2H_SWING",
-            "GENERAL2H_STAB", "DAGGER_THIEVES", "DAGGER_OTHER", "KNUCKLE", "POLE_ARM_SWING",
-            "POLE_ARM_STAB", "SPEAR_STAB", "SPEAR_SWING", "STAFF", "SWORD1H", "SWORD2H", "WAND");
 
     private NativeAttackDamagePolicy() { }
 
@@ -45,7 +43,7 @@ final class NativeAttackDamagePolicy {
             if (!(weapon instanceof Equip)) throw new NativeActionService.Invalid("attack_weapon_unavailable");
             weaponItemId = weapon.getItemId();
             type = ItemInformationProvider.getInstance().getWeaponType(weaponItemId);
-            if (type == null || !WEAPONS.contains(type.name())) {
+            if (type == null || !AbilitySceneModule.SUPPORTED_MELEE_WEAPONS.contains(type.name())) {
                 throw new NativeActionService.Invalid("attack_weapon_not_supported");
             }
             for (Item item : equipped.list()) if (item instanceof Equip equip) equipmentAccuracy += equip.getAcc();

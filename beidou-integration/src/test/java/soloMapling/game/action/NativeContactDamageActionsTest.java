@@ -9,6 +9,9 @@ import org.gms.client.SkillFactory;
 import org.gms.client.autoban.AutobanManager;
 import org.gms.client.inventory.Equip;
 import org.gms.client.inventory.InventoryType;
+import org.gms.constants.game.CharacterStance;
+import org.gms.net.opcodes.SendOpcode;
+import org.gms.net.packet.Packet;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -31,6 +34,7 @@ import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.scene.PresentationSceneModule;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -185,7 +189,8 @@ class NativeContactDamageActionsTest {
         assertEquals(0, lane.snapshot().pending());
     }
 
-    @Test void nativeMagicGuardSpendsMpAndUnshieldedDamageCanReachDeath() {
+    @Test void nativeMagicGuardSpendsMpAndDeathAndRecoverySynchronizeTheVisiblePose() {
+        actor.setStance(CharacterStance.STAND_LEFT_STANCE);
         doReturn(50).when(actor).getBuffedValue(BuffStat.MAGIC_GUARD);
         var shielded = contact();
         assertFalse(shielded.handlerError());
@@ -198,7 +203,23 @@ class NativeContactDamageActionsTest {
         assertTrue(lethal.dead());
         assertEquals(0, actor.getHp());
         assertEquals(0, actor.getMp());
+        assertEquals(CharacterStance.DEAD_LEFT_STANCE, actor.getStance());
         assertNull(contact());
+        var output = org.mockito.ArgumentCaptor.forClass(Packet.class);
+        verify(map, times(3)).broadcastMessage(eq(actor), output.capture(), eq(false));
+        var movements = output.getAllValues().stream().map(Packet::getBytes)
+                .filter(bytes -> ((bytes[0] & 0xff) | ((bytes[1] & 0xff) << 8)) == SendOpcode.MOVE_PLAYER.getValue())
+                .toList();
+        assertEquals(1, movements.size());
+        var packet = movements.getFirst();
+        assertEquals(CharacterStance.DEAD_LEFT_STANCE, packet[22]);
+
+        target.getStats().setFriendly(true);
+        actor.updateHpMp(100, 50);
+        assertNull(contact());
+        assertEquals(CharacterStance.STAND_LEFT_STANCE, actor.getStance());
+        assertNull(contact());
+        verify(map, times(4)).broadcastMessage(eq(actor), any(Packet.class), eq(false));
     }
 
     @Test void missingBodyContactAndFriendlyMonstersDoNotDispatchDamage() {
@@ -225,31 +246,19 @@ class NativeContactDamageActionsTest {
         assertEquals(0, lane.snapshot().pending());
     }
 
-    @Test void callerAndContactCancellationDuringNativeAdmissionPreventDamage() {
-        for (boolean cancelCaller : new boolean[]{true, false}) {
-            var caller = scope.acceptWork();
-            var contact = scope.acceptWork();
-            var cancelled = new AtomicReference<CancellationException>();
-            doAnswer(call -> {
-                scope.requestCancel(cancelCaller ? caller : contact);
-                return true;
-            }).when(client).isLoggedIn();
-            scope.runTracked(caller, () -> {
-                lane.submit(contact, permit, () -> {
-                    try { NativeContactDamageActions.contact(server, scene, caller, contact, Long.MAX_VALUE); }
-                    catch (CancellationException stopped) { cancelled.set(stopped); }
-                }, () -> {});
-                contact.completion().toCompletableFuture().join();
-            });
-            caller.completion().toCompletableFuture().join();
-            contact.completion().toCompletableFuture().join();
-            assertNotNull(cancelled.get());
-            assertTrue((cancelCaller ? caller : contact).cancelRequested());
-            assertFalse((cancelCaller ? contact : caller).cancelRequested());
-            assertEquals(100, actor.getHp());
-            assertEquals(50, actor.getMp());
-            assertTrue(caller.isSettled() && contact.isSettled());
-        }
+    @Test void sceneContactCancellationDuringNativeAdmissionPreventsDamage() {
+        var work = scope.acceptWork();
+        var cancelled = new AtomicReference<CancellationException>();
+        doAnswer(call -> { scope.requestCancel(work); return true; }).when(client).isLoggedIn();
+        lane.submit(work, permit, () -> {
+            try { NativeContactDamageActions.contact(server, scene, work); }
+            catch (CancellationException stopped) { cancelled.set(stopped); }
+        }, () -> {});
+        work.completion().toCompletableFuture().join();
+        assertNotNull(cancelled.get());
+        assertEquals(100, actor.getHp());
+        assertEquals(50, actor.getMp());
+        assertTrue(work.isSettled());
     }
 
     private NativeContactDamageActions.ContactResult contact() {
@@ -259,7 +268,8 @@ class NativeContactDamageActionsTest {
         lane.submit(work, permit, () -> {
             try {
                 var previous = ThreadLocalUtil.getCurrentClient();
-                result.set(NativeContactDamageActions.contact(server, scene, work, work, Long.MAX_VALUE));
+                result.set(NativeContactDamageActions.contact(server, scene, work));
+                new PresentationSceneModule().syncLifeState(server, scene, work);
                 assertSame(previous, ThreadLocalUtil.getCurrentClient());
             }
             catch (RuntimeException | Error problem) { failure.set(problem); }

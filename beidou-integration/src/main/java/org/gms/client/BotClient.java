@@ -23,6 +23,7 @@ package org.gms.client;
 
 import io.netty.handler.timeout.IdleStateEvent;
 import org.gms.net.packet.Packet;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 /**
  * Headless Client owned by one SoloMapling character (no Netty socket).
@@ -37,7 +38,8 @@ public class BotClient extends Client {
 
     @Override
     public void sendPacket(Packet packet) {
-        // no socket
+        Character character = getPlayer();
+        if (character != null) SceneRuntimeManager.packet(character, packet);
     }
 
     @Override

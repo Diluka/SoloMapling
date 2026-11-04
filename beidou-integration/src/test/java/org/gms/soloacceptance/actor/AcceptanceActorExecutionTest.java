@@ -24,6 +24,7 @@ import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.population.RobotPopulationService;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -89,8 +90,15 @@ class AcceptanceActorExecutionTest {
         var environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("mcp-work-fixture",
                 Map.of("solomapling.robot-population-config", configuration.toString())));
-        RobotPopulationService population = new RobotPopulationService(environment);
+        RobotPopulationService population = spy(new RobotPopulationService(environment));
         population.onWorldStarted();
+        doAnswer(invocation -> {
+            // Replace native scene entry on the executing lane; host/module work remains real.
+            try (var scenes = mockStatic(SceneRuntimeManager.class, CALLS_REAL_METHODS)) {
+                scenes.when(() -> SceneRuntimeManager.enter(any(), any(), any(), any())).thenAnswer(ignored -> null);
+                return invocation.callRealMethod();
+            }
+        }).when(population).assemble(anyString(), any(CharacterRuntime.class));
         execution = new AcceptanceActorExecution(backend, "helper-module", WorldEpoch.snapshot().token(), executor, population);
     }
 

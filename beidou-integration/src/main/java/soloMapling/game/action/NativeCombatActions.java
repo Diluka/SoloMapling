@@ -2,45 +2,40 @@ package soloMapling.game.action;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import org.gms.client.BuffStat;
 import org.gms.client.Character;
-import org.gms.client.Disease;
 import org.gms.client.Job;
 import org.gms.client.SkillFactory;
-import org.gms.client.inventory.InventoryType;
 import org.gms.client.inventory.WeaponType;
 import org.gms.net.PacketHandler;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.handlers.CloseRangeDamageHandler;
 import org.gms.net.server.channel.handlers.MagicDamageHandler;
 import org.gms.net.server.channel.handlers.SpecialMoveHandler;
-import org.gms.server.ItemInformationProvider;
 import org.gms.server.StatEffect;
 import org.gms.server.life.Monster;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackData;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackDriver;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackProfile.Route;
-import soloMapling.ArtificialPlayer.GCMoveSystem.BotMobHitboxProvider;
 import soloMapling.beidou.NativeCombatEffects;
 import soloMapling.game.context.GameContext;
+import soloMapling.game.scene.AbilitySceneModule;
+import soloMapling.game.scene.AbilitySceneModule.Plan;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
 
-import java.awt.Point;
-import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
+import static soloMapling.game.scene.AbilitySceneModule.weapon;
+
 /** First adapted melee/magic skills. Native handlers own effects, costs and monster settlement. */
 public final class NativeCombatActions {
     public static final String PHYSICAL_POLICY = "native_physical_skill_v1";
     public static final String MAGIC_POLICY = "native_magic_skill_v1";
     public enum Outcome { APPLIED, RESOURCE_UNAVAILABLE, COOLDOWN, REJECTED, CANCELLED, UNKNOWN }
-    public record Plan(int skillId, int skillLevel, Route route, int mobCount, int damageLines,
-                       int intervalMs, int reachX, int reachY) { }
     public record StrikeResult(Outcome outcome, String reason, boolean dispatched, boolean handlerError,
                                int skillId, int skillLevel, String policy, int hpBefore, int hpAfter,
                                int mpBefore, int mpAfter, List<BotAttackDriver.HitFact> hits) {
@@ -68,51 +63,6 @@ public final class NativeCombatActions {
 
     private NativeCombatActions() { }
 
-    /** Resolve only adapted, actually learned skills; target selection stays with the combat module. */
-    public static Plan plan(Character actor, int skillId) {
-        Route route;
-        if (skillId == 0) route = Route.CLOSE;
-        else if ((skillId == 1001004 || skillId == 1001005) && actor.getJob().isA(Job.WARRIOR)) route = Route.CLOSE;
-        else if ((skillId == 2001004 || skillId == 2001005) && actor.getJob().isA(Job.MAGICIAN)) route = Route.MAGIC;
-        else return null;
-        var weapon = weapon(actor);
-        if (route == Route.CLOSE && skillId != 0 && weapon == WeaponType.NOT_A_WEAPON) return null;
-        if (route == Route.CLOSE && weapon != WeaponType.NOT_A_WEAPON
-                && !NativeAttackDamagePolicy.WEAPONS.contains(weapon.name())) return null;
-        if (route == Route.MAGIC && weapon != WeaponType.WAND && weapon != WeaponType.STAFF) return null;
-        if (skillId == 0) return new Plan(0, 0, route, 1, 1, 720, 120, 60);
-        int level = actor.getSkillLevel(skillId);
-        if (level == 0) return null;
-        var skill = SkillFactory.getSkill(skillId);
-        var effect = skill.getEffect(level);
-        int reachX = route == Route.MAGIC ? 450 : skillId == 1001005 ? 130 : 120;
-        int reachY = route == Route.MAGIC ? 150 : 80;
-        if (effect.hasBoundingBox()) {
-            var box = effect.calculateBoundingBox(new Point(), true);
-            reachX = Math.max(Math.abs(box.x), Math.abs(box.x + box.width));
-            reachY = Math.max(Math.abs(box.y), Math.abs(box.y + box.height));
-        }
-        return new Plan(skillId, level, route, effect.getMobCount(), effect.getAttackCount(),
-                Math.max(route == Route.MAGIC ? 840 : 720, skill.getAnimationTime()), reachX, reachY);
-    }
-
-    /** Uses the actual learned-level WZ box, or this first slice's explicit finite fallback range. */
-    public static boolean canHit(Character actor, Monster target, Plan plan, Point from) {
-        if (target.getStats().isFriendly() || !target.isAlive()) return false;
-        var position = target.getPosition();
-        boolean left = position.x < from.x;
-        if (plan.skillId() != 0) {
-            var effect = SkillFactory.getSkill(plan.skillId()).getEffect(plan.skillLevel());
-            if (effect.hasBoundingBox()) {
-                var box = effect.calculateBoundingBox(from, left);
-                var body = BotMobHitboxProvider.getMobBounds(target);
-                return body == null ? box.contains(position) : box.intersects(body);
-            }
-        }
-        return Math.abs((long) position.x - from.x) <= plan.reachX()
-                && Math.abs((long) position.y - from.y) <= plan.reachY();
-    }
-
     /** Called on the provider's already admitted short lane work. No externally supplied damage. */
     public static StrikeResult strike(Server server, GameContext.SceneRef scene, ExecutionScope.WorkHandle work,
                                       Plan plan, List<Monster> targets, boolean facingLeft) {
@@ -124,10 +74,10 @@ public final class NativeCombatActions {
                 ? NativeAttackDamagePolicy.ID : PHYSICAL_POLICY;
         if (work.cancelRequested()) return strikeResult(Outcome.CANCELLED, "combat_cancelled", false, false,
                 actor, plan, policy, hp, mp, List.of());
-        String rejected = admission(actor, plan.skillId());
+        String rejected = AbilitySceneModule.attackRejection(actor, plan.skillId());
         if (rejected != null) return strikeResult(Outcome.REJECTED, rejected, false, false,
                 actor, plan, policy, hp, mp, List.of());
-        var current = plan(actor, plan.skillId());
+        var current = AbilitySceneModule.plan(actor, plan.skillId());
         if (current == null || current.skillLevel() != plan.skillLevel()) {
             return strikeResult(Outcome.REJECTED, "skill_or_weapon_changed", false, false,
                     actor, plan, policy, hp, mp, List.of());
@@ -138,7 +88,7 @@ public final class NativeCombatActions {
         }
         for (var target : targets) {
             if (scene.map().getMonsterByOid(target.getObjectId()) != target || target.getMap() != scene.map()
-                    || !canHit(actor, target, plan, actor.getPosition())) {
+                    || !AbilitySceneModule.canHit(actor, target, plan, actor.getPosition())) {
                 return strikeResult(Outcome.REJECTED, "attack_target_changed_or_out_of_range", false, false,
                         actor, plan, policy, hp, mp, List.of());
             }
@@ -171,12 +121,12 @@ public final class NativeCombatActions {
                         attackPacket(plan, rolls, weapon(actor), facingLeft), () -> {
                             NativeContextChecks.requireSceneCurrent(server, scene);
                             requireAdmission(actor, plan.skillId(), plan.skillLevel(), effect, work);
-                            if (plan(actor, plan.skillId()) == null) {
+                            if (AbilitySceneModule.plan(actor, plan.skillId()) == null) {
                                 throw new AdmissionStopped(Outcome.REJECTED, "skill_or_weapon_changed");
                             }
                             for (var target : targets) {
                                 if (scene.map().getMonsterByOid(target.getObjectId()) != target
-                                        || !canHit(actor, target, plan, actor.getPosition())) {
+                                        || !AbilitySceneModule.canHit(actor, target, plan, actor.getPosition())) {
                                     throw new AdmissionStopped(Outcome.REJECTED, "attack_target_changed_or_out_of_range");
                                 }
                             }
@@ -209,7 +159,7 @@ public final class NativeCombatActions {
         var effect = SkillFactory.getSkill(skillId).getEffect(level);
         if (work.cancelRequested()) return buffResult(Outcome.CANCELLED, "combat_cancelled", false, false,
                 actor, skillId, level, hp, mp, effect.getDuration());
-        String rejected = admission(actor, skillId);
+        String rejected = AbilitySceneModule.attackRejection(actor, skillId);
         if (rejected != null) return buffResult(Outcome.REJECTED, rejected, false, false,
                 actor, skillId, level, hp, mp, effect.getDuration());
         if (!resources(actor, effect)) return buffResult(Outcome.RESOURCE_UNAVAILABLE, "skill_resources_unavailable",
@@ -236,15 +186,6 @@ public final class NativeCombatActions {
                 actor, skillId, level, hp, mp, effect.getDuration());
     }
 
-    private static String admission(Character actor, int skillId) {
-        if (!actor.isAlive() || actor.isBanned() || actor.hasDisease(Disease.STUN) || actor.hasDisease(Disease.SEDUCE)
-                || actor.getBuffedValue(BuffStat.MONSTER_RIDING) != null
-                || actor.getBuffEffect(BuffStat.MORPH) != null && actor.getBuffEffect(BuffStat.MORPH).isMorphWithoutAttack()) {
-            return "actor_state_rejected";
-        }
-        return skillId != 0 && actor.hasDisease(Disease.SEAL) ? "skill_sealed" : null;
-    }
-
     private static boolean resources(Character actor, StatEffect effect) {
         int hpChange = NativeCombatEffects.hpChange(effect, actor);
         int mpChange = NativeCombatEffects.mpChange(effect, actor);
@@ -254,7 +195,7 @@ public final class NativeCombatActions {
     private static void requireAdmission(Character actor, int skillId, int level, StatEffect effect,
                                           ExecutionScope.WorkHandle work) {
         if (work.cancelRequested()) throw new AdmissionStopped(Outcome.CANCELLED, "combat_cancelled");
-        String rejected = admission(actor, skillId);
+        String rejected = AbilitySceneModule.attackRejection(actor, skillId);
         if (rejected != null) throw new AdmissionStopped(Outcome.REJECTED, rejected);
         if (skillId != 0 && actor.getSkillLevel(skillId) != level) {
             throw new AdmissionStopped(Outcome.REJECTED, "skill_level_changed");
@@ -272,23 +213,13 @@ public final class NativeCombatActions {
         AdmissionStopped(Outcome outcome, String reason) { super(reason, null, false, false); this.outcome = outcome; }
     }
 
-    private static WeaponType weapon(Character actor) {
-        var inventory = actor.getInventory(InventoryType.EQUIPPED);
-        inventory.lockInventory();
-        try {
-            var item = inventory.getItem((short) -11);
-            return item == null ? WeaponType.NOT_A_WEAPON : ItemInformationProvider.getInstance().getWeaponType(item.getItemId());
-        } finally { inventory.unlockInventory(); }
-    }
-
     /** Explicit finite policy: native base bound/WZ multiplier and native target defence, without critical/mastery emulation. */
     private static int damage(Character actor, Monster target, Plan plan, StatEffect effect) {
-        if (plan.route() == Route.CLOSE && weapon(actor) != WeaponType.NOT_A_WEAPON) {
+        if (plan.route() == Route.CLOSE) {
             var roll = NativeAttackDamagePolicy.roll(NativeAttackDamagePolicy.capture(actor, target));
             return plan.skillId() == 0 ? roll.damage() : (int) Math.min(Integer.MAX_VALUE,
                     (long) roll.damage() * effect.getDamage() / 100);
         }
-        if (plan.route() == Route.CLOSE) return Math.max(1, actor.calculateMaxBaseDamage(actor.getTotalWatk()));
         // This is the native normal-spell upper bound, with a bounded roll and actual monster MDDamage.
         double magic = actor.getTotalMagic();
         double base = Math.ceil((magic * Math.ceil(magic / 1000.0) + magic) / 30.0)

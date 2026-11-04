@@ -37,6 +37,15 @@ public final class RuntimeNavigationEngine {
 
     /** Planning runs on the managed caller, outside the role's short-command lane. */
     public static Session plan(Character actor, Point target, Runnable checkpoint) {
+        return plan(actor, target, checkpoint, false);
+    }
+
+    /** A scene member still at its acknowledged native entry may finish the real entry fall first. */
+    public static Session planFromEntry(Character actor, Point target, Runnable checkpoint) {
+        return plan(actor, target, checkpoint, true);
+    }
+
+    private static Session plan(Character actor, Point target, Runnable checkpoint, boolean sceneEntry) {
         checkpoint.run();
         MapleMap map = actor.getMap();
         if (map.isSwim() || map.getFootholds() == null || !GroundRules.fromCharacter(actor).supportedSurface()) {
@@ -69,15 +78,18 @@ public final class RuntimeNavigationEngine {
         Point start = actor.getPosition();
         Point floor = groundPoint(map, start);
         boolean onRope = CharacterStance.isClimbing(actor.getStance());
-        int startRegion = onRope ? graph.findRopeRegionId(start) : graph.findRegionId(map, start);
+        if (!onRope && (floor == null || Math.abs(floor.y - start.y) > 24
+                && (!sceneEntry || floor.y < start.y))) {
+            throw new Failure("UNSUPPORTED_START_POSITION");
+        }
+        boolean entryDrop = !onRope && floor.y - start.y > 1;
+        Point routeStart = entryDrop ? floor : start;
+        int startRegion = onRope ? graph.findRopeRegionId(start) : graph.findRegionId(map, routeStart);
         Point targetFloor = groundPoint(map, target);
         int targetRegion = targetFloor != null && Math.abs(targetFloor.y - target.y) <= 4
                 ? graph.findRegionId(map, target) : graph.findRopeRegionId(target);
         if (startRegion < 0 || targetRegion < 0) throw new Failure("NO_PATH");
-        if (!onRope && (floor == null || Math.abs(floor.y - start.y) > 24)) {
-            throw new Failure("UNSUPPORTED_START_POSITION");
-        }
-        var route = BotNavigationManager.runSearch(graph, map, start, startRegion, targetRegion, target,
+        var route = BotNavigationManager.runSearch(graph, map, routeStart, startRegion, targetRegion, target,
                 "runtime-navigation", true, false, 0, checkpoint).path();
         if (route.isEmpty() && startRegion != targetRegion) throw new Failure("NO_PATH");
         return new Session(actor, target, graph, profile, route, onRope, floor);
@@ -181,6 +193,7 @@ public final class RuntimeNavigationEngine {
         private final List<BotNavigationGraph.Edge> route;
         private final BotMovementState motion;
         private int nextEdge;
+        private boolean entryDrop;
 
         private Session(Character actor, Point target, BotNavigationGraph graph,
                         BotMovementProfile profile, List<BotNavigationGraph.Edge> route,
@@ -203,6 +216,7 @@ public final class RuntimeNavigationEngine {
                                 && motion.position().y >= rope.topY() && motion.position().y <= rope.bottomY())
                         .findFirst().orElseThrow(() -> new Failure("UNSUPPORTED_START_POSITION"));
             } else if (floor.y - motion.position().y > 1) {
+                entryDrop = true;
                 motion.inAir = true;
                 motion.physX = motion.position().x;
                 motion.physY = motion.position().y;
@@ -231,6 +245,11 @@ public final class RuntimeNavigationEngine {
                     BotMovementManager.tickAirborne(motion, null);
                 } else BotPhysicsEngine.applyGroundMotion(motion, actor,
                         BotPhysicsEngine.findGroundFoothold(actor.getMap(), motion.position()));
+            } else if (entryDrop) {
+                mode = Mode.DROP;
+                motion.moveDir = 0;
+                BotMovementManager.tickAirborne(motion, null);
+                entryDrop = motion.inAir;
             } else {
                 int region = motion.climbing ? graph.findRopeRegionId(motion.position())
                         : graph.findRegionId(actor.getMap(), motion.position());

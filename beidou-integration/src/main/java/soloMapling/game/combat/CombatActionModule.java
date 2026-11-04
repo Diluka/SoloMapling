@@ -14,7 +14,6 @@ import soloMapling.game.combat.CombatJobTree.AttackKind;
 import soloMapling.game.combat.CombatJobTree.AttackPlan;
 import soloMapling.game.combat.CombatResult.Outcome;
 import soloMapling.game.action.NativeCombatActions;
-import soloMapling.game.action.NativeContactDamageActions;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
@@ -23,7 +22,9 @@ import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleFunction;
 import soloMapling.game.runtime.ModuleCall;
-import soloMapling.game.runtime.ModuleTask;
+import soloMapling.game.scene.AbilitySceneModule;
+import soloMapling.game.scene.SceneCharacterState;
+import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.navigation.NavigationResult;
 import soloMapling.game.navigation.MoveToRequest;
@@ -73,7 +74,7 @@ public final class CombatActionModule implements ActionModule {
     private CombatJobTree tree;
     private Job treeJob;
     private final Map<Integer, Long> nextBuffAt = new LinkedHashMap<>();
-    private long nextBuff, nextAttack, nextUltimate, nextContact;
+    private long nextBuff, nextAttack, nextUltimate;
     private Task active;
 
     public CombatActionModule(Config config, Server server) { this.config = config; this.server = server; }
@@ -94,7 +95,7 @@ public final class CombatActionModule implements ActionModule {
         var selected = current.resolve(AttackKind.SINGLE, weapon, target.getStats().isUndead(), actor);
         if (selected.isEmpty()) return false;
         var plan = selected.get();
-        return plan.nativeRules() ? NativeCombatActions.canHit(actor, target, plan.nativePlan(), actor.getPosition())
+        return plan.nativeRules() ? AbilitySceneModule.canHit(actor, target, plan.nativePlan(), actor.getPosition())
                 : BotAttackDriver.canHitFrom(actor, target, plan.profile(), weapon, actor.getPosition());
     }
 
@@ -138,9 +139,8 @@ public final class CombatActionModule implements ActionModule {
             if (task.target == null || !task.target.isAlive()) {
                 outcome = Outcome.TARGET_INVALID;
             } else {
-                task.contactTask = new ModuleTask(context, "combat-contact-" + task.actor.getId(),
-                        ownWork -> contactLoop(task, ownWork));
-                task.contactTask.start();
+                task.sceneState = SceneRuntimeManager.current(server, actor).characterState();
+                task.contactsBefore = task.sceneState.contactSnapshot().count();
                 while (true) {
                     checkpoint(task);
                     var tick = tick(task);
@@ -183,32 +183,15 @@ public final class CombatActionModule implements ActionModule {
         } catch (GameContext.Invalid changed) {
             outcome = Outcome.CONTEXT_CHANGED; reason = changed.reason().name();
         } finally {
-            task.stopContacts = true;
-            if (task.contactTask != null) {
-                task.contactTask.cancel();
-                task.contactTask.await();
-            }
             synchronized (this) { active = null; }
             if (task.interrupted) Thread.currentThread().interrupt();
-        }
-        // A contact body can leave the lane before its carrier publishes the failure.
-        // Only that recorded failure is reconsidered after draining; completed effects remain facts.
-        var contactFailure = task.contactFailure.get();
-        if (contactFailure instanceof Halt stopped) {
-            outcome = stopped.outcome;
-            reason = stopped.getMessage();
-        } else if (contactFailure instanceof GameContext.Invalid changed) {
-            outcome = Outcome.CONTEXT_CHANGED;
-            reason = changed.reason().name();
-        } else if (contactFailure instanceof Error fatal) {
-            throw fatal;
-        } else if (contactFailure instanceof RuntimeException failed) {
-            throw failed;
         }
         return result(task, outcome, reason);
     }
 
     private CombatResult result(Task task, Outcome outcome, String reason) {
+        var contacts = task.sceneState == null ? null : task.sceneState.contactSnapshot();
+        int contactCount = contacts == null ? 0 : (int) (contacts.count() - task.contactsBefore);
         return new CombatResult(outcome, reason, task.initialJob.getId(), tree.activePath().stream().map(Job::getId).toList(),
                 tree.buffs(task.actor), List.copyOf(task.buffsCast), task.attacks.entrySet().stream().map(entry -> new CombatResult.AttackUse(
                         entry.getKey().providerJob(), entry.getKey().kind(), entry.getKey().skillId(),
@@ -222,8 +205,9 @@ public final class CombatActionModule implements ActionModule {
                         ? "native_skill_combat_first_v1" : "legacy_simulated_combat_v1",
                 task.actor.getJob().getId(), List.copyOf(task.jobChanges),
                 task.hpBefore, task.actor.getHp(), task.mpBefore, task.actor.getMp(),
-                List.copyOf(task.nativeAttacks.values()), List.copyOf(task.nativeBuffs.values()), List.copyOf(task.contactHits),
-                task.nativeAttackAttempts, task.nativeBuffAttempts, task.contactHitCount);
+                List.copyOf(task.nativeAttacks.values()), List.copyOf(task.nativeBuffs.values()),
+                contactCount == 0 ? List.of() : List.of(contacts.latest()),
+                task.nativeAttackAttempts, task.nativeBuffAttempts, contactCount);
     }
 
     /** Every native observation, buff or strike executes as a new short work on this role's lane. */
@@ -260,7 +244,8 @@ public final class CombatActionModule implements ActionModule {
                         boolean applied;
                         if (nativeRules) {
                             checkpoint(task);
-                            var buff = NativeCombatActions.buff(server, task.scene, task.work, skill);
+                            var binding = SceneRuntimeManager.current(server, task.scene.actor());
+                            var buff = binding.scene().characters().attack(binding).buff(server, task.work, skill);
                             task.nativeBuffAttempts++;
                             task.nativeBuffs.put(skill, buff);
                             if (buff.handlerError()) throw new Halt(Outcome.INDETERMINATE, "native_buff_handler_failed");
@@ -278,7 +263,7 @@ public final class CombatActionModule implements ActionModule {
                     }
                 }
                 WeaponType weapon = BotAttack.resolveEquippedWeaponType(actor);
-                boolean facingLeft = BotAttackDriver.faceTarget(actor, task.target.getPosition());
+                boolean facingLeft = task.target.getPosition().x < actor.getPosition().x;
                 var single = tree.resolve(AttackKind.SINGLE, weapon, false, actor);
                 var aoe = tree.resolve(AttackKind.AOE, weapon, false, actor);
                 var ultimate = tree.resolve(AttackKind.ULTIMATE, weapon, false, actor);
@@ -306,7 +291,7 @@ public final class CombatActionModule implements ActionModule {
                         if (ground == null) ground = RuntimeNavigationEngine.groundPoint(task.scene.map(),
                                 new Point(x, targetPosition.y - plan.reachY()));
                         if (ground != null && Math.abs(ground.y - targetPosition.y) <= plan.reachY()
-                                && (plan.nativeRules() ? NativeCombatActions.canHit(actor, task.target, plan.nativePlan(), ground)
+                                && (plan.nativeRules() ? AbilitySceneModule.canHit(actor, task.target, plan.nativePlan(), ground)
                                 : BotAttackDriver.canHitFrom(actor, task.target, plan.profile(), weapon, ground))) {
                             value.set(new Tick(null, null, ground)); return;
                         }
@@ -322,7 +307,9 @@ public final class CombatActionModule implements ActionModule {
                 String route, rule;
                 if (plan.nativeRules()) {
                     checkpoint(task);
-                    var strike = NativeCombatActions.strike(server, task.scene, task.work, plan.nativePlan(), targets, facingLeft);
+                    var binding = SceneRuntimeManager.current(server, task.scene.actor());
+                    var strike = binding.scene().characters().attack(binding)
+                            .strike(server, task.work, plan.nativePlan(), targets, facingLeft);
                     task.nativeAttackAttempts++;
                     task.nativeAttacks.put(strike.skillId(), strike);
                     if (strike.handlerError()) throw new Halt(Outcome.INDETERMINATE, "native_attack_handler_failed");
@@ -332,8 +319,9 @@ public final class CombatActionModule implements ActionModule {
                     skillId = strike.skillId(); skillLevel = strike.skillLevel();
                     route = plan.nativePlan().route().name(); rule = strike.policy();
                 } else {
-                    var strike = BotAttackDriver.strikeNative(actor, targets, plan.profile(), weapon, facingLeft,
-                            tree.buffs().contains(Hermit.SHADOW_PARTNER));
+                    var binding = SceneRuntimeManager.current(server, task.scene.actor());
+                    var strike = binding.scene().characters().attack(binding).strikeLegacy(task.work, plan.profile(),
+                            targets, weapon, facingLeft, tree.buffs().contains(Hermit.SHADOW_PARTNER));
                     nextAttack = now + TimeUnit.MILLISECONDS.toNanos(plan.profile().cooldownMs);
                     hitFacts = strike.hits(); skillId = strike.skillId(); skillLevel = plan.profile().skillLevel;
                     route = strike.route().name(); rule = "legacy_simulated_combat_v1";
@@ -360,7 +348,7 @@ public final class CombatActionModule implements ActionModule {
 
     private static List<Monster> targets(Task task, AttackPlan plan, WeaponType weapon, boolean facingLeft) {
         var candidates = plan.nativeRules() ? task.scene.map().getAllMonsters().stream()
-                .filter(monster -> NativeCombatActions.canHit(task.actor, monster, plan.nativePlan(), task.actor.getPosition()))
+                .filter(monster -> AbilitySceneModule.canHit(task.actor, monster, plan.nativePlan(), task.actor.getPosition()))
                 : BotAttackDriver.mobsInReach(task.actor, plan.profile(), weapon, facingLeft).stream();
         return candidates
                 .filter(monster -> task.input.allowedTargetOids().contains(monster.getObjectId()))
@@ -369,54 +357,7 @@ public final class CombatActionModule implements ActionModule {
                 .limit(plan.maximumTargets()).toList();
     }
 
-    private void contactLoop(Task task, ExecutionScope.WorkHandle ownWork) {
-        try {
-            while (!task.stopContacts && !ownWork.cancelRequested() && !task.work.cancelRequested()
-                    && System.nanoTime() < task.deadline && task.context.scope().isActive()) {
-                var failure = new AtomicReference<Throwable>();
-                var step = task.context.acceptWork();
-                try {
-                    task.context.submit("combat-action", step, () -> {}, () -> {
-                        try {
-                            checkpoint(task);
-                            if (task.stopContacts || ownWork.cancelRequested()) throw new CancellationException();
-                            if (!task.target.isAlive()
-                                    || !CombatJobTree.nativeMode(task.actor) || System.nanoTime() < nextContact) return;
-                            var hit = NativeContactDamageActions.contact(server, task.scene, task.work,
-                                    ownWork, task.deadline);
-                            if (hit != null) {
-                                task.contactHits.clear();
-                                task.contactHits.add(hit);
-                                if (hit.dispatched()) {
-                                    nextContact = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(2500);
-                                    task.contactHitCount++;
-                                }
-                                if (hit.handlerError()) throw new Halt(Outcome.INDETERMINATE, "native_contact_handler_failed");
-                            }
-                        } catch (RuntimeException | Error stopped) { failure.set(stopped); }
-                    }, () -> {});
-                } catch (RuntimeException rejected) {
-                    step.reject();
-                    throw rejected;
-                }
-                step.completion().toCompletableFuture().join();
-                if (failure.get() instanceof Error fatal) throw fatal;
-                if (failure.get() instanceof RuntimeException stopped) throw stopped;
-                try { Thread.sleep(50); }
-                catch (InterruptedException cancelled) { return; }
-            }
-        } catch (CancellationException | Halt stopped) {
-            // The engagement checks the same cancellation/deadline and owns its final result.
-            if (stopped instanceof Halt halt && halt.outcome == Outcome.INDETERMINATE) task.contactFailure.set(stopped);
-        } catch (RuntimeException | Error stopped) {
-            if (!task.stopContacts && !task.work.cancelRequested() && !ownWork.cancelRequested()
-                    && task.context.scope().isActive()) task.contactFailure.set(stopped);
-        }
-    }
-
     private void checkpoint(Task task) {
-        if (task.contactFailure.get() instanceof Error fatal) throw fatal;
-        if (task.contactFailure.get() instanceof RuntimeException failed) throw failed;
         if (Thread.interrupted()) { task.interrupted = true; task.stopRequested = true; }
         if (task.stopRequested || task.work.cancelRequested()) throw new Halt(Outcome.CANCELLED, "combat_cancelled");
         if (System.nanoTime() >= task.deadline) {
@@ -457,14 +398,12 @@ public final class CombatActionModule implements ActionModule {
         final Map<Integer, HitTotal> hits = new LinkedHashMap<>();
         final Map<Integer, NativeCombatActions.StrikeResult> nativeAttacks = new LinkedHashMap<>();
         final Map<Integer, NativeCombatActions.BuffResult> nativeBuffs = new LinkedHashMap<>();
-        final List<NativeContactDamageActions.ContactResult> contactHits = new ArrayList<>();
-        final AtomicReference<Throwable> contactFailure = new AtomicReference<>();
+        SceneCharacterState sceneState;
+        long contactsBefore;
         GameContext.SceneRef scene;
         Monster target;
-        ModuleTask contactTask;
-        int navigationCalls, nativeAttackAttempts, nativeBuffAttempts, contactHitCount;
+        int navigationCalls, nativeAttackAttempts, nativeBuffAttempts;
         volatile boolean stopRequested;
-        volatile boolean stopContacts;
         boolean interrupted;
         boolean usedNative, usedLegacy;
         Task(CombatRequest input, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, Character actor) {

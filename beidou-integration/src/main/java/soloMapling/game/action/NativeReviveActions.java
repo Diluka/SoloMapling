@@ -8,6 +8,7 @@ import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
 
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Ordinary revive click, using the native handler's event decision and respawn implementation. */
 public final class NativeReviveActions {
@@ -20,7 +21,9 @@ public final class NativeReviveActions {
             return new ReviveResult(ReviveResult.Outcome.CANCELLED, ref.character().getId(), ref.epoch().value(),
                     null, null, new ReviveResult.Dispatch(false, false, false),
                     new ReviveResult.Event(ReviveResult.EventRoute.UNCONFIRMED, false, false, false,
-                            false, false, false, false, null), false, true, "revive_cancelled_before_dispatch");
+                            false, false, false, false, null),
+                    new ReviveResult.Transition(false, false, false, false, false),
+                    false, true, "revive_cancelled_before_dispatch");
         }
         NativeContextChecks.requireSceneCurrent(server, scene);
         var before = state(scene);
@@ -29,7 +32,9 @@ public final class NativeReviveActions {
                     before, before, new ReviveResult.Dispatch(false, false, false),
                     new ReviveResult.Event(scene.memberEim() == null ? ReviveResult.EventRoute.NOT_PRESENT
                             : ReviveResult.EventRoute.UNCONFIRMED, false, false, false,
-                            false, false, false, false, null), false, invocationWork.cancelRequested(), null);
+                            false, false, false, false, null),
+                    new ReviveResult.Transition(false, false, false, false, false),
+                    false, invocationWork.cancelRequested(), null);
         }
 
         try (var evidence = NativeReviveEvidence.begin(ref.character(), scene.memberEim())) {
@@ -61,12 +66,34 @@ public final class NativeReviveActions {
 
             ReviveResult.State after = null;
             boolean sceneChanged = false;
+            boolean transitionObserved = false;
+            var acknowledged = new AtomicBoolean();
+            boolean acknowledgementReturned = false;
+            boolean acknowledgementError = false;
+            boolean transitionComplete = false;
+            boolean reviveObserved = false;
             try {
                 // Revive may legitimately change map/EIM; the old scene is only a dispatch precondition.
                 var current = NativeContextChecks.captureScene(server, ref);
                 after = state(current);
+                reviveObserved = evidence.dispatchStarted() && after.alive() && after.hp() > 0;
                 sceneChanged = current.map() != scene.map() || current.memberEim() != scene.memberEim()
                         || current.mapEim() != scene.mapEim();
+                transitionObserved = evidence.dispatchStarted()
+                        && (sceneChanged || !before.changingMaps() && after.changingMaps());
+                if (transitionObserved && after.changingMaps()) {
+                    // Complete only this observed entry, even if the initiating call was cancelled after respawn.
+                    // Keep the first confirmed life facts if acknowledgement or its post-read later fails.
+                    acknowledgementError = NativeMapEntryActions.acknowledge(server, current, () -> acknowledged.set(true));
+                    acknowledgementReturned = !acknowledgementError;
+                    if (acknowledgementError) reason = "revive_map_entry_handler_failed";
+                    current = NativeContextChecks.captureScene(server, ref);
+                    after = state(current);
+                    reviveObserved |= evidence.dispatchStarted() && after.alive() && after.hp() > 0;
+                }
+                transitionComplete = transitionObserved && !after.changingMaps() && !acknowledgementError;
+            } catch (NativeActionService.Invalid rejected) {
+                reason = rejected.reason();
             } catch (GameContext.Invalid changed) {
                 reason = changed.reason().name().toLowerCase(java.util.Locale.ROOT);
             }
@@ -83,7 +110,7 @@ public final class NativeReviveActions {
                 outcome = ReviveResult.Outcome.CANCELLED;
             } else if (after == null) {
                 outcome = ReviveResult.Outcome.UNKNOWN;
-            } else if (evidence.dispatchStarted() && after.alive() && after.hp() > 0) {
+            } else if (reviveObserved) {
                 outcome = ReviveResult.Outcome.REVIVED;
             } else {
                 outcome = ReviveResult.Outcome.NOT_REVIVED;
@@ -96,6 +123,8 @@ public final class NativeReviveActions {
                             fact.eventAllowsStandardPath(), fact.handlerRespawnEntered() > 0,
                             fact.handlerRespawnReturned() > 0, fact.respawnEntered() > 0,
                             fact.respawnReturned() > 0, fact.requestedReturnMap()),
+                    new ReviveResult.Transition(transitionObserved, acknowledged.get(), acknowledgementReturned,
+                            acknowledgementError, transitionComplete),
                     sceneChanged, invocationWork.cancelRequested(), reason);
         }
     }
@@ -104,7 +133,7 @@ public final class NativeReviveActions {
         var actor = scene.actor().character();
         var position = actor.getPosition();
         return new ReviveResult.State(actor.isAlive(), actor.getHp(), actor.getMp(), scene.map().getId(),
-                position.x, position.y);
+                position.x, position.y, actor.isChangingMaps());
     }
 
     private static final class AlreadyAlive extends RuntimeException {

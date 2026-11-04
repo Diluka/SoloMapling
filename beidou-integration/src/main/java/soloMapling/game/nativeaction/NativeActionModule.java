@@ -27,8 +27,8 @@ public final class NativeActionModule implements ActionModule {
     public static final Config DEFAULT_CONFIG = new Config();
     public static final ModuleFunction<NativeActionModule, ReviveRequest, ReviveResult> REVIVE = new ModuleFunction<>(
             "native.revive", "通过原生普通复活点击流程请求复活，由原事件裁决及原生回城、HP/MP和Buff规则执行。",
-            List.of(), "返回实际复活结果、HP/MP/地图位置前后事实、原生派发及事件/标准路径证据。",
-            "本次原生处理及提供者短命令真实退出后返回；事件接管后的后续任务继续由原生事件所有者管理。",
+            List.of(), "返回实际复活结果、HP/MP/地图位置及换图状态前后事实、地图进入确认和事件/标准路径证据。",
+            "本次原生处理、已发生换图的进入确认及提供者短命令真实退出后返回；事件后续任务由原生事件所有者管理。",
             (module, arguments) -> ReviveRequest.NORMAL,
             (module, context, work, input) -> module.revive(input, context, work), ReviveResult::toMap);
     public static final ModuleFunction<NativeActionModule, PortalRequest, PortalResult> ENTER_PORTAL = new ModuleFunction<>(

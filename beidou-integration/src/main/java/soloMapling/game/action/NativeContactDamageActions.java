@@ -57,10 +57,8 @@ public final class NativeContactDamageActions {
 
     /** Caller owns the role-wide contact cadence and is already executing its short lane work. */
     public static ContactResult contact(Server server, GameContext.SceneRef scene,
-                                        ExecutionScope.WorkHandle invocationWork,
-                                        ExecutionScope.WorkHandle contactWork, long deadlineNanos) {
-        if (invocationWork.cancelRequested() || contactWork.cancelRequested()
-                || System.nanoTime() >= deadlineNanos) return null;
+                                        ExecutionScope.WorkHandle work) {
+        if (work.cancelRequested()) return null;
         NativeContextChecks.requireSceneCurrent(server, scene);
         var actor = scene.actor().character();
         if (!actor.isAlive() || actor.isHidden()) return null;
@@ -95,8 +93,7 @@ public final class NativeContactDamageActions {
                         .writeIntLE(damage).writeIntLE(target.getId()).writeIntLE(target.getObjectId())
                         .writeByte(target.getPosition().x > position.x ? 0 : 1),
                 () -> {
-                    if (invocationWork.cancelRequested() || contactWork.cancelRequested()
-                            || System.nanoTime() >= deadlineNanos) {
+                    if (work.cancelRequested()) {
                         throw new CancellationException("contact_cancelled_before_dispatch");
                     }
                     NativeContextChecks.requireSceneCurrent(server, scene);
@@ -112,7 +109,7 @@ public final class NativeContactDamageActions {
         }
         return new ContactResult(POLICY_ID, dispatched.get(), target.getObjectId(), target.getId(),
                 physicalAttack, defense, damage, hpBefore, actor.getHp(), mpBefore, actor.getMp(),
-                !actor.isAlive(), handlerError, invocationWork.cancelRequested() || contactWork.cancelRequested());
+                !actor.isAlive(), handlerError, work.cancelRequested());
     }
 
     private static boolean touching(Character actor, Monster monster) {

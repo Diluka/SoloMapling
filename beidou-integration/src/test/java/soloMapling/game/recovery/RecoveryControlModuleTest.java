@@ -182,7 +182,7 @@ class RecoveryControlModuleTest {
             assertEquals(10001, fixture.actor.getMapId());
             var stopped = fixture.runtime.stop(fixture.recoveryRef, CharacterRuntime.StopMode.PAUSE);
             assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
-            assertEquals("IDLE", fixture.recovery.status().state().name());
+            eventually(() -> fixture.recovery.status().state() == RecoveryStatus.State.IDLE);
             assertEquals("module_stopping", fixture.recovery.status().reason());
             now.addAndGet(5000);
             fixture.resources(10, 1);

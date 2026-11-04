@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.http.HttpStatus;
@@ -20,12 +21,18 @@ import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.action.InventoryMoveResult;
 import soloMapling.game.action.NativeBasicActions;
 import soloMapling.game.action.NativeBasicResult;
+import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.scene.CharacterMotion;
+import soloMapling.game.scene.CharacterSceneModule;
+import soloMapling.game.scene.SceneActorBinding;
+import soloMapling.game.scene.SceneRuntime;
+import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.population.RobotPopulationService;
 import soloMapling.game.script.nativeenv.NativeScriptAdapter;
 import soloMapling.game.script.nativeenv.NativeScriptRequest;
@@ -80,6 +87,7 @@ class ActorControlServiceTest {
     private NativeActorHandle handle;
     private NativeActorHandle secondaryHandle;
     private AcceptanceClient client;
+    private MockedStatic<SceneRuntimeManager> basicScenes;
     private final List<ManualExecutor> executors = new ArrayList<>();
     private final List<ActorControlService> services = new ArrayList<>();
 
@@ -123,10 +131,14 @@ class ActorControlServiceTest {
 
     @AfterEach
     void stopFixtures() {
-        var stop = ExecutionScope.tryBeginWorldStop();
-        services.forEach(service -> service.onWorldStopping(stop));
-        new ArrayList<>(executors).forEach(ManualExecutor::drain);
-        executors.forEach(ManualExecutor::shutdownNow);
+        try {
+            var stop = ExecutionScope.tryBeginWorldStop();
+            services.forEach(service -> service.onWorldStopping(stop));
+            new ArrayList<>(executors).forEach(ManualExecutor::drain);
+            executors.forEach(ManualExecutor::shutdownNow);
+        } finally {
+            if (basicScenes != null) basicScenes.close();
+        }
     }
 
     @Test
@@ -200,8 +212,7 @@ class ActorControlServiceTest {
         environment.getPropertySources().addFirst(new MapPropertySource("robot-test-config",
                 Map.of("solomapling.robot-population-config[0]", defaults.toString(),
                         "solomapling.robot-population-config[1]", temporary.toString())));
-        population = new RobotPopulationService(environment);
-        population.onWorldStarted();
+        population = protocolPopulation(environment);
 
         ActorControlService service = service(4, 20, 64);
         var opening = open(service, "configured-mcp-role");
@@ -2802,6 +2813,22 @@ class ActorControlServiceTest {
 
     private void prepareBasic(ActorControlService service, AtomicReference<HeldBasic> holdMovement,
                                AtomicReference<HeldBasic> capacityRejection) {
+        // Native scene motion is replaced alongside the native backend; protocol work and carriers remain real.
+        basicScenes = mockStatic(SceneRuntimeManager.class);
+        for (var actor : List.of(handle, secondaryHandle)) {
+            var characterRef = actor.characterRef();
+            var binding = mock(SceneActorBinding.class);
+            var scene = mock(SceneRuntime.class);
+            var characters = mock(CharacterSceneModule.class);
+            var motion = mock(CharacterMotion.class);
+            var movement = mock(NativeMovementActions.class);
+            basicScenes.when(() -> SceneRuntimeManager.current(any(org.gms.net.server.Server.class), eq(characterRef)))
+                    .thenReturn(binding);
+            when(binding.scene()).thenReturn(scene);
+            when(scene.characters()).thenReturn(characters);
+            when(characters.motion(binding)).thenReturn(motion);
+            when(motion.movement()).thenReturn(movement);
+        }
         AcceptanceObservationService observations = mock(AcceptanceObservationService.class);
         when(observations.contextForActor(any(GameContext.CharacterRef.class))).thenReturn(Map.of("scene_ref", "scene-current",
                 "runtime_generation", AcceptanceObservationRuntime.snapshot().generation()));
@@ -3673,14 +3700,26 @@ class ActorControlServiceTest {
         @Override public Map<String, Object> describe(NativeScriptSession session) { return Map.of("kind", "npc"); }
     }
 
-    private static RobotPopulationService populationFromConfig(Path directory, String yaml) throws IOException {
+    private RobotPopulationService populationFromConfig(Path directory, String yaml) throws IOException {
         Path config = directory.resolve("RobotPopulation.yaml");
         Files.writeString(config, yaml);
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("robot-test-config",
                 Map.of("solomapling.robot-population-config", config.toString())));
-        RobotPopulationService population = new RobotPopulationService(environment);
+        return protocolPopulation(environment);
+    }
+
+    private RobotPopulationService protocolPopulation(StandardEnvironment environment) {
+        RobotPopulationService population = spy(new RobotPopulationService(environment));
         population.onWorldStarted();
+        doAnswer(invocation -> {
+            // Basic-action tests already replace this native boundary on their manually advanced lane.
+            if (basicScenes != null) return invocation.callRealMethod();
+            try (var scenes = mockStatic(SceneRuntimeManager.class, CALLS_REAL_METHODS)) {
+                scenes.when(() -> SceneRuntimeManager.enter(any(), any(), any(), any())).thenAnswer(ignored -> null);
+                return invocation.callRealMethod();
+            }
+        }).when(population).assemble(anyString(), any(CharacterRuntime.class));
         return population;
     }
 
