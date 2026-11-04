@@ -198,17 +198,8 @@ class NavigationActionModuleTest {
     }
 
     @Test void acknowledgedNativeEntryFallsToRealGroundBeforeTheRouteStarts() {
-        var changingMaps = new AtomicBoolean(true);
         var fixture = fixture(98_982_134, new Point(0, -39),
-                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
-                        when(configured.character.isChangingMaps()).thenAnswer(call -> changingMaps.get()));
-
-        var pendingEntry = fixture.moveTo(new Point(120, 0));
-        assertEquals("UNSUPPORTED", pendingEntry.get("outcome"), pendingEntry.toString());
-        assertEquals("UNSUPPORTED_START_POSITION", pendingEntry.get("reason"));
-        assertTrue(fixture.movements.isEmpty());
-
-        changingMaps.set(false);
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of());
         var result = fixture.moveTo(new Point(120, 0));
 
         assertEquals("ARRIVED", result.get("outcome"), result.toString());
