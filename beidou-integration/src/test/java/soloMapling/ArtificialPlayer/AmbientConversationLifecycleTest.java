@@ -97,22 +97,13 @@ class AmbientConversationLifecycleTest {
 
     @Test
     void townChatterPublishesLocalizedTurnsThroughItsPublicTrigger() {
-        long oldMin = BotChatter.TURN_PAUSE_MIN_MS;
-        long oldMax = BotChatter.TURN_PAUSE_MAX_MS;
-        BotChatter.TURN_PAUSE_MIN_MS = 0;
-        BotChatter.TURN_PAUSE_MAX_MS = 0;
-        try {
-            for (String language : List.of("en-US", "zh-CN")) {
-                SoloMaplingLanguageConfig.setLanguageTag(language);
-                try (Scene scene = new Scene(); MockedStatic<GCMovement> movement = mockStatic(GCMovement.class)) {
-                    movement.when(() -> GCMovement.isMapObserved(Scene.MAP_ID)).thenReturn(true);
-                    assertTrue(BotChatter.forceChatter(scene.firstBot));
-                    assertLanguage(scene.spoken, language);
-                }
+        for (String language : List.of("en-US", "zh-CN")) {
+            SoloMaplingLanguageConfig.setLanguageTag(language);
+            try (Scene scene = new Scene(); MockedStatic<GCMovement> movement = mockStatic(GCMovement.class)) {
+                movement.when(() -> GCMovement.isMapObserved(Scene.MAP_ID)).thenReturn(true);
+                assertTrue(BotChatter.forceChatter(scene.firstBot));
+                assertLanguage(scene.spoken, language);
             }
-        } finally {
-            BotChatter.TURN_PAUSE_MIN_MS = oldMin;
-            BotChatter.TURN_PAUSE_MAX_MS = oldMax;
         }
     }
 
