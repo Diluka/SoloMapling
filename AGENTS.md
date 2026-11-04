@@ -1,5 +1,13 @@
 # SoloMapling 北斗集成维护规则
 
+## #319 场景数据采集候选
+
+- 新增只读 `scene_snapshot`、`scene_record`，候选工具目录共11项，原有13个游戏动作保持。采集沿正常管理员鉴权，只使用观察已登记的实际 `scene_ref`，无需 `actor_open`，不创建地图、角色或模拟宿主，不改变怪物控制权。
+- 服务端负责固定地图/世界代次的完整数据帧与只读事件订阅；MCP桥只负责协议和宿主文件。快照为UTF-8 JSON，录制为逐条刷新的NDJSON，文件以独占新建方式写入，父目录须已存在，不覆盖旧证据。格式见 `docs/mcp-acceptance/scene-capture.md`。
+- 录制默认10000ms/100ms，时长100～120000ms，间隔50～5000ms且不超过时长。当前最多4段活动录制，安全终态摘要保留256条；inline快照4MiB、单逻辑记录32MiB、单段256MiB，事件窗口4096条。超限、读取失败、未覆盖类别和事件缺口明确表达，不按观察默认100条静默裁剪。
+- 采样结束、取消、断流和文件失败必须分别核对原采样载体真实停止与事件退订；停止证明未确认时标记 `UNCONFIRMED`，不能补造完整end。场景销毁、实例替换和世界代次改变提前结束，不跟随角色换图。
+- 原生状态、模拟摘要、观察事件与派生值分层记录。原生stance代表最近移动姿态；服务端广播仅证明输出路径，不能用stance或广播摘要推导真人动画已播放。实际部署与SDK调用、当前Codex原生工具目录加载分别核实。
+
 ## #305 场景内核候选
 
 - 场景候选实现和当前支持范围见 `docs/scene-runtime/README.md`。同一世界代次及实际 `MapleMap` 共享宿主，原生对象继续拥有游戏事实；`CharacterRuntime` 保留来源、角色级冷却、唯一 lane 与最终关闭。
@@ -242,7 +250,7 @@ python3 beidou-integration/scripts/build.py --help
 
 - 当前BEGINNER及整个冒险家Warrior/Mage族使用native_skill_combat_first_v1；首批攻击为skill0、1001004、1001005、2001004、2001005，Buff为1001003、2001002、2001003。较高职业只回溯本批已适配且真实学会的祖先技能，按当前学会等级、装备、属性、资源和WZ准备执行；职业变化后更新入口。其余一期路径保留legacy_simulated_combat_v1，跨两类路径的结果标为mixed_native_and_legacy_combat_v1。
 - NativeCombatActions的有限可信伤害输入沿原生近战/魔法/施法handler派发，真实成本和阻断状态在派发前核对；原生HPMP、Buff、冷却、死亡、EXP、任务和掉落分别确认。Warrior首批按匹配WZ的1001003/4/5登记，旧常量及V1路径继续作为对应版本来源。
-- contact_physical_v1在当前BEGINNER或冒险家Warrior/Mage原生分支的交战期间处理物理接触入伤，复用WZ身体框及有限物防输入，通过TakeDamageHandler结算真实HPMP、MagicGuard、反伤和死亡。入伤的ModuleTask归战斗原scope，关联本次调用/期限，交战返回前实际退出；恢复控制只观察并消费药剂。
+- 该轮contact_physical_v1在BEGINNER或冒险家Warrior/Mage原生分支的交战期间处理接触入伤，复用WZ身体框及有限物防输入，通过TakeDamageHandler结算真实HPMP、MagicGuard、反伤和死亡。#305候选将这条有限原生路径迁至角色场景常驻负责人，具体新范围见上方候选说明；恢复控制继续只观察并消费药剂。
 - 结果保留既有交战字段并增加current_job/job_changes、真实资源、已适配技能最近事实及接触入伤摘要，native_attack_fact_scope/native_buff_fact_scope/contact_hit_fact_scope说明各自有界范围，累计次数与最近结果分别解释。普通MCP与环境来源消费同一后端并保留各自登录/收益/存档资格。覆盖清单见docs/robot-runtime/combat-jobs.md；#272/#127的大阶段继续按职业、技能族和后续范围推进，本轮源码、隔离、正式及客户端验证分别留证。
 
 ## #292 基础狩猎售物日程源码契约

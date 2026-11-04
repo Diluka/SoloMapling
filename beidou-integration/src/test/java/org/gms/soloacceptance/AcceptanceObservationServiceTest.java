@@ -84,7 +84,7 @@ class AcceptanceObservationServiceTest {
     @Test
     void capabilitiesExposeOnlyImplementedToolsAndThePublicArtifactIdentity() {
         Map<String, Object> result = observations.capabilities();
-        assertEquals(List.of("game_capabilities", "game_observe"), result.get("enabled_tools"));
+        assertEquals(List.of("game_capabilities", "game_observe", "scene_snapshot", "scene_record"), result.get("enabled_tools"));
         assertEquals(List.of(), result.get("actions"));
         assertEquals(Map.of("enabled", false, "enabled_tools", List.of(), "commands", List.of()),
                 result.get("debug_commands"));
@@ -111,7 +111,7 @@ class AcceptanceObservationServiceTest {
         field.set(observations, provider);
 
         Map<String, Object> result = observations.capabilities();
-        assertEquals(List.of("game_capabilities", "game_observe", "game_command"),
+        assertEquals(List.of("game_capabilities", "game_observe", "scene_snapshot", "scene_record", "game_command"),
                 result.get("enabled_tools"));
         assertEquals(commandCapabilities, result.get("debug_commands"));
         assertEquals(List.of(), result.get("actions"));

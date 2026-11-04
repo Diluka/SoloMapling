@@ -23,7 +23,8 @@ ACTOR_IMPLEMENTED_TOOLS = OBSERVATION_TOOLS | ACTOR_TOOLS
 BASIC_IMPLEMENTED_TOOLS = ACTOR_IMPLEMENTED_TOOLS | {"game_act"}
 COMMAND_TOOLS = frozenset({"game_command"})
 SCRIPT_TOOLS = frozenset({"script_run"})
-IMPLEMENTED_TOOLS = BASIC_IMPLEMENTED_TOOLS | COMMAND_TOOLS | SCRIPT_TOOLS
+CAPTURE_TOOLS = frozenset({"scene_snapshot", "scene_record"})
+IMPLEMENTED_TOOLS = BASIC_IMPLEMENTED_TOOLS | COMMAND_TOOLS | SCRIPT_TOOLS | CAPTURE_TOOLS
 
 
 def require_capabilities(capabilities: dict[str, Any], names: list[str], *, actors: bool = False, chat: bool = False) -> list[str]:
@@ -37,7 +38,8 @@ def require_capabilities(capabilities: dict[str, Any], names: list[str], *, acto
         or not isinstance(enabled, list)
         or any(not isinstance(name, str) for name in enabled)
         or len(enabled) != len(set(enabled))
-        or set(enabled) - COMMAND_TOOLS - SCRIPT_TOOLS not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, BASIC_IMPLEMENTED_TOOLS)
+        or set(enabled) - COMMAND_TOOLS - SCRIPT_TOOLS - CAPTURE_TOOLS not in (OBSERVATION_TOOLS, ACTOR_IMPLEMENTED_TOOLS, BASIC_IMPLEMENTED_TOOLS)
+        or set(enabled) & CAPTURE_TOOLS not in (set(), CAPTURE_TOOLS)
         or SCRIPT_TOOLS <= set(enabled) and not BASIC_IMPLEMENTED_TOOLS <= set(enabled)
     ):
         raise RuntimeError("实际验收桥没有返回合法的已开放能力。")

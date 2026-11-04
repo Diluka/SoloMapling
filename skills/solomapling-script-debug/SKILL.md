@@ -13,6 +13,7 @@ description: 在附带源码的 SoloMapling 工作区查阅北斗脚本 API，�
 - 启动、继续、关闭或恢复一次脚本调用，以及查阅或调用已装配的模块共享函数：读[执行与收尾](references/execution.md)。
 - 在脚本里执行原生命令：读[脚本命令](references/commands.md)。
 - 需要打开专用角色、观察实际场景或使用直接动作：配合[游戏交互技能](../solomapling-game-interaction/SKILL.md)。
+- 需要对齐脚本副作用前后的角色、怪物或controller状态：从真实 `scene_ref` 保存 `scene_snapshot` 或 `scene_record`，字段与事件覆盖见[场景采集格式](../../docs/mcp-acceptance/scene-capture.md)。采集本身不运行脚本、不打开角色。
 
 ## 调试流程
 

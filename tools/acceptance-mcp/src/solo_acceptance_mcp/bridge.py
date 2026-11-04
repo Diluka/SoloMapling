@@ -122,6 +122,21 @@ class BridgeError(Exception):
         return data
 
 
+class SceneCaptureError(BridgeError):
+    def __init__(self, failure: BridgeError, capture_id: str | None, backend_stop: str) -> None:
+        super().__init__(failure.code, failure.message, http_status=failure.http_status,
+                         backend_code=failure.backend_code)
+        self.capture_id = capture_id
+        self.backend_stop = backend_stop
+
+    def public_data(self) -> dict[str, Any]:
+        data = super().public_data()
+        data.update(recording_complete=False, backend_stop=self.backend_stop)
+        if self.capture_id is not None:
+            data["capture_id"] = self.capture_id
+        return data
+
+
 def validate_observation(
     scope: str, scene_ref: str | None, limit: int, *, session_id: str | None = None,
     expected_generation: int | None = None, since_cursor: int = 0,
@@ -168,6 +183,9 @@ SCRIPT_MAX_JSON_NODES = 16_384
 SCRIPT_DEFAULT_TIMEOUT_MS = 30_000
 SCRIPT_MAX_TIMEOUT_MS = 120_000
 SCRIPT_CLEANUP_SECONDS = 5.0
+SCENE_DEFAULT_DURATION_MS = 10_000
+SCENE_DEFAULT_INTERVAL_MS = 100
+SCENE_MAX_RECORD_BYTES = 32 * 1024 * 1024
 NATIVE_SCRIPT_KINDS = frozenset({"npc", "quest", "portal", "reactor", "event"})
 NATIVE_SCRIPT_OPERATIONS = frozenset({"start", "invoke", "close"})
 _SCRIPT_DEFAULT = object()
@@ -181,6 +199,20 @@ def validate_identifier(value: str, label: str, pattern: re.Pattern[str] = IDENT
 def validate_integer(value: int, label: str, minimum: int, maximum: int) -> None:
     if type(value) is not int or not minimum <= value <= maximum:
         raise BridgeError("INVALID_ARGUMENTS", label + " 必须是允许范围内的整数。")
+
+
+def validate_scene_capture(
+    scene_ref: str, output_file: str | None = None, *,
+    duration_ms: int = SCENE_DEFAULT_DURATION_MS, interval_ms: int = SCENE_DEFAULT_INTERVAL_MS,
+) -> None:
+    validate_identifier(scene_ref, "scene_ref")
+    if output_file is not None and (not isinstance(output_file, str) or not output_file or "\x00" in output_file
+                                    or any(0xD800 <= ord(char) <= 0xDFFF for char in output_file)):
+        raise BridgeError("INVALID_ARGUMENTS", "output_file 必须是非空 Unicode 文件路径。")
+    validate_integer(duration_ms, "duration_ms", 100, 120_000)
+    validate_integer(interval_ms, "interval_ms", 50, 5_000)
+    if interval_ms > duration_ms:
+        raise BridgeError("INVALID_ARGUMENTS", "interval_ms 不得大于 duration_ms。")
 
 
 def validate_script_target(session_id: str, expected_generation: int) -> None:
@@ -391,6 +423,130 @@ class BridgeClient:
 
     async def capabilities(self) -> dict[str, Any]:
         return await self._authorized_request("GET", "/solo/acceptance/v1/capabilities")
+
+    async def scene_snapshot(self, scene_ref: str) -> dict[str, Any]:
+        snapshot = await self._authorized_request(
+            "POST", "/solo/acceptance/v1/scene/snapshot",
+            {"requestId": str(uuid4()), "data": {"scene_ref": scene_ref}},
+            max_response_bytes=SCENE_MAX_RECORD_BYTES,
+        )
+        identity, frame = snapshot.get("identity"), snapshot.get("frame")
+        if (type(snapshot.get("schema_version")) is not int or snapshot["schema_version"] != 1 or not isinstance(identity, dict)
+                or identity.get("scene_ref") != scene_ref or not isinstance(snapshot.get("static_scene"), dict)
+                or not isinstance(frame, dict) or not isinstance(frame.get("coverage"), dict)):
+            raise BridgeError("INVALID_RESPONSE", "场景快照缺少有效身份或同一数据帧模型。")
+        return snapshot
+
+    async def scene_record(
+        self, scene_ref: str, duration_ms: int, interval_ms: int,
+        on_record: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> dict[str, Any]:
+        capture_id: str | None = None
+        budget = duration_ms / 1000 + SCRIPT_CLEANUP_SECONDS
+
+        async def receive() -> dict[str, Any]:
+            nonlocal capture_id
+            token = await self._token_for_request()
+            body = {"requestId": str(uuid4()), "data": {
+                "scene_ref": scene_ref, "duration_ms": duration_ms, "interval_ms": interval_ms,
+            }}
+            for attempt in range(2):
+                async with self._http.stream(
+                    "POST", "/solo/acceptance/v1/scene/record", json=body, timeout=budget,
+                    headers={"Accept": "application/x-ndjson", "Authorization": "Bearer " + token},
+                ) as response:
+                    if response.status_code == 401 and attempt == 0:
+                        token = await self._token_for_request(stale_token=token)
+                        continue
+                    if response.status_code != 200:
+                        self._decode(httpx.Response(response.status_code))
+                    pending = bytearray()
+                    sequence = 0
+                    frames = 0
+                    async for part in response.aiter_bytes():
+                        pending.extend(part)
+                        while b"\n" in pending:
+                            line, _, pending = pending.partition(b"\n")
+                            if len(line) > SCENE_MAX_RECORD_BYTES:
+                                raise BridgeError("INVALID_RESPONSE", "场景录制单条记录超过32MiB限制。")
+                            try:
+                                record = json.loads(line)
+                            except (ValueError, UnicodeError, RecursionError):
+                                raise BridgeError("INVALID_RESPONSE", "场景录制流不是有效的JSON记录。") from None
+                            self._validate_response_json(record)
+                            if not isinstance(record, dict):
+                                raise BridgeError("INVALID_RESPONSE", "场景录制记录必须是JSON对象。")
+                            kind = record.get("type")
+                            if capture_id is None:
+                                identifier = record.get("capture_id")
+                                identity = record.get("identity")
+                                if (kind != "header" or not isinstance(identifier, str)
+                                        or IDENTIFIER.fullmatch(identifier) is None
+                                        or not isinstance(identity, dict) or identity.get("scene_ref") != scene_ref):
+                                    raise BridgeError("INVALID_RESPONSE", "场景录制缺少有效的首条身份记录。")
+                                capture_id = identifier
+                            elif kind == "frame":
+                                current = record.get("seq")
+                                if (type(current) is not int or not sequence < current <= MAX_LONG
+                                        or record.get("capture_id", capture_id) != capture_id):
+                                    raise BridgeError("INVALID_RESPONSE", "场景录制帧序号无效。")
+                                sequence = current
+                                frames += 1
+                            elif kind == "end":
+                                if (record.get("capture_id") != capture_id or type(record.get("frame_count")) is not int
+                                        or record["frame_count"] != frames or record.get("file_complete") is not True
+                                        or record.get("sampling_stopped") is not True
+                                        or record.get("subscription_released") is not True
+                                        or type(record.get("recording_complete")) is not bool):
+                                    raise BridgeError("INVALID_RESPONSE", "场景录制结束记录缺少真实收尾或帧数证明。")
+                                await on_record(record)
+                                return record
+                            else:
+                                raise BridgeError("INVALID_RESPONSE", "场景录制记录顺序无效。")
+                            await on_record(record)
+                        if len(pending) > SCENE_MAX_RECORD_BYTES:
+                            raise BridgeError("INVALID_RESPONSE", "场景录制单条记录超过32MiB限制。")
+                    raise BridgeError("HTTP_UNAVAILABLE", "场景录制在完整结束记录前断开。")
+
+        request = asyncio.create_task(receive())
+        try:
+            return await asyncio.wait_for(asyncio.shield(request), timeout=budget)
+        except (asyncio.CancelledError, BridgeError, httpx.RequestError, TimeoutError) as failure:
+            request.cancel()
+            backend_stop = "UNCONFIRMED"
+            with anyio.move_on_after(SCRIPT_CLEANUP_SECONDS, shield=True):
+                try:
+                    await request
+                except (asyncio.CancelledError, BridgeError, httpx.RequestError):
+                    pass  # Closing this stream relinquishes only its local HTTP carrier.
+                if capture_id is not None:
+                    try:
+                        state = await self._authorized_request(
+                            "POST", "/solo/acceptance/v1/scene/record/" + capture_id + "/cancel",
+                            {"requestId": str(uuid4()), "data": {}}, timeout_seconds=SCRIPT_CLEANUP_SECONDS,
+                        )
+                        while True:
+                            if state.get("capture_id") != capture_id:
+                                raise BridgeError("INVALID_RESPONSE", "场景录制停止证明的关联标识不一致。")
+                            if state.get("sampling_stopped") is True and state.get("subscription_released") is True:
+                                backend_stop = "CONFIRMED"
+                                break
+                            await anyio.sleep(0.05)
+                            state = await self._authorized_request(
+                                "GET", "/solo/acceptance/v1/scene/record/" + capture_id,
+                                timeout_seconds=SCRIPT_CLEANUP_SECONDS,
+                            )
+                    except BridgeError:
+                        pass  # Preserve the original failure and the absence of a stop receipt.
+                elif isinstance(failure, BridgeError) and failure.http_status in {400, 401, 403, 404, 409, 410, 429, 503}:
+                    backend_stop = "NOT_STARTED"
+            if isinstance(failure, asyncio.CancelledError):
+                raise
+            if isinstance(failure, (TimeoutError, httpx.TimeoutException)):
+                failure = BridgeError("HTTP_TIMEOUT", "场景录制请求超时，已有完整记录保留。")
+            elif isinstance(failure, httpx.RequestError):
+                failure = BridgeError("HTTP_UNAVAILABLE", "场景录制连接中断，已有完整记录保留。")
+            raise SceneCaptureError(failure, capture_id, backend_stop) from None
 
     async def command(
         self, profile_id: str, *, request_id: str, command: str,
@@ -706,13 +862,15 @@ class BridgeClient:
 
     async def _authorized_request(
         self, method: str, path: str, body: dict[str, Any] | None = None,
-        *, timeout_seconds: float | None = None,
+        *, timeout_seconds: float | None = None, max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         token = await self._token_for_request()
-        response = await self._send(method, path, body, token, timeout_seconds=timeout_seconds)
+        response = await self._send(method, path, body, token, timeout_seconds=timeout_seconds,
+                                    max_response_bytes=max_response_bytes)
         if response.status_code == 401:
             token = await self._token_for_request(stale_token=token)
-            response = await self._send(method, path, body, token, timeout_seconds=timeout_seconds)
+            response = await self._send(method, path, body, token, timeout_seconds=timeout_seconds,
+                                        max_response_bytes=max_response_bytes)
         return self._decode(response)
 
     async def _send(
@@ -722,6 +880,7 @@ class BridgeClient:
         body: dict[str, Any] | None = None,
         token: str | None = None,
         *, timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response:
         headers = {"Accept": "application/json"}
         if token is not None:
@@ -733,7 +892,7 @@ class BridgeClient:
                 content = bytearray()
                 async for part in response.aiter_bytes():
                     content.extend(part)
-                    if len(content) > self.MAX_RESPONSE_BYTES:
+                    if len(content) > (self.MAX_RESPONSE_BYTES if max_response_bytes is None else max_response_bytes):
                         raise BridgeError("INVALID_RESPONSE", "验收桥响应超过允许大小。")
                 await response.aclose()
                 return httpx.Response(response.status_code, content=bytes(content))

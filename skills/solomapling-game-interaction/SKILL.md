@@ -10,7 +10,7 @@ description: 在附源码的 SoloMapling 工作区观察专用角色、执行游
 ## 工作方式
 
 1. 确认当前 SoloMapling 源码工作树和 MCP 目标，读取 `game_capabilities`。参数直接查当前工具 schema；实现从[工具注册](../../tools/acceptance-mcp/src/solo_acceptance_mcp/server.py)定位。说明书中的源码链接以随附仓库布局解析。
-2. 只读问题先观察 world，再按真实 `scene_ref` 观察场景。只有任务需要角色输入时才打开已配置专用 profile。已有用户会话按任务继续使用。
+2. 只读问题先观察 world，再按真实 `scene_ref` 观察场景。需要保存当前状态或短时序时使用 `scene_snapshot` / `scene_record`，按[场景采集格式](../../docs/mcp-acceptance/scene-capture.md)核字段与覆盖；无需为采集打开角色。只有任务需要角色输入时才打开已配置专用 profile。已有用户会话按任务继续使用。
 3. 操作前保存实际会话、代次、最近场景及原请求 ID；核对目标 OID、槽位或对话版本。按任务只读取相关说明：
    - 会话、场景和包事件：[会话与观察](references/actor.md)。
    - 聊天、NPC、移动战斗和物品：[游戏动作](references/actions.md)。

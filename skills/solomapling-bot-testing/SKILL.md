@@ -11,6 +11,7 @@ description: 为 SoloMapling 机器人准备调试场景，通过实际游戏交
 
 - 准备角色、材料或场景，读 [准备与基线](references/preparation.md)。只要求准备时，确认准备结果后结束。
 - 调查回复、菜单或状态变化，读 [交互与证据](references/evidence.md)。先确认目标和原生规则，再判断异常。
+- 调查短暂动作、受击或怪物controller变化时，使用真实场景的 `scene_record` 留连续数据帧，按[场景采集格式](../../docs/mcp-acceptance/scene-capture.md)核事件来源、缺口及最终停止；原生/模拟/派生/输出证据分别解释，真人画面另验。
 - 复现缺陷、验证修复及报告结果，读 [回归与收尾](references/regression.md)。
 
 角色开关、观察、动作和命令沿 [游戏交互技能](../solomapling-game-interaction/SKILL.md)；原生脚本沿 [脚本调试技能](../solomapling-script-debug/SKILL.md)。在当前 SoloMapling 源码工作区按这些技能定位接口和实现，按需读取，保留原请求及返回标识。

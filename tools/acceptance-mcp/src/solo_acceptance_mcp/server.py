@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from contextlib import asynccontextmanager, ExitStack
 import json
 from pathlib import Path
@@ -13,8 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .bridge import (
-    BridgeClient, BridgeConfig, BridgeError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT, MAX_COMMAND_CHARACTERS,
+    BridgeClient, BridgeConfig, BridgeError, SceneCaptureError, ConfigurationError, EQUIPMENT_SLOTS, MAX_LONG, MAX_INT, MAX_COMMAND_CHARACTERS,
     SCRIPT_MAX_SOURCE_UNITS, SCRIPT_DEFAULT_TIMEOUT_MS, SCRIPT_MAX_TIMEOUT_MS, load_config, validate_action_request,
+    SCENE_DEFAULT_DURATION_MS, SCENE_DEFAULT_INTERVAL_MS, validate_scene_capture,
     validate_command_request, validate_script_run,
 )
 
@@ -131,7 +133,7 @@ class AcceptanceMCPServer(MCPServer):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name in {"game_command", "script_run"}:
+            if tool.name in {"game_command", "script_run", "scene_snapshot", "scene_record"}:
                 tool.input_schema = {**tool.input_schema, "additionalProperties": False}
             if tool.name == "game_act":
                 tool.input_schema = {**tool.input_schema, "additionalProperties": False, "allOf": [{"oneOf": [
@@ -175,6 +177,19 @@ class AcceptanceMCPServer(MCPServer):
                 validate_script_run(**arguments)
             except BridgeError as failure:
                 return result(failure.public_data(), is_error=True)
+        elif name in {"scene_snapshot", "scene_record"}:
+            required = {"scene_ref"} if name == "scene_snapshot" else {"scene_ref", "output_file"}
+            allowed = {"scene_ref", "output_file"}
+            if name == "scene_record":
+                allowed |= {"duration_ms", "interval_ms"}
+            try:
+                if not required <= set(arguments) or set(arguments) - allowed:
+                    raise BridgeError("INVALID_ARGUMENTS", name + " 参数缺失或包含额外字段。")
+                validate_scene_capture(**arguments)
+                if name == "scene_record" and arguments["output_file"] is None:
+                    raise BridgeError("INVALID_ARGUMENTS", "scene_record 需要 output_file。")
+            except BridgeError as failure:
+                return result(failure.public_data(), is_error=True)
         return await super().call_tool(name, arguments, context)
 
 
@@ -207,7 +222,8 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "持久 context_id 用于后续回调或关闭，原生副作用按实际结果核验，不由工具返回成功推导玩法完成。"
                       "北斗脚本提供 executeCommand(commandText) 通用执行函数，与 game_command 共用原生handle；权限沿原生，RETURNED不代表具体命令效果。"
                       "game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现；命令及脚本用法通过随源码技能查阅。"
-                      "权限沿原生检查；RETURNED仅表示原生处理器返回，不证明命令执行成功或产生玩法效果。"),
+                      "权限沿原生检查；RETURNED仅表示原生处理器返回，不证明命令执行成功或产生玩法效果。"
+                      "scene_snapshot/scene_record只读采集已加载实际场景，不需打开角色；输出数据帧和事件证据到MCP宿主新文件，不代表真人画面播放。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -223,6 +239,9 @@ def build_server(config: BridgeConfig) -> MCPServer:
     )
     destructive_annotations = ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True,
+    )
+    capture_annotations = ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=False, open_world_hint=True,
     )
 
     @server.tool(annotations=read_annotations)
@@ -260,6 +279,83 @@ def build_server(config: BridgeConfig) -> MCPServer:
                                               expected_generation=expected_generation, since_cursor=since_cursor))
         except BridgeError as failure:
             return result(failure.public_data(), is_error=True)
+
+    @server.tool(annotations=capture_annotations)
+    async def scene_snapshot(scene_ref: Identifier, output_file: OutputFile | None = None) -> CallToolResult:
+        """只读采集已加载实际scene_ref的数据帧，不需要actor_open、不启动模拟。可选output_file是MCP宿主本地UTF-8 JSON新文件，父目录须存在，已存在文件拒绝。无文件时返回同一结构化模型；超过4MiB需文件输出，文件/单记录上限32MiB。原生、模拟、事件与覆盖缺口分别保存，服务端输出不代表真人画面。"""
+        try:
+            with ExitStack() as files:
+                output = None
+                if output_file is not None:
+                    try:
+                        output = files.enter_context(open(output_file, "x", encoding="utf-8"))
+                    except FileExistsError:
+                        raise BridgeError("OUTPUT_FILE_EXISTS", "目标文件已存在，请使用新的证据文件路径。") from None
+                    except OSError:
+                        raise BridgeError("OUTPUT_FILE_UNAVAILABLE", "无法创建输出文件，请检查父目录和写入权限。") from None
+                snapshot = await bridge.scene_snapshot(scene_ref)
+                if output is not None:
+                    try:
+                        json.dump(snapshot, output, ensure_ascii=False)
+                        output.write("\n")
+                        output.flush()
+                    except OSError:
+                        raise BridgeError("OUTPUT_WRITE_FAILED", "场景快照写入失败，文件未完整完成。") from None
+                    return result({"output_file": str(Path(output_file).absolute()), "snapshot_written": True,
+                                   "schema_version": snapshot["schema_version"], "identity": snapshot["identity"],
+                                   "coverage": snapshot["frame"]["coverage"]})
+                if len(json.dumps(snapshot, ensure_ascii=False).encode("utf-8")) > BridgeClient.MAX_RESPONSE_BYTES:
+                    raise BridgeError("SCENE_FILE_REQUIRED", "场景快照超过4MiB响应限制，请提供 output_file。")
+                return result(snapshot)
+        except BridgeError as failure:
+            return result(failure.public_data(), is_error=True)
+        except OSError:
+            return result({"error": {"code": "OUTPUT_WRITE_FAILED", "message": "场景快照文件未完整写入。",
+                                     "retryable": False}}, is_error=True)
+
+    @server.tool(annotations=capture_annotations)
+    async def scene_record(
+        scene_ref: Identifier, output_file: OutputFile,
+        duration_ms: Annotated[int, Field(ge=100, le=120000, strict=True)] = SCENE_DEFAULT_DURATION_MS,
+        interval_ms: Annotated[int, Field(ge=50, le=5000, strict=True)] = SCENE_DEFAULT_INTERVAL_MS,
+    ) -> CallToolResult:
+        """一次调用由后端持续采集固定实际场景，UTF-8 NDJSON逐条flush到MCP宿主新文件，进行中可读。duration_ms默认10000、100..120000，interval_ms默认100、50..5000且不大于时长。父目录须存在，已有文件拒绝；路径不发送游戏后端。header/frame/end保存实际时间、完整动态帧及事件覆盖。只有后端采样与订阅真实停止后才确认结束；中断或写盘失败保留完整记录，未取得停止证明明确UNCONFIRMED。数据不等同真人客户端播放。"""
+        try:
+            try:
+                output = open(output_file, "x", encoding="utf-8")
+            except FileExistsError:
+                raise BridgeError("OUTPUT_FILE_EXISTS", "目标文件已存在，请使用新的证据文件路径。") from None
+            except OSError:
+                raise BridgeError("OUTPUT_FILE_UNAVAILABLE", "无法创建输出文件，请检查父目录和写入权限。") from None
+            primary_failed = False
+            ending = None
+            try:
+                async def forward(record: dict[str, Any]) -> None:
+                    try:
+                        output.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        output.flush()
+                    except OSError:
+                        raise BridgeError("OUTPUT_WRITE_FAILED", "场景录制写入失败，已有记录保留，文件未完整完成。") from None
+
+                ending = await bridge.scene_record(scene_ref, duration_ms, interval_ms, forward)
+            except (BridgeError, asyncio.CancelledError):
+                primary_failed = True
+                raise
+            finally:
+                try:
+                    output.close()
+                except OSError:
+                    # A second flush failure must not replace the original capture's stop receipt.
+                    if not primary_failed:
+                        raise SceneCaptureError(
+                            BridgeError("OUTPUT_WRITE_FAILED", "场景录制文件关闭失败，文件未完整完成。"),
+                            ending["capture_id"] if ending is not None else None,
+                            "CONFIRMED" if ending is not None else "UNCONFIRMED",
+                        ) from None
+            return result({**ending, "output_file": str(Path(output_file).absolute())},
+                          is_error=not ending["recording_complete"])
+        except BridgeError as failure:
+            return result({**failure.public_data(), "output_file": str(Path(output_file).absolute())}, is_error=True)
 
     @server.tool(annotations=open_annotations)
     async def actor_open(

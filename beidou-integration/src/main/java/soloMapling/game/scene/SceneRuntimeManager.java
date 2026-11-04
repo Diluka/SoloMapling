@@ -95,6 +95,17 @@ public final class SceneRuntimeManager {
         return scenes.stream().map(SceneRuntime::snapshot).toList();
     }
 
+    /** Exact read-only map lookup; observation never creates or starts a simulation. */
+    public static Map<String, Object> snapshot(MapleMap map) {
+        SceneRuntime scene;
+        synchronized (SCENES) {
+            var current = SCENES.get(WorldEpoch.snapshot().token());
+            scene = current == null ? null : current.get(map);
+        }
+        return scene == null ? Map.of("state", "UNAVAILABLE", "reason", "scene_runtime_not_running")
+                : scene.snapshot();
+    }
+
     public static Map<String, Object> snapshot(Character character) {
         SceneActorBinding actor;
         synchronized (SCENES) { actor = ACTORS.get(character); }

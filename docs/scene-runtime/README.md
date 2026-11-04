@@ -16,6 +16,8 @@
 
 `SceneRuntimeManager.snapshots()` 和现有角色/场景观察提供安全摘要，用于核对宿主、成员及收尾。包消息从原 `BotClient`、`AcceptanceClient` 路由，原包观察保持原归属。
 
+`scene_snapshot`、`scene_record` 提供无需角色会话的只读场景数据帧和事件记录，可按固定实际地图保存JSON或NDJSON证据。采集只读取已经存在的模拟宿主；字段来源、记录限制与真实停止语义见[场景采集格式](../mcp-acceptance/scene-capture.md)。
+
 详见[客户端行为矩阵](client-behavior-matrix.md)、[怪物资料调查](monster-data-report.md)、[有限怪物驱动](monster-driver.md)和[呈现边界](presentation.md)。环境触发、召唤物和宠物驱动分别由 #315、#316、#317 继续覆盖。
 
 本目录描述候选源码，实际交付以 #305 及各子项的冻结提交和验收证据为准。2026-11-04 用户确认暂时无法配合真人客户端观察；合法攻击动画、死亡/复活姿态、怪物活动等画面验收继续待办。源码、自动化、隔离交互和实际部署分别记录，不能相互代替。
