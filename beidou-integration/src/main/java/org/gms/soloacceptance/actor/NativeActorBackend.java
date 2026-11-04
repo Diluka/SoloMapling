@@ -46,7 +46,7 @@ import soloMapling.game.action.NativeChatAction;
 import soloMapling.game.action.NativeInventoryActions;
 import soloMapling.game.action.NativeInventoryMoveAction;
 import soloMapling.game.action.NativeBasicActions;
-import soloMapling.game.action.NativeAttackActions;
+import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.action.NativeItemActions;
 import soloMapling.game.action.NativeMovementActions;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -197,9 +197,12 @@ public final class NativeActorBackend {
         ActorBasicRequests.validate(action, parameters);
         Server server = servers.get();
         GameContext.SceneRef scene = basicScene(server, handle);
-        return "attack".equals(action)
-                ? NativeAttackActions.prepareAttack(server, lane, permit, work, scene, ActorBasicRequests.attack(parameters))
-                : NativeItemActions.prepare(server, lane, permit, work, scene, ActorBasicRequests.item(action, parameters));
+        if ("attack".equals(action)) {
+            var binding = SceneRuntimeManager.current(server, scene.actor());
+            return binding.scene().characters().attack(binding)
+                    .prepareBasic(server, lane, permit, work, ActorBasicRequests.attack(parameters));
+        }
+        return NativeItemActions.prepare(server, lane, permit, work, scene, ActorBasicRequests.item(action, parameters));
     }
 
     /** Movement orchestration belongs to the active module; the backend supplies only the native source. */

@@ -3,6 +3,7 @@ package soloMapling.game.nativeaction;
 import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.HostAccess;
+import org.gms.client.BuffStat;
 import org.gms.client.Character;
 import org.gms.client.Client;
 import org.gms.client.Job;
@@ -43,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -86,6 +88,14 @@ class NativeActionModuleTest {
             assertTrue(result.event().respawnReturned());
             assertEquals(100000001, result.event().requestedReturnMap());
             assertTrue(result.sceneChanged());
+            assertFalse(result.before().changingMaps());
+            assertFalse(result.after().changingMaps());
+            assertTrue(result.transition().observed());
+            assertTrue(result.transition().acknowledgementStarted());
+            assertTrue(result.transition().acknowledgementReturned());
+            assertFalse(result.transition().acknowledgementError());
+            assertTrue(result.transition().complete());
+            verify(fixture.actor).setMapTransitionComplete();
             verify(fixture.actor).cancelAllBuffs(false);
             assertSame(fixture.previousClient, fixture.restoredClient.get());
             fixture.assertDrained();
@@ -165,6 +175,27 @@ class NativeActionModuleTest {
         }
     }
 
+    @Test void eventRespawnIntoTheSameActualMapAcknowledgesItsNewEntryWithoutASceneIdentityChange() throws Exception {
+        try (var fixture = new Fixture(0)) {
+            var event = fixture.event(false, false);
+            doAnswer(call -> {
+                fixture.actor.respawn(fixture.initialMap.getId());
+                return false;
+            }).when(event).invokeScriptFunction(eq("playerRevive"), any(), any());
+
+            var result = fixture.revive();
+
+            assertEquals(ReviveResult.Outcome.REVIVED, result.outcome());
+            assertSame(fixture.initialMap, fixture.currentMap.get());
+            assertFalse(result.sceneChanged());
+            assertTrue(result.transition().observed());
+            assertTrue(result.transition().complete());
+            assertFalse(result.after().changingMaps());
+            verify(fixture.actor).setMapTransitionComplete();
+            fixture.assertDrained();
+        }
+    }
+
     @Test void eventTakeoverWithoutAReviveReportsTheCurrentDeadStateAndKeepsEventOwnership() throws Exception {
         try (var fixture = new Fixture(0)) {
             var event = fixture.event(false, false);
@@ -231,10 +262,57 @@ class NativeActionModuleTest {
             assertEquals(ReviveResult.Outcome.REVIVED, result.get().outcome());
             assertTrue(result.get().cancelRequested());
             assertEquals(50, result.get().after().hp());
+            assertFalse(result.get().after().changingMaps());
+            assertTrue(result.get().transition().observed());
+            assertTrue(result.get().transition().acknowledgementStarted());
+            assertTrue(result.get().transition().acknowledgementReturned());
+            assertFalse(result.get().transition().acknowledgementError());
+            assertTrue(result.get().transition().complete());
+            verify(fixture.actor).setMapTransitionComplete();
             assertEquals(ExecutionScope.DrainResult.DRAINED, stop.await(Duration.ofSeconds(3)));
             assertEquals(ModuleCall.Status.UNAVAILABLE,
                     fixture.caller.call(NativeActionModule.REVIVE, ReviveRequest.NORMAL).status());
             fixture.assertDrained();
+        }
+    }
+
+    @Test void mapEntryFailureKeepsRevivedFactsAndDoesNotReplayRespawn() throws Exception {
+        try (var fixture = new Fixture(0)) {
+            fixture.onMapEntry = () -> { throw new IllegalStateException("map_entry_failure"); };
+
+            var result = fixture.revive();
+
+            assertEquals(ReviveResult.Outcome.REVIVED, result.outcome());
+            assertEquals(50, result.after().hp());
+            assertTrue(result.after().alive());
+            assertTrue(result.after().changingMaps());
+            assertFalse(result.dispatch().handlerError());
+            assertTrue(result.event().respawnReturned());
+            assertTrue(result.transition().observed());
+            assertTrue(result.transition().acknowledgementStarted());
+            assertFalse(result.transition().acknowledgementReturned());
+            assertTrue(result.transition().acknowledgementError());
+            assertFalse(result.transition().complete());
+            assertEquals(ReviveResult.Outcome.ALREADY_ALIVE, fixture.revive().outcome());
+            verify(fixture.actor, times(1)).respawn(anyInt());
+            verify(fixture.actor, times(1)).setMapTransitionComplete();
+            fixture.assertDrained();
+        }
+    }
+
+    @Test void epochLossDuringMapEntryKeepsTheAlreadyConfirmedReviveAndReportsUnconfirmedEntry() throws Exception {
+        try (var fixture = new Fixture(0)) {
+            fixture.onMapEntry = () -> fixture.stopTicket = ExecutionScope.tryBeginWorldStop();
+            var result = fixture.revive();
+            assertEquals(ReviveResult.Outcome.REVIVED, result.outcome());
+            assertTrue(result.after().alive());
+            assertEquals(50, result.after().hp());
+            assertTrue(result.transition().acknowledgementStarted());
+            assertTrue(result.transition().acknowledgementReturned());
+            assertFalse(result.transition().complete());
+            assertNotNull(result.reason());
+            assertEquals(50, fixture.hp.get());
+            verify(fixture.actor).respawn(anyInt());
         }
     }
 
@@ -263,6 +341,7 @@ class NativeActionModuleTest {
         final MapleMap initialMap = mock(MapleMap.class);
         final MapleMap returnMap = mock(MapleMap.class);
         final AtomicInteger hp;
+        final AtomicBoolean changingMaps = new AtomicBoolean();
         final AtomicReference<Client> restoredClient = new AtomicReference<>();
         final AtomicReference<MapleMap> currentMap = new AtomicReference<>(initialMap);
         final AtomicReference<EventInstanceManager> currentEvent = new AtomicReference<>();
@@ -272,6 +351,7 @@ class NativeActionModuleTest {
         final CharacterRuntime.ModuleRef nativeRef;
         Optional<ExecutionScope.WorldStopTicket> stopTicket = Optional.empty();
         Runnable onHpUpdate = () -> {};
+        Runnable onMapEntry = () -> {};
 
         Fixture(int initialHp) {
             WorldEpoch.onWorldStarted();
@@ -303,10 +383,17 @@ class NativeActionModuleTest {
             when(actor.getHp()).thenAnswer(call -> hp.get());
             when(actor.getMp()).thenReturn(10);
             when(actor.isAlive()).thenAnswer(call -> hp.get() > 0);
+            when(actor.isChangingMaps()).thenAnswer(call -> changingMaps.get());
+            when(actor.getBuffSource(BuffStat.HOMING_BEACON)).thenReturn(-1);
+            doAnswer(call -> { onMapEntry.run(); changingMaps.set(false); return null; })
+                    .when(actor).setMapTransitionComplete();
             var cashShop = mock(CashShop.class);
             when(actor.getCashShop()).thenReturn(cashShop);
             when(actor.getEventInstance()).thenAnswer(call -> currentEvent.get());
-            doAnswer(call -> { currentMap.set(returnMap); position.set(new Point(10, 20)); return null; })
+            doAnswer(call -> {
+                currentMap.set((int) call.getArgument(0) == initialMap.getId() ? initialMap : returnMap);
+                position.set(new Point(10, 20)); changingMaps.set(true); return null;
+            })
                     .when(actor).changeMap(anyInt());
             doAnswer(call -> {
                 assertSame(client, ThreadLocalUtil.getCurrentClient());

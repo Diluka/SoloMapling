@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import soloMapling.beidou.InventoryMetadataTestContext;
 import soloMapling.game.context.GameContext;
+import soloMapling.game.scene.AbilitySceneModule;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
@@ -191,10 +192,10 @@ class NativeCombatActionsTest {
     }
 
     @Test void learnedMagicClawUsesCurrentWzLevelAndConsumesNativeMpOnceForItsTwoLines() throws Exception {
-        assertNull(NativeCombatActions.plan(actor, 2001005));
+        assertNull(AbilitySceneModule.plan(actor, 2001005));
         learn(2001005, 1);
         var target = monster(501, 40);
-        var firstPlan = NativeCombatActions.plan(actor, 2001005);
+        var firstPlan = AbilitySceneModule.plan(actor, 2001005);
         assertEquals(1, firstPlan.skillLevel());
         assertEquals(2, firstPlan.damageLines());
         var first = strike(firstPlan, List.of(target));
@@ -204,7 +205,7 @@ class NativeCombatActionsTest {
         assertEquals(1, first.hits().size());
         assertTrue(target.getHp() < 10000);
         learn(2001005, 20);
-        var changed = NativeCombatActions.plan(actor, 2001005);
+        var changed = AbilitySceneModule.plan(actor, 2001005);
         assertEquals(20, changed.skillLevel());
         var second = strike(changed, List.of(target));
         assertEquals(NativeCombatActions.Outcome.APPLIED, second.outcome());
@@ -217,7 +218,7 @@ class NativeCombatActionsTest {
         role(Job.WARRIOR, 1302000);
         learn(1001005, 1);
         var first = monster(501, 40); var second = monster(502, 60);
-        var result = strike(NativeCombatActions.plan(actor, 1001005), List.of(first, second));
+        var result = strike(AbilitySceneModule.plan(actor, 1001005), List.of(first, second));
         assertEquals(NativeCombatActions.Outcome.APPLIED, result.outcome());
         assertFalse(result.handlerError());
         assertEquals(8, result.hpBefore() - result.hpAfter());
@@ -237,7 +238,7 @@ class NativeCombatActionsTest {
         assertNotNull(actor.getBuffedValue(BuffStat.INFINITY));
         actor.updateHpMp(201, 0);
         var target = monster(501, 40);
-        var result = strike(NativeCombatActions.plan(actor, 2001005), List.of(target));
+        var result = strike(AbilitySceneModule.plan(actor, 2001005), List.of(target));
         assertEquals(NativeCombatActions.Outcome.APPLIED, result.outcome());
         assertFalse(result.handlerError());
         assertEquals(0, result.mpBefore());
@@ -251,27 +252,27 @@ class NativeCombatActionsTest {
         learn(2001005, 1);
         var target = monster(501, 40);
         actor.updateHpMp(201, 9);
-        var lowMp = strike(NativeCombatActions.plan(actor, 2001005), List.of(target));
+        var lowMp = strike(AbilitySceneModule.plan(actor, 2001005), List.of(target));
         assertEquals(NativeCombatActions.Outcome.RESOURCE_UNAVAILABLE, lowMp.outcome());
         assertFalse(lowMp.dispatched());
         assertEquals(9, actor.getMp());
         role(Job.WARRIOR, 1302000);
         learn(1001005, 1);
         actor.updateHpMp(8, 103);
-        var lowHp = strike(NativeCombatActions.plan(actor, 1001005), List.of(target));
+        var lowHp = strike(AbilitySceneModule.plan(actor, 1001005), List.of(target));
         assertEquals(NativeCombatActions.Outcome.RESOURCE_UNAVAILABLE, lowHp.outcome());
         assertFalse(lowHp.dispatched());
         assertEquals(8, actor.getHp());
         actor.updateHpMp(201, 103);
         actor.silentApplyDiseases(Map.of(Disease.SEAL, new Pair<>(60000L, mock(MobSkill.class))));
-        var sealed = strike(NativeCombatActions.plan(actor, 1001005), List.of(target));
+        var sealed = strike(AbilitySceneModule.plan(actor, 1001005), List.of(target));
         assertEquals(NativeCombatActions.Outcome.REJECTED, sealed.outcome());
         assertEquals("skill_sealed", sealed.reason());
         assertFalse(sealed.dispatched());
         assertEquals(10000, target.getHp());
         assertEquals(201, actor.getHp()); assertEquals(103, actor.getMp());
         assertFalse(actor.skillIsCooling(1001005));
-        var basic = strike(NativeCombatActions.plan(actor, 0), List.of(target));
+        var basic = strike(AbilitySceneModule.plan(actor, 0), List.of(target));
         assertEquals(NativeCombatActions.Outcome.APPLIED, basic.outcome());
         assertTrue(target.getHp() < 10000);
         assertTrue(actor.hasDisease(Disease.SEAL));
@@ -287,6 +288,26 @@ class NativeCombatActionsTest {
         assertEquals(Integer.valueOf(11), actor.getBuffedValue(BuffStat.MAGIC_GUARD));
         assertEquals(2001002, actor.getBuffSource(BuffStat.MAGIC_GUARD));
         assertEquals(97, actor.getMp());
+    }
+
+    @Test void ordinaryAttackRequiresTheCurrentWeaponAndStopsAfterItIsUnequipped() throws Exception {
+        role(Job.BEGINNER, 1302000);
+        var target = monster(501, 40);
+        var armedPlan = AbilitySceneModule.plan(actor, 0);
+        var armed = strike(armedPlan, List.of(target));
+        assertEquals(NativeCombatActions.Outcome.APPLIED, armed.outcome());
+        assertTrue(armed.dispatched());
+        int hp = target.getHp();
+        assertTrue(hp < 10000);
+
+        actor.getInventory(InventoryType.EQUIPPED).removeSlot((short) -11);
+        assertNull(AbilitySceneModule.plan(actor, 0));
+        var unarmed = strike(armedPlan, List.of(target));
+        assertEquals(NativeCombatActions.Outcome.REJECTED, unarmed.outcome());
+        assertEquals("skill_or_weapon_changed", unarmed.reason());
+        assertFalse(unarmed.dispatched());
+        assertEquals(hp, target.getHp());
+        verify(map, times(1)).damageMonster(eq(actor), eq(target), anyInt());
     }
 
     private void setInt(Class<?> declaring, String name, int value) throws Exception {
@@ -318,7 +339,7 @@ class NativeCombatActionsTest {
         return target;
     }
 
-    private NativeCombatActions.StrikeResult strike(NativeCombatActions.Plan plan, List<Monster> targets) throws Exception {
+    private NativeCombatActions.StrikeResult strike(AbilitySceneModule.Plan plan, List<Monster> targets) throws Exception {
         return onLane(work -> NativeCombatActions.strike(server, scene, work, plan, targets, false));
     }
 

@@ -1,11 +1,13 @@
 # SoloMapling 验收 MCP：R1 / R2a
 
-本工具使用官方 MCP Python SDK `2.3.0`。客户端实现九工具，包含角色观察与操作、脚本基础和独立管理指令；实际开放范围以 `game_capabilities.enabled_tools`、`actions` 与 `debug_commands` 为准：
+本工具使用官方 MCP Python SDK `2.3.0`。客户端实现十一工具，包含场景采集、角色观察与操作、脚本基础和独立管理指令；实际开放范围以 `game_capabilities.enabled_tools`、`actions` 与各项限制公告为准：
 
 | 工具 | 用途 | 状态影响 |
 |---|---|---|
 | `game_capabilities` | 读取实际版本、运行源码身份、后端在线状态和已开放能力 | 只读 |
 | `game_observe` | 观察 world、真实 scene_ref 或已打开角色的包事件窗口 | 只读，不加载地图或创建实例 |
+| `scene_snapshot` | 采集固定实际场景的一帧数据，可保存为宿主JSON新文件 | 游戏状态只读，无需打开角色 |
+| `scene_record` | 一次调用由后端持续采样，实时保存宿主NDJSON新文件 | 游戏状态只读，不启动模拟或切换controller |
 | `actor_open` | 为已配置的专用 profile 排队执行原生登录 | 可能创建专用 fixture、更新登录状态；必须有 request_id |
 | `actor_close` | 排队正常离线并核对清理和保存 | 可能触发原生队伍/副本离开；必须有 request_id |
 | `operation_get` | 查询操作、当前角色会话、生命周期事件及已保留脚本输出 | 只读，返回成功不代表操作已成功 |
@@ -18,9 +20,26 @@
 
 MCP用于机器人开发调试，让Agent进入游戏，与待测机器人交互并检查实际行为。`script_run`只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗脚本，直接指定kind/operation和上下文参数；独立纯JS模式及旧environment字段已移除。现有game_act和管理入口保留，不在本次迁移直接动作，能力公告只列实际实现范围。
 
-R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及开放脚本执行、命令执行的组合，全部开启时为九工具。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端schema存在不代表后端已开启；脚本调用需后端支持当前北斗协议，不能仅凭旧后端公告两个同名工具就推导新参数兼容。`game_act` 的回复仍只含已审查路径的 select/decline，不扩成任意 NPC、选项或封包；北斗脚本按其原生入口与随源码技能说明使用。礼包、SocialBot 完整互动及具体玩法仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
+R1 桥默认只有两项观察能力；R2a 的四项角色/操作接口需要后端显式启用。actor 包观察还需实际 capabilities 公告 `scopes` 中的 `actor` 和 `actor_control.packet_observation`。客户端兼容旧后端的两项、六项、七项工具组合，以及独立开放脚本、命令和场景采集的组合，全部开启时为十一工具。旧动作范围可从 `actions=["chat"]` 扩展至中心首屏/取消、有限 `npc_reply` 和 `inventory_move`，五动作后端还可分别公告已实现的移动、停止、普攻及物品动作，完整源码范围为十三动作。顶层与 `actor_control` 公告必须一致，重复或未知动作拒绝。客户端schema存在不代表后端已开启；脚本调用需后端支持当前北斗协议，不能仅凭旧后端公告两个同名工具就推导新参数兼容。`game_act` 的回复仍只含已审查路径的 select/decline，不扩成任意 NPC、选项或封包；北斗脚本按其原生入口与随源码技能说明使用。礼包、SocialBot 完整互动及具体玩法仍待各自验收。后续计划见[基础方案](../../docs/mcp-acceptance/README.md)。
 
 `inventory_move` 的候选接口仅接受 `parameters={"inventory_type":"USE","source_slot":1,"target_slot":2}`：背包类型为 `EQUIP/USE/SETUP/ETC/CASH`，两个槽位须为不同的 `1..127` 整数。实际槽位容量、物品与原生合并/交换规则由运行体的公共原生动作核验；此动作不穿脱装备、不丢弃、不自动整理。状态及前后槽位以 operation 的实际结果为准；超时后查询原请求，不盲目重发。上线与验收状态见 [#164](https://github.com/Diluka/SoloMapling/issues/164)。
+
+## #319 场景数据截屏与录屏
+
+先用 `game_observe(scope="world")` 取得已加载地图的实际 `scene_ref`。采集不需要 `actor_open`，不创建地图、角色或模拟实例，角色换图后仍记录原场景。原生状态、已有模拟摘要和可用事件来源分别保存；广播事件只证明服务端发送路径，真人播放另验。
+
+```text
+scene_snapshot(scene_ref="实际引用")
+scene_snapshot(scene_ref="实际引用", output_file="/absolute/captures/scene.json")
+scene_record(scene_ref="实际引用", output_file="/absolute/captures/scene.ndjson",
+             duration_ms=10000, interval_ms=100)
+```
+
+两工具的 `output_file` 都在 MCP 宿主解析，相对路径基于进程工作目录，路径不发送给游戏服务端。父目录须存在，目标以新建模式打开，已有证据文件明确拒绝覆盖。快照保存完整UTF-8 JSON；不给文件时返回同一结构化模型，超过4MiB会要求文件输出，不静默裁对象。文件快照与流中每条逻辑记录上限32MiB，后端每次录制总输出上限256MiB，触限时明确表达未完整完成。
+
+录制默认10000ms，范围100～120000ms；间隔默认100ms，范围50～5000ms且不大于时长。后端单次持续采样，宿主将 `header → frame… → end` 的NDJSON逐条刷新，进行中可读。实际采样时间与遗漏按记录保留，不补旧帧。成功摘要包含文件绝对路径、实际帧数、时长、结束原因、`sampling_stopped`、`subscription_released`、`recording_complete` 和数据 `coverage`；录制完成与覆盖完整分别解释。
+
+中断、连接或写盘失败保留已有完整记录，不补造 `end`。取得 `capture_id` 后关闭流，并通过同owner的取消及状态接口等待实际停止；`backend_stop=CONFIRMED` 需要采样和订阅释放的真实终态，缺少ID或无法核实则为 `UNCONFIRMED`。文件无最终 `end` 时不能标为完整录制。完整字段、来源与未覆盖范围见[场景采集格式](../../docs/mcp-acceptance/scene-capture.md)。
 
 ## #200 运行体基本动作
 
@@ -91,6 +110,8 @@ enabled = true
 | MCP 调用 | 验收桥请求 |
 |---|---|
 | `game_capabilities()` | `GET /solo/acceptance/v1/capabilities` |
+| `scene_snapshot(scene_ref="…")` | `POST /solo/acceptance/v1/scene/snapshot`，data仅为scene_ref |
+| `scene_record(scene_ref="…", output_file="…", duration_ms=10000, interval_ms=100)` | `POST /solo/acceptance/v1/scene/record`，data为scene_ref与采样设置，返回NDJSON；宿主文件路径不传输 |
 | `game_observe(scope="world", limit=100)` | `POST /solo/acceptance/v1/observe`，data 为 scope/limit |
 | `game_observe(scope="scene", scene_ref="…", limit=100)` | 同一 POST，data 加 scene_ref |
 | `game_observe(scope="actor", session_id="…", expected_generation=1, since_cursor=0, limit=100)` | `POST /solo/acceptance/v1/actor/observe`，data 仅为这四个角色/窗口参数 |
@@ -188,7 +209,7 @@ start不带context_id，invoke/close必须带；invoke的非空source与entry互
 
 NPC/任务复用原管理器，门户/机关使用当前真实对象，事件有角色自有原生EM和引擎，不接管频道共享事件。北斗Java API保留实际副作用；服务端warp不是普通玩家门户准入，开UI不等于完成交易，任务脚本入口不替代普通接取资格。guest循环已停止不证明host Java方法已返回，未核实执行和调度资源继续保留债务。
 
-用完脚本上下文后仍须正常actor_close并核存档。故障、无限循环与世界停启探针仅在隔离环境运行，实际部署只做本轮授权的正常闭环。owned EIM创建明确拒绝，完整实例地图与延迟清理、更多脚本组合、真实机器人交互和客户端玩法仍待对应验收；现有九工具和十三动作保留。
+用完脚本上下文后仍须正常actor_close并核存档。故障、无限循环与世界停启探针仅在隔离环境运行，实际部署只做本轮授权的正常闭环。owned EIM创建明确拒绝，完整实例地图与延迟清理、更多脚本组合、真实机器人交互和客户端玩法仍待对应验收；现有十一工具和十三动作保留。
 
 ## 本地测试和只读协议冒烟
 
@@ -198,7 +219,7 @@ NPC/任务复用原管理器，门户/机关使用当前真实对象，事件有
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、九工具读写注解与脚本取消转发，以及官方 SDK 的真实 stdio 正反例。引擎真实停止及游戏后态由运行体测试和隔离端到端另行验证。
+测试覆盖既有观察、JWT/信封、401 有界刷新、写请求 ID、超时不重放、错误脱敏、严格参数、十一工具读写注解与脚本取消转发，以及官方 SDK 的真实 stdio 正反例。引擎真实停止及游戏后态由运行体测试和隔离端到端另行验证。
 
 实际后端的只读检查不打开角色：
 
@@ -208,7 +229,7 @@ NPC/任务复用原管理器，门户/机关使用当前真实对象，事件有
   --output /absolute/evidence/mcp-observation.json
 ```
 
-它检查客户端九工具及桥当前合法的观察、角色、脚本和管理工具开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色或脚本执行已通过。
+它检查客户端十一工具及桥当前合法的观察、角色、脚本和管理工具开放组合、有效源码 SHA、capabilities/world/scene 的非空同代次与完整场景身份。R1 后端仍可通过观察检查，报告不会把它当成角色或脚本执行已通过。
 
 ## 显式目标的原生角色验收
 
@@ -326,4 +347,4 @@ RETURNED仅表示原生void处理器返回，实际效果沿原生反馈和状�
 - [脚本调试](../../skills/solomapling-script-debug/SKILL.md)：原生对象、连续调用与收尾。
 - [机器人验收](../../skills/solomapling-bot-testing/SKILL.md)：场景准备、实际取证与回归。
 
-技能及 `references/` 随仓库整套使用。将这三个技能目录链接到技能安装目录时，保留指向本仓库的链接；源码导航按技能真实路径解析，仓库路径变化后更新安装链接。工具目录保留九个执行／观察工具，两个 help MCP 已由技能取代。
+技能及 `references/` 随仓库整套使用。将这三个技能目录链接到技能安装目录时，保留指向本仓库的链接；源码导航按技能真实路径解析，仓库路径变化后更新安装链接。工具目录保留十一个执行／观察工具，两个 help MCP 已由技能取代。

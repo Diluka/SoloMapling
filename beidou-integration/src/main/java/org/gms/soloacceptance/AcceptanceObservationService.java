@@ -62,7 +62,8 @@ public final class AcceptanceObservationService {
         result.put("service", "solomapling-acceptance");
         ActorControlService controls = actorControls == null ? null : actorControls.getIfAvailable();
         Map<String, Object> actorCapabilities = controls == null ? null : controls.publicCapabilities();
-        List<String> enabledTools = new ArrayList<>(List.of("game_capabilities", "game_observe"));
+        List<String> enabledTools = new ArrayList<>(List.of("game_capabilities", "game_observe",
+                "scene_snapshot", "scene_record"));
         if (actorCapabilities != null) {
             for (Object tool : (List<?>) actorCapabilities.get("enabled_tools")) {
                 enabledTools.add((String) tool);
@@ -86,8 +87,62 @@ public final class AcceptanceObservationService {
         result.put("default_limit", DEFAULT_LIMIT);
         result.put("maximum_limit", 500);
         result.put("scene_discovery", "loaded_channel_maps_and_instances_referenced_by_online_characters");
-        result.put("event_stream", false);
+        result.put("event_stream", true);
+        result.put("scene_capture", SceneCaptureService.publicCapabilities());
         return result;
+    }
+
+    /** Resolve only an already-issued reference; captures never load a map or create an actor. */
+    synchronized CaptureTarget captureTarget(String sceneRef) {
+        if (sceneRef == null || !sceneRef.matches("scene-[0-9a-f-]{36}")) {
+            throw error(HttpStatus.BAD_REQUEST, "invalid_scene_ref");
+        }
+        var runtime = AcceptanceObservationRuntime.snapshot();
+        var server = serverSource.get();
+        if (!runtime.active() || !server.isOnline()) throw error(HttpStatus.SERVICE_UNAVAILABLE, "server_offline");
+        refreshReferences(server, runtime);
+        var ref = references.get(sceneRef);
+        var map = ref == null ? null : ref.map().get();
+        var channel = ref == null ? null : ref.channel().get();
+        var owner = ref == null ? null : ref.runtime().get();
+        if (map == null || channel == null || owner == null) throw error(HttpStatus.GONE, "stale_scene_ref");
+        var event = owner instanceof EventInstanceManager instance ? instance : null;
+        var maps = event == null ? channel.getMapFactory() : event.getMapFactory();
+        var loadedMaps = maps != null && maps.getMaps().values().stream().anyMatch(value -> value == map) ? maps : null;
+        var target = new CaptureTarget(server, server.getWorld(ref.worldId()), channel, map, event, loadedMaps,
+                ref.key(), ref.generation(), ref.worldId(), ref.channelId(), ref.runtimeKey());
+        requireCaptureCurrent(target);
+        return target;
+    }
+
+    void requireCaptureCurrent(CaptureTarget target) {
+        var runtime = AcceptanceObservationRuntime.snapshot();
+        if (!runtime.active() || !runtime.generation().equals(target.generation())
+                || serverSource.get() != target.server() || !target.server().isOnline()) {
+            throw error(HttpStatus.CONFLICT, "runtime_changed");
+        }
+        if (target.world() == null || target.server().getWorld(target.worldId()) != target.world()
+                || target.world().getChannel(target.channelId()) != target.channel()) {
+            throw error(HttpStatus.GONE, "stale_scene_ref");
+        }
+        if (target.map().getEventInstance() != target.event()
+                || SceneCaptureEvents.isDisposed(target.map())
+                || target.loadedMaps() != null && target.loadedMaps().getMaps().values().stream()
+                    .noneMatch(map -> map == target.map())) {
+            throw error(HttpStatus.GONE, "stale_scene_ref");
+        }
+    }
+
+    Map<String, Object> captureSourceIdentity() { return SourceIdentity.publicFields(identitySource.get()); }
+
+    record CaptureTarget(Server server, World world, Channel channel, MapleMap map,
+                         EventInstanceManager event, MapManager loadedMaps,
+                         String sceneRef, String generation, int worldId, int channelId, String runtimeKey) {
+        Map<String, Object> identity() {
+            return Map.of("scene_ref", sceneRef, "runtime_generation", generation,
+                    "world_id", worldId, "channel_id", channelId, "map_id", map.getId(),
+                    "map_instance_key", sceneRef, "runtime_key", runtimeKey);
+        }
     }
 
     public synchronized Map<String, Object> observe(ObservationRequest request) {

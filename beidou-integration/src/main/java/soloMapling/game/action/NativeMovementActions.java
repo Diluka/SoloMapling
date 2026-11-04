@@ -25,6 +25,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
+import java.util.function.Consumer;
 
 import static soloMapling.game.action.NativeActionResult.Dispatch.*;
 import static soloMapling.game.action.NativeActionResult.Outcome.*;
@@ -43,7 +44,10 @@ public final class NativeMovementActions {
     private final Object monitor = new Object();
     private final Wakeups wakeups;
     private final LongSupplier nanos;
+    private final Consumer<ExecutionScope.WorkHandle> awaitWork;
     private Job active;
+    private boolean sceneLeft;
+    private boolean navigating;
 
     public static Map<String, Object> capabilities() {
         return Map.ofEntries(Map.entry("directions", List.of("LEFT", "RIGHT")),
@@ -60,8 +64,28 @@ public final class NativeMovementActions {
                 Map.entry("clock_cancel_is_drain_proof", false));
     }
 
-    public NativeMovementActions() {
-        this((body, delay) -> TimerHolder.TIMER.schedule(body, delay, TimeUnit.MILLISECONDS), System::nanoTime);
+    public NativeMovementActions(Consumer<ExecutionScope.WorkHandle> awaitWork) {
+        this((body, delay) -> TimerHolder.TIMER.schedule(body, delay, TimeUnit.MILLISECONDS), System::nanoTime, awaitWork);
+    }
+
+    /** A departed scene cannot send further frames; the original work still waits for its clock to exit. */
+    public void leaveScene() {
+        Job job;
+        synchronized (monitor) { sceneLeft = true; job = active; }
+        if (job != null) requestStop(job, "movement_scene_left", false);
+    }
+
+    /** Direction holds and target navigation share this member's one physical motion session. */
+    public boolean tryBeginNavigation() {
+        synchronized (monitor) {
+            if (sceneLeft || navigating || active != null) return false;
+            navigating = true;
+            return true;
+        }
+    }
+
+    public void endNavigation() {
+        synchronized (monitor) { navigating = false; }
     }
 
     /** Apply one server-calculated navigation frame from the owning role lane. */
@@ -78,7 +102,11 @@ public final class NativeMovementActions {
         return !context.handlerError();
     }
     NativeMovementActions(Wakeups wakeups, LongSupplier nanos) {
+        this(wakeups, nanos, ignored -> { });
+    }
+    private NativeMovementActions(Wakeups wakeups, LongSupplier nanos, Consumer<ExecutionScope.WorkHandle> awaitWork) {
         this.wakeups = Objects.requireNonNull(wakeups); this.nanos = Objects.requireNonNull(nanos);
+        this.awaitWork = Objects.requireNonNull(awaitWork);
     }
 
     private record Pending(Server server, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work,
@@ -156,6 +184,9 @@ public final class NativeMovementActions {
                                 GameContext.SceneRef scene, NativeMovementAction action, Runnable preflight, boolean stop) {
         Objects.requireNonNull(server); Objects.requireNonNull(context); Objects.requireNonNull(work);
         Objects.requireNonNull(scene); Objects.requireNonNull(preflight);
+        synchronized (monitor) {
+            if (sceneLeft) throw new NativeActionService.Invalid("movement_scene_left");
+        }
         if (work.isCleanup()) throw new NativeActionService.Invalid("cleanup_work_not_an_action");
         context.prepareNative("movement", work, preflight, (lane, permit, original, actor) -> {
             if (scene.actor() != actor || scene.actor().epoch() != work.acceptedEpoch()) {
@@ -163,6 +194,7 @@ public final class NativeMovementActions {
             }
             return null;
         });
+        awaitWork.accept(work);
         return new MoveHandle(new Pending(server, context, work, scene, action, preflight), stop);
     }
 
@@ -183,6 +215,8 @@ public final class NativeMovementActions {
                 NativeContextChecks.requireSceneCurrent(input.server, input.scene);
                 input.context.prepareNative("movement", input.work, input.preflight, (lane, permit, work, actor) -> null);
                 synchronized (monitor) {
+                    if (sceneLeft) throw new NativeActionService.Invalid("movement_scene_left");
+                    if (navigating) throw new NativeActionService.Invalid("movement_busy");
                     if ("move".equals(handle.action) && active != null) throw new NativeActionService.Invalid("movement_busy");
                     if ("stop".equals(handle.action) && active != null) {
                         if (active.finishing || active.finished) throw new NativeActionService.Invalid("movement_draining");
@@ -337,6 +371,7 @@ public final class NativeMovementActions {
         });
         try {
             if (step.cleanup != null) step.cleanup.permit().requireExecuting(job);
+            synchronized (monitor) { if (sceneLeft) return; }
             if (!step.idle) {
                 synchronized (monitor) {
                     if (job.stopRequested || input.work.cancelRequested()) return;
@@ -351,6 +386,17 @@ public final class NativeMovementActions {
             if (step.idle) job.stopUnverified = false;
             var actor = input.scene.actor().character();
             Point before = actor.getPosition();
+            if (actor.getHp() <= 0) {
+                synchronized (monitor) {
+                    job.reason = "movement_actor_dead";
+                    job.stopRequested = true;
+                    job.idleRequested = false;
+                    job.idleObserved = true;
+                    job.lastX = before.x;
+                    job.lastY = before.y;
+                }
+                return;
+            }
             int x, y, foothold, velocity, vertical = 0;
             byte stance;
             boolean settling = job.spawning;

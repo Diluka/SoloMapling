@@ -5,7 +5,6 @@ import org.gms.constants.id.MapId;
 import org.gms.constants.string.CharsetConstants;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.handlers.ChangeMapHandler;
-import org.gms.net.server.channel.handlers.PlayerMapTransitionHandler;
 import org.gms.server.maps.Portal;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
@@ -99,10 +98,7 @@ public final class NativePortalActions {
             transitionObserved = sceneChanged || !before.changingMaps() && after.changingMaps();
             if (transitionObserved && after.changingMaps()) {
                 // Finish this already-entered native transition even when its initiating call was cancelled.
-                var enteredScene = current;
-                acknowledgementError = NativePacketDispatch.dispatch(ref.client(), new PlayerMapTransitionHandler(),
-                        Unpooled.buffer(0), () -> NativeContextChecks.requireSceneCurrent(server, enteredScene),
-                        () -> acknowledged.set(true));
+                acknowledgementError = NativeMapEntryActions.acknowledge(server, current, () -> acknowledged.set(true));
                 acknowledgementReturned = !acknowledgementError;
                 current = NativeContextChecks.captureScene(server, ref);
                 after = state(current);

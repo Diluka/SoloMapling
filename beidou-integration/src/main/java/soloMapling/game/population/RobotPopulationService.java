@@ -1,5 +1,6 @@
 package soloMapling.game.population;
 
+import org.gms.net.server.Server;
 import org.gms.soloacceptance.actor.McpControlModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +88,7 @@ public final class RobotPopulationService {
     }
 
     private static Assembly assemble(RobotPopulationConfig.RobotType type, CharacterRuntime runtime) {
+        runtime.initializeSceneMembership(Server.getInstance());
         Map<String, CharacterRuntime.MountedModule<?>> modules = new LinkedHashMap<>();
         for (var module : type.modules()) modules.put(module.instanceId(), module.mount().apply(runtime));
         return new Assembly(Collections.unmodifiableMap(modules));

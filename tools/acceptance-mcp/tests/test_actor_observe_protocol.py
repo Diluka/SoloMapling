@@ -21,7 +21,7 @@ TOOLS = {
     "game_capabilities", "game_observe", "actor_open", "actor_close",
     "operation_get", "operation_cancel",
 }
-READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get"}
+READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get", "scene_snapshot", "scene_record"}
 ACTOR_PATH = "/solo/acceptance/v1/actor/observe"
 MAX_LONG = 2**63 - 1
 
@@ -95,10 +95,10 @@ class ActorObserveProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_stdio_lists_implemented_tools_and_keeps_observation_read_only(self) -> None:
         async with self.stdio_client() as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run"}, set(tools))
+        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run", "scene_snapshot", "scene_record"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
-            self.assertTrue(tool.annotations.idempotent_hint, name)
+            self.assertEqual(name not in {"scene_snapshot", "scene_record"}, tool.annotations.idempotent_hint, name)
         observe = tools["game_observe"]
         self.assertFalse(observe.annotations.destructive_hint)
         props = observe.input_schema["properties"]

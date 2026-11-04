@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.action.PortalResult;
+import soloMapling.game.action.ReviveResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -206,6 +207,63 @@ class TrainingScheduleControlModuleTest {
         }
     }
 
+    @Test void deathRevivesTheSameRunAndReturnsFromTheActualRespawnMapBeforeHuntingAgain() throws Exception {
+        try (var f = new Fixture(JUNK, 1, 0, 0, false)) {
+            eventually(() -> f.huntingIds.get() == 1 && f.mapId() == TRAINING
+                    && f.schedule.status().currentCycle() != null);
+            long run = f.schedule.status().runId();
+            when(f.nativeActions.revive(any(), any(), any())).thenAnswer(call -> {
+                CharacterRuntime.ModuleContext context = call.getArgument(1);
+                ExecutionScope.WorkHandle work = call.getArgument(2);
+                var before = f.reviveState();
+                f.onLane(context, work, "revive", () -> {
+                    f.alive.set(true); f.currentMap.set(f.maps.get(TOWN)); f.position.set(new Point());
+                });
+                return f.reviveResult(ReviveResult.Outcome.REVIVED, ReviveResult.EventRoute.STANDARD_ALLOWED,
+                        before, f.reviveState());
+            });
+            f.mutateInventory(() -> f.alive.set(false));
+
+            eventually(() -> f.huntingIds.get() == 2 && f.schedule.status().stage() == TrainingScheduleStatus.Stage.HUNTING);
+
+            assertEquals(run, f.schedule.status().runId());
+            assertTrue(f.stoppedHunts.contains(1L));
+            assertEquals(TRAINING, f.mapId());
+            assertEquals(2, f.plans.stream().filter(plan -> plan.equals(new TravelPlanRequest(TOWN, TRAINING))).count());
+            verify(f.nativeActions, times(1)).revive(any(), any(), any());
+        }
+    }
+
+    @Test void eventOwnedRevivalIsNotReplayedAndItsLaterCompletionResumesTheSchedule() throws Exception {
+        try (var f = new Fixture(JUNK, 1, 0, 0, false)) {
+            eventually(() -> f.huntingIds.get() == 1 && f.mapId() == TRAINING
+                    && f.schedule.status().currentCycle() != null);
+            long run = f.schedule.status().runId();
+            when(f.nativeActions.revive(any(), any(), any())).thenAnswer(call ->
+                    f.reviveResult(ReviveResult.Outcome.NOT_REVIVED, ReviveResult.EventRoute.TAKEN_OVER,
+                            f.reviveState(), f.reviveState()));
+            f.mutateInventory(() -> f.alive.set(false));
+            eventually(() -> "revive_waiting_event".equals(f.schedule.status().reason()));
+            assertEquals(TrainingScheduleStatus.State.BLOCKED, f.schedule.status().state());
+            assertTrue(f.stoppedHunts.contains(1L));
+            // A changed position refreshes observations, but it grants no permission to replay the event.
+            f.mutateInventory(() -> f.position.set(new Point(20, 0)));
+            Thread.sleep(80);
+            verify(f.nativeActions, times(1)).revive(any(), any(), any());
+            assertFalse(f.alive.get());
+            assertEquals(TrainingScheduleStatus.State.BLOCKED, f.schedule.status().state());
+            assertEquals("revive_waiting_event", f.schedule.status().reason());
+            f.mutateInventory(() -> {
+                f.currentMap.set(f.maps.get(TOWN)); f.position.set(new Point()); f.alive.set(true);
+            });
+
+            eventually(() -> f.huntingIds.get() == 2 && f.mapId() == TRAINING);
+
+            assertEquals(run, f.schedule.status().runId());
+            verify(f.nativeActions, times(1)).revive(any(), any(), any());
+        }
+    }
+
     private static void eventually(BooleanSupplier condition) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
@@ -232,12 +290,14 @@ class TrainingScheduleControlModuleTest {
         final AtomicReference<MapleMap> currentMap = new AtomicReference<>();
         final AtomicReference<Point> position = new AtomicReference<>(new Point());
         final AtomicBoolean present = new AtomicBoolean(true);
+        final AtomicBoolean alive = new AtomicBoolean(true);
         final AtomicReference<Shop> activeShop = new AtomicReference<>();
         final AtomicInteger mesos = new AtomicInteger();
         final AtomicLong huntingIds = new AtomicLong();
         final AtomicReference<HuntingSnapshot> hunting = new AtomicReference<>(huntSnapshot(0, false, 0));
         final HuntingControlModule hunter = mock(HuntingControlModule.class);
         final ShopActionModule shop = mock(ShopActionModule.class);
+        final NativeActionModule nativeActions = mock(NativeActionModule.class);
         final RecoveryControlModule recovery;
         final CharacterRuntime runtime;
         final TrainingScheduleControlModule schedule;
@@ -267,7 +327,7 @@ class TrainingScheduleControlModuleTest {
             when(actor.getId()).thenReturn(id); when(actor.getClient()).thenReturn(client); when(client.getPlayer()).thenReturn(actor);
             when(client.getChannel()).thenReturn(1); when(actor.getMap()).thenAnswer(call -> currentMap.get());
             when(actor.getMapId()).thenAnswer(call -> mapId()); when(actor.getPosition()).thenAnswer(call -> new Point(position.get()));
-            when(actor.isAlive()).thenReturn(true); when(actor.getHp()).thenReturn(200); when(actor.getCurrentMaxHp()).thenReturn(200);
+            when(actor.isAlive()).thenAnswer(call -> alive.get()); when(actor.getHp()).thenAnswer(call -> alive.get() ? 200 : 0); when(actor.getCurrentMaxHp()).thenReturn(200);
             when(actor.getMp()).thenReturn(80); when(actor.getCurrentMaxMp()).thenReturn(80); when(actor.getChair()).thenReturn(-1);
             when(actor.getShop()).thenAnswer(call -> activeShop.get()); when(actor.getMeso()).thenAnswer(call -> mesos.get());
             for (var type : InventoryType.values()) {
@@ -351,7 +411,6 @@ class TrainingScheduleControlModuleTest {
                         true, 1, 1, List.of("WALK")));
             });
             mount("navigation", NavigationActionModule.DEFINITION, NavigationActionModule.DEFAULT_CONFIG, navigation);
-            var nativeActions = mock(NativeActionModule.class);
             when(nativeActions.enterPortal(any(), any(), any())).thenAnswer(call -> {
                 soloMapling.game.action.PortalRequest request = call.getArgument(0); CharacterRuntime.ModuleContext context = call.getArgument(1);
                 ExecutionScope.WorkHandle work = call.getArgument(2); var beforeMap = currentMap.get(); var beforePosition = position.get();
@@ -400,7 +459,7 @@ class TrainingScheduleControlModuleTest {
             mount("recovery", RecoveryControlModule.DEFINITION, RecoveryControlModule.DEFAULT_CONFIG, recovery);
             schedule = new TrainingScheduleControlModule(new TrainingScheduleControlModule.Config(TRAINING, STORE, NPC_ID,
                     HuntingStartOptions.Style.PATROL, new CapacityRule(Set.of(InventoryType.ETC), 0),
-                    new SaleRules(Set.of(JUNK, KEPT), Set.of(KEPT), reserve == 0 ? Map.of() : Map.of(JUNK, reserve)), 10), server);
+                    new SaleRules(Set.of(JUNK, KEPT), Set.of(KEPT), reserve == 0 ? Map.of() : Map.of(JUNK, reserve)), 10, true), server);
             scheduleRef = mount("training", TrainingScheduleControlModule.DEFINITION, TrainingScheduleControlModule.DEFAULT_CONFIG, schedule).reference();
         }
 
@@ -439,6 +498,19 @@ class TrainingScheduleControlModuleTest {
             work.completion().toCompletableFuture().join();
             if (failure.get() instanceof Error error) throw error;
             if (failure.get() instanceof RuntimeException exception) throw exception;
+        }
+        private ReviveResult.State reviveState() {
+            return new ReviveResult.State(alive.get(), alive.get() ? 200 : 0, 80, mapId(), position.get().x, position.get().y, false);
+        }
+        private ReviveResult reviveResult(ReviveResult.Outcome outcome, ReviveResult.EventRoute route,
+                                          ReviveResult.State before, ReviveResult.State after) {
+            boolean standard = route == ReviveResult.EventRoute.STANDARD_ALLOWED;
+            return new ReviveResult(outcome, id, runtime.acceptedEpoch().toString(), before, after,
+                    new ReviveResult.Dispatch(true, true, false),
+                    new ReviveResult.Event(route, true, true, standard, standard, standard, standard, standard,
+                            standard ? TOWN : null),
+                    new ReviveResult.Transition(standard, standard, standard, false, standard),
+                    before.mapId() != after.mapId(), false, null);
         }
         private PortalResult.Endpoint endpoint(MapleMap map, Portal portal) {
             return new PortalResult.Endpoint(map.getId(), portal.getId(), portal.getName(), portal.getPosition().x, portal.getPosition().y);

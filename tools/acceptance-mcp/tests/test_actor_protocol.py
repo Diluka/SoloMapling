@@ -19,7 +19,7 @@ TOOLS = {
     "game_capabilities", "game_observe", "actor_open", "actor_close",
     "operation_get", "operation_cancel",
 }
-READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get"}
+READ_ONLY_TOOLS = {"game_capabilities", "game_observe", "operation_get", "scene_snapshot", "scene_record"}
 SESSION_ID = "session-actor-fixture"
 OPEN_ID = "operation-open-fixture"
 CLOSE_ID = "operation-close-fixture"
@@ -96,10 +96,10 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_implemented_tools_have_explicit_mutation_and_request_contracts(self) -> None:
         async with Client(build_server(self.stub.config())) as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run"}, set(tools))
+        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run", "scene_snapshot", "scene_record"}, set(tools))
         for name, tool in tools.items():
             self.assertEqual(name in READ_ONLY_TOOLS, tool.annotations.read_only_hint, name)
-            self.assertTrue(tool.annotations.idempotent_hint, name)
+            self.assertEqual(name not in {"scene_snapshot", "scene_record"}, tool.annotations.idempotent_hint, name)
         self.assertTrue(tools["actor_close"].annotations.destructive_hint)
         for name in ["actor_open", "actor_close", "operation_cancel"]:
             self.assertIn("request_id", tools[name].input_schema["required"], name)
@@ -191,7 +191,7 @@ class ActorProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": SESSION_ID, "expected_generation": 1, "request_id": "stdio-close",
                 })
                 closed = await client.call_tool("operation_get", {"operation_id": CLOSE_ID})
-        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run"}, names)
+        self.assertEqual(TOOLS | {"game_act", "game_command", "script_run", "scene_snapshot", "scene_record"}, names)
         self.assertTrue(all(not result.is_error for result in [opened, online, closing, closed]))
         self.assertEqual("QUEUED", opened.structured_content["status"])
         self.assertEqual(42, online.structured_content["session"]["actor"]["character_id"])

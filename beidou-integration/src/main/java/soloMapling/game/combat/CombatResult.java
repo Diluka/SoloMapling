@@ -56,7 +56,7 @@ public record CombatResult(Outcome outcome, String reason, int initialJob, List<
         result.put("native_buff_fact_scope", "LATEST_PER_SKILL");
         result.put("native_buff_attempts", nativeBuffAttempts);
         result.put("contact_hits", contactHits.stream().map(NativeContactDamageActions.ContactResult::toMap).toList());
-        result.put("contact_hit_fact_scope", "LAST");
+        result.put("contact_hit_fact_scope", "LAST_SCENE_BACKGROUND_DURING_ENGAGEMENT");
         result.put("contact_hit_count", contactHitCount);
         return result;
     }
