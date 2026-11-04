@@ -164,7 +164,7 @@ python3 beidou-integration/scripts/build.py --help
 - `source` 默认空字符串，可只执行选定原脚本的入口；非空片段在同一真实北斗引擎中运行。脚本内的参数运算、输出和JSON结果处理仍可用，不等于另有执行模式。环境与接口通过 `skills/solomapling-script-debug/` 的说明书查阅实际适配器及北斗源码；上下文标识和状态来自执行结果。
 - `options/args/parameters` 的16KiB输入预算仅由服务端按其规范化JSON UTF-8编码裁决；客户端保留类型、有限数值、Unicode、节点数和深度校验，不再重复计算本地编码字节数或要求跨语言编码器产生同样长度。语言stdout/stderr使用持续UTF-8编码收集完整字符，游戏聊天的原生字符集限制另行保留。
 - 脚本设施由 `CharacterRuntime` 承载，消费当前模块代次的原 `ExecutionScope.WorkHandle`，在受管理载体执行，不占角色短命令lane。MCP保留鉴权、协议、幂等历史和结果投影，不建另一角色宿主、动作队列或物理工作账本。
-- 当前客户端为九工具，既有十三动作及独立管理指令保留。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。
+- 当前源码客户端为十一工具，既有十三动作及独立管理指令保留；#319两项场景采集无需角色会话。实际部署与源码测试、CI、隔离验收分层记录，以对应Issue及能力公告为准；当前说明见 `docs/robot-runtime/script-execution.md`。
 
 ## #216 北斗脚本上下文
 
@@ -192,7 +192,7 @@ python3 beidou-integration/scripts/build.py --help
 
 - `skills/` 提供游戏交互、脚本调试与机器人验收三个技能，`references/` 是所属技能的使用说明书，随源码整套分发。
 - 源码中的方法、继承、返回类型和原脚本直接查阅；生成方法按需查询匹配构建产物，不手写 API 全集。
-- 当前提供九个执行／观察工具、十三动作和实际 capabilities。环境、对象方法与命令查询通过相应技能导航源码或北斗既有只读目录；命令查询脚本不执行命令或改变配置。
+- 当前提供十一个执行／观察工具、十三动作和实际 capabilities。环境、对象方法与命令查询通过相应技能导航源码或北斗既有只读目录；命令查询脚本不执行命令或改变配置。
 
 
 ## #270 / #286 动作与控制调用契约

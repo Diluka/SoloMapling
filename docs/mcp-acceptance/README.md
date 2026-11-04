@@ -2,7 +2,7 @@
 
 新增 #207 独立管理指令入口的配置、参数和恢复规则见[管理指令说明](commands.md)。该入口直接复用原生服务，与角色运行体解耦；实际启用和部署状态以 `debug_commands` 能力公告及 #207 验收记录为准。
 
-**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。`script_run` 与通用原生命令执行工具合计九工具；当前脚本工具只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗原脚本及真实上下文，已删除独立纯JS模式和environment参数。实际开放项始终以 `game_capabilities` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
+**状态：观察、原生角色、包事件、普通聊天、中心首屏/取消、无收益 NPC 回复及背包移位已有隔离及实际部署验收。** [PR #208](https://github.com/Diluka/SoloMapling/pull/208) 的源码补齐八种基本动作，与原有五种合计十三动作，其隔离与实际交付按 #200 分别记录。源码新增 #319 的 `scene_snapshot`、`scene_record` 后，完整工具目录为十一项，既有十三动作保持。两项场景采集无需打开角色，格式与停止语义见[场景数据采集](scene-capture.md)；脚本工具只执行[#216](https://github.com/Diluka/SoloMapling/issues/216)的北斗原脚本及真实上下文，已删除独立纯JS模式和environment参数。实际开放项始终以 `game_capabilities` 为准；源码测试、CI、隔离及实际部署结果按对应 Issue 分别记录，不因源码存在推导已上线。基础交付不代表 #199/#204 全部完成，也不迁移现有动作。礼包接受、完整城镇菜单、付费出行及 SocialBot 回复继续独立推进。宿主原生工具加载与真实客户端玩法分别记录。
 
 安装、连接配置、测试及实际 stdio 冒烟命令见 [工具运行说明](../../tools/acceptance-mcp/README.md)。协议接通、服务器业务结果与真实客户端玩法分别记录。
 
@@ -103,12 +103,14 @@ R2a 使用原生持久角色，后续可在此基础上核对公会、任务和�
 
 ## 当前工具接口
 
-下表列出角色、动作和脚本工具；加上独立命令执行工具，当前客户端共九工具，实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关；管理工具另需其专用开关。
+下表列出观察、角色、动作、脚本和场景采集工具；加上独立命令执行工具，源码客户端共十一项，实际部署以能力公告和 Issue 证据为准。`game_act` 保留 PR #208 的十三动作，npc_reply 仅支持已审查的 select/decline，具体基本动作的受控范围见下方 #200 说明。角色、动作和脚本接口须开启双开关；管理工具另需其专用开关。场景采集仅需 `acceptance.enabled`，不要求 `actors-enabled`。
 
 | 工具 | 主要输入 | 实际结果／用途 | 当前范围 |
 |---|---|---|---|
 | `game_capabilities` | 无 | 版本、运行源码身份、后端在线状态、实际工具与容量 | R1 |
 | `game_observe` | scope=world/scene/actor、scene_ref、limit；actor 另需 session_id/expected_generation，可带 since_cursor | 已加载场景或专用角色的只读快照与包窗口，不创建地图或角色 | world/scene 为 R1；actor 为 #70 包事件观察 |
+| `scene_snapshot` | scene_ref、可选output_file | 单次完整数据帧；可保存为宿主UTF-8 JSON新文件 | #319，只读游戏状态，不需要actor会话 |
+| `scene_record` | scene_ref、output_file、可选duration_ms/interval_ms | 固定实际场景的header/frame/end NDJSON，实时写入宿主新文件并确认真实停止 | #319，原生/模拟/事件来源和覆盖缺口分层 |
 | `actor_open` | profile_id、可选 world/channel、request_id | 排队原生登录，返回 operation_id 与 session/session_generation | R2a |
 | `actor_close` | session_id、expected_generation、request_id | 排队正常离线，查询清理及持久化核验结果，保留 fixture | R2a |
 | `operation_get` | operation_id、since_cursor、limit、since_output | 操作终态、实时 session、原生角色快照、生命周期事件及已保留脚本输出 | R2a |
@@ -468,4 +470,4 @@ R2a、#70、#72、#75 与 #110 的控制/观察入口为 [ActorControlController
 
 ## #200 其余基本操作
 
-PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具，脚本与通用命令各保留一个执行工具，当前客户端共九工具。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。#216 原生脚本环境不增减这些直接动作，也不把它们逐项迁移为同义脚本函数。
+PR #208 增加 `move/stop/attack/pickup/drop/use_item/equip/unequip`，与已有五动作合计十三动作；该轮保持七工具；后续脚本、通用命令及#319两项场景采集构成当前十一工具目录。实际开放项以 capabilities 为准。基本能力均在运行体共享 Java 层，MCP 保留身份、请求、幂等、场景与结果投影；参数、受控政策、必要存档及分层证据见[角色基本操作](../shared-game-foundation/basic-control.md)。#216 原生脚本环境不增减这些直接动作，也不把它们逐项迁移为同义脚本函数。
