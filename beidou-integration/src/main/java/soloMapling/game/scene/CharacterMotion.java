@@ -28,11 +28,13 @@ public final class CharacterMotion {
     private final SceneActorBinding binding;
     private final Server server;
     private final NativeMovementActions movement;
+    private final Point entryPosition;
     private Job active;
 
     CharacterMotion(SceneActorBinding binding, Server server) {
         this.binding = binding;
         this.server = server;
+        entryPosition = new Point(binding.characterRef().character().getPosition());
         movement = new NativeMovementActions(binding::awaitWork);
     }
 
@@ -69,7 +71,9 @@ public final class CharacterMotion {
             if (actor != binding.characterRef()) throw new NativeActionService.Invalid("scene_actor_mismatch");
             job.position = new Point(actor.character().getPosition());
             checkpoint(job);
-            job.engine = RuntimeNavigationEngine.plan(actor.character(), job.target, () -> checkpoint(job));
+            job.engine = !actor.character().isChangingMaps() && entryPosition.equals(job.position)
+                    ? RuntimeNavigationEngine.planFromEntry(actor.character(), job.target, () -> checkpoint(job))
+                    : RuntimeNavigationEngine.plan(actor.character(), job.target, () -> checkpoint(job));
             job.registration = context.scope().resources().beginOwnedResult(work, "navigation_motion");
             job.registration.attach(job, () -> job.stopRequested = true);
             long lastProgress = System.nanoTime();

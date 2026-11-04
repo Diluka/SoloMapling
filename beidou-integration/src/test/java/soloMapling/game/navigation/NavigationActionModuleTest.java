@@ -197,6 +197,48 @@ class NavigationActionModuleTest {
         return shoe;
     }
 
+    @Test void acknowledgedNativeEntryFallsToRealGroundBeforeTheRouteStarts() {
+        var changingMaps = new AtomicBoolean(true);
+        var fixture = fixture(98_982_134, new Point(0, -39),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
+                        when(configured.character.isChangingMaps()).thenAnswer(call -> changingMaps.get()));
+
+        var pendingEntry = fixture.moveTo(new Point(120, 0));
+        assertEquals("UNSUPPORTED", pendingEntry.get("outcome"), pendingEntry.toString());
+        assertEquals("UNSUPPORTED_START_POSITION", pendingEntry.get("reason"));
+        assertTrue(fixture.movements.isEmpty());
+
+        changingMaps.set(false);
+        var result = fixture.moveTo(new Point(120, 0));
+
+        assertEquals("ARRIVED", result.get("outcome"), result.toString());
+        var falling = fixture.movements.stream().takeWhile(position -> position.y < 0).toList();
+        assertTrue(falling.size() >= 2, "the observed native spawn falls through physical frames");
+        assertTrue(falling.stream().allMatch(position -> position.x == 0 && position.y > -39));
+        assertTrue(((List<?>) result.get("edge_types")).containsAll(List.of("DROP", "WALK")));
+        assertEquals(0, fixture.position.get().y);
+        assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
+    }
+
+    @Test void pausingDuringTheEntryFallSettlesTheSameMotionBeforeReturning() throws Exception {
+        var fixture = fixture(98_982_135, new Point(0, -120),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of());
+        var result = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(120, 0)));
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (fixture.position.get().y == -120 && System.nanoTime() < until) Thread.sleep(5);
+        assertTrue(fixture.position.get().y > -120 && fixture.position.get().y < 0);
+
+        var stopped = fixture.runtime.stop(fixture.module.context().reference(), CharacterRuntime.StopMode.PAUSE);
+
+        assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
+        var facts = result.get(5, TimeUnit.SECONDS);
+        assertEquals("CANCELLED", facts.get("outcome"), facts.toString());
+        assertEquals(true, facts.get("stable"));
+        assertEquals(new Point(0, 0), fixture.position.get());
+        assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
+        assertEquals(0, fixture.module.context().scope().snapshot().acceptedWork());
+    }
+
     @Test void javaActionEntryReturnsTypedResultAfterNativeMovementAndWorkSettlement() throws Exception {
         var fixture = fixture(98_982_106, new Point(0, 0),
                 List.of(foothold(-200, 0, 300, 0, 1)), List.of());
@@ -325,7 +367,7 @@ class NavigationActionModuleTest {
     @Test void leavingTheSceneWaitsForTheOriginalNavigationBodyAndWorkToSettle() throws Exception {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
-        var fixture = fixture(98_982_133, new Point(0, 0),
+        var fixture = fixture(98_982_133, new Point(0, -39),
                 List.of(foothold(-200, 0, 400, 0, 1)), List.of(), configured -> {
             doAnswer(call -> {
                 entered.countDown();
@@ -347,6 +389,7 @@ class NavigationActionModuleTest {
         navigation.get(5, TimeUnit.SECONDS);
         fixture.runtime.whenModulesDrained().toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertTrue(binding.scene().closed());
+        assertEquals(1, fixture.movements.size(), "the departed entry cannot send more fall or route frames");
     }
 
     private Fixture fixture(int mapId, Point from, List<Foothold> footholds, List<Rope> ropes) {
