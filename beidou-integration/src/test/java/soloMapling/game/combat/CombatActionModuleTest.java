@@ -61,6 +61,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -132,58 +134,151 @@ class CombatActionModuleTest {
         }
     }
 
-    @Test void aLegalLongGroundApproachUsesTheEngagementBudgetThenReachesTheSameTarget() throws Exception {
-        try (var fixture = new Fixture(false)) {
-            fixture.hp.set(1);
-            when(fixture.target.getPosition()).thenReturn(new Point(650, 0));
-            fixture.mountNavigation();
-            var planned = fixture.caller.call(NavigationActionModule.PLAN, new MoveToRequest(590, 0, 10_000)).result();
-            assertEquals(NavigationPlan.Outcome.PLANNED, planned.outcome());
-            assertTrue(planned.prediction().arrived());
-            assertTrue(planned.prediction().elapsedMs() > 4000, "the normal legal approach exceeds the old tactical preview cap");
-            fixture.mountTactics();
-
-            var result = fixture.caller.call(CombatActionModule.ENGAGE,
-                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 10_000)).result();
-
-            assertEquals(CombatResult.Outcome.TARGET_DEAD, result.outcome(), result.toString());
-            assertTrue(fixture.position.get().x > 500, "the scene's existing movement actually approached the target");
-            assertEquals(91, result.hits().getFirst().objectId());
-            assertEquals(0, result.hits().getFirst().hpAfter());
-            fixture.assertCombatDrained();
+    @Test void pursuitPassesTheOriginalEngagementBudgetThroughTheRealNavigationProvider() throws Exception {
+        try (var fixture = new Fixture(Job.THIEF, 1332000,
+                configured -> doReturn(new Point(650, 0)).when(configured.target).getPosition(), false)) {
+            var requested = new CountDownLatch(1);
+            var release = new CompletableFuture<Void>();
+            var request = new AtomicReference<MoveToRequest>();
+            var providerWork = new AtomicReference<ExecutionScope.WorkHandle>();
+            var capturedAt = new AtomicLong();
+            var navigationConfig = new NavigationActionModule.Config(8, 7000, 3000);
+            var navigation = spy(new NavigationActionModule(navigationConfig, fixture.server));
+            doAnswer(call -> {
+                var input = call.<MoveToRequest>getArgument(0);
+                if (input.x() > 500 && input.y() == 0) {
+                    request.set(input); providerWork.set(call.getArgument(2)); capturedAt.set(System.nanoTime());
+                    requested.countDown(); release.join();
+                }
+                return call.callRealMethod();
+            }).when(navigation).plan(any(), any(), any());
+            var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
+                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
+                    NavigationActionModule.DEFINITION.limits(), config -> navigation, NavigationActionModule.DEFINITION.exports());
+            fixture.runtime.mount(definition, new ModuleSelection<>("navigation", navigationConfig, true));
+            assertEquals(NavigationPlan.Outcome.PLANNED,
+                    fixture.caller.call(NavigationActionModule.PLAN, new MoveToRequest(0, 0, 7000)).result().outcome());
+            var tactics = fixture.mountTactics();
+            long beforeEngagement = System.nanoTime();
+            var combat = CompletableFuture.supplyAsync(() -> fixture.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 10_000)).result());
+            try {
+                assertTrue(requested.await(5, TimeUnit.SECONDS));
+                long minimumRemaining = 10_000 - (capturedAt.get() - beforeEngagement + 999_999) / 1_000_000;
+                assertTrue(request.get().timeoutMs() >= minimumRemaining,
+                        "the plan must receive the original engagement's remaining deadline");
+                assertTrue(request.get().timeoutMs() <= 10_000);
+                assertFalse(providerWork.get().isSettled());
+                var stop = CompletableFuture.supplyAsync(tactics::stop);
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (!providerWork.get().cancelRequested() && System.nanoTime() < until) Thread.sleep(5);
+                assertTrue(providerWork.get().cancelRequested());
+                assertFalse(stop.isDone(), "the original planning call still has to leave its provider");
+                release.complete(null);
+                stop.get(5, TimeUnit.SECONDS);
+                combat.get(5, TimeUnit.SECONDS);
+                assertTrue(providerWork.get().isSettled());
+                fixture.assertCombatDrained();
+                assertEquals(0, fixture.runtime.context(fixture.tacticsRef).scope().snapshot().acceptedWork());
+                assertEquals(new Point(0, 0), fixture.position.get());
+                verify(fixture.map, never()).movePlayer(any(), any());
+                verify(fixture.map, never()).damageMonster(any(), any(), anyInt());
+            } finally { release.complete(null); }
         }
     }
 
-    @Test void anExpiredReadOnlyPlanIsAResultAndTheTacticalMonitorRemainsAvailable() throws Exception {
-        var geometryEntered = new CountDownLatch(1);
-        var geometryReleased = new CountDownLatch(1);
+    @Test void aReadOnlyLocalPlanRetainsTheNavigationConfigurationBudget() throws Exception {
+        try (var fixture = new Fixture(false)) {
+            var config = new NavigationActionModule.Config(8, 7000, 3000);
+            var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
+                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
+                    NavigationActionModule.DEFINITION.limits(), value -> new NavigationActionModule(value, fixture.server),
+                    NavigationActionModule.DEFINITION.exports());
+            fixture.runtime.mount(definition, new ModuleSelection<>("navigation", config, true));
+            var plan = fixture.caller.call(NavigationActionModule.PLAN, new MoveToRequest(0, 0, 10_000)).result();
+            assertEquals(NavigationPlan.Outcome.PLANNED, plan.outcome());
+            assertEquals(config, plan.executionConfig());
+            assertEquals(7000, plan.timeoutMs());
+            assertEquals(0, fixture.runtime.snapshot().modules().stream().filter(module -> module.instanceId().equals("navigation"))
+                    .findFirst().orElseThrow().scope().acceptedWork());
+            assertEquals(new Point(0, 0), fixture.position.get());
+            verify(fixture.map, never()).movePlayer(any(), any());
+        }
+    }
+
+    @Test void theSameTacticalMonitorContinuesAfterItsOwnReadOnlyPlanTimesOut() throws Exception {
+        var planningThread = new AtomicReference<Thread>();
+        var delayNextGeometryRead = new AtomicBoolean(true);
+        var firstPlanEntered = new CountDownLatch(1);
+        var geometryReleased = new CompletableFuture<Void>();
+        var nextObservationPlanned = new CountDownLatch(1);
+        var nextPlanReleased = new CompletableFuture<Void>();
+        var calls = new AtomicInteger();
+        var activeTactics = new AtomicReference<CombatTacticsControlModule>();
+        var holdNextObservation = new AtomicBoolean(true);
+        var firstOutcome = new AtomicReference<NavigationPlan.Outcome>();
         try (var fixture = new Fixture(Job.THIEF, 1332000, configured -> {
             var geometry = configured.map.getFootholds();
             doAnswer(call -> {
-                geometryEntered.countDown();
-                assertTrue(geometryReleased.await(5, TimeUnit.SECONDS));
+                if (Thread.currentThread() == planningThread.get() && delayNextGeometryRead.compareAndSet(true, false)) {
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1);
+                    while (System.nanoTime() < deadline) Thread.onSpinWait();
+                }
                 return geometry;
             }).when(configured.map).getFootholds();
         }, false)) {
-            fixture.mountNavigation();
-            var planned = CompletableFuture.supplyAsync(() -> fixture.caller.call(NavigationActionModule.PLAN,
-                    new MoveToRequest(590, 0, 1)).result());
-            try {
-                assertTrue(geometryEntered.await(5, TimeUnit.SECONDS));
-                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1);
-                while (System.nanoTime() < deadline) Thread.onSpinWait();
-            } finally { geometryReleased.countDown(); }
-            var expired = planned.get(5, TimeUnit.SECONDS);
-            assertEquals(NavigationPlan.Outcome.TIMED_OUT, expired.outcome());
-            assertEquals("navigation_plan_timeout", expired.reason());
-            assertEquals(new Point(0, 0), fixture.position.get());
+            var navigationConfig = new NavigationActionModule.Config(8, 1, 3000);
+            var navigation = spy(new NavigationActionModule(navigationConfig, fixture.server));
+            doAnswer(call -> {
+                int sequence = calls.incrementAndGet();
+                if (sequence == 1) { firstPlanEntered.countDown(); geometryReleased.join(); }
+                if (activeTactics.get() != null && activeTactics.get().status().observations() > 0
+                        && holdNextObservation.compareAndSet(true, false)) {
+                    nextObservationPlanned.countDown(); nextPlanReleased.join();
+                }
+                planningThread.set(Thread.currentThread());
+                try {
+                    var plan = (NavigationPlan) call.callRealMethod();
+                    if (sequence == 1) firstOutcome.set(plan.outcome());
+                    return plan;
+                } finally { planningThread.set(null); }
+            }).when(navigation).plan(any(), any(), any());
+            var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
+                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
+                    NavigationActionModule.DEFINITION.limits(), config -> navigation, NavigationActionModule.DEFINITION.exports());
+            fixture.runtime.mount(definition, new ModuleSelection<>("navigation", navigationConfig, true));
             var tactics = fixture.mountTactics();
-            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (tactics.status().observations() < 2 && System.nanoTime() < until) Thread.sleep(5);
-            assertEquals(CombatTacticsControlModule.State.RUNNING, tactics.status().state());
-            assertTrue(tactics.status().observations() >= 2);
-            fixture.assertCombatDrained();
-        } finally { geometryReleased.countDown(); }
+            activeTactics.set(tactics);
+            try {
+                assertTrue(firstPlanEntered.await(5, TimeUnit.SECONDS));
+                var generation = fixture.tacticsRef.generation();
+                var scope = fixture.runtime.context(fixture.tacticsRef).scope();
+                var original = scope.snapshot().diagnostics().stream()
+                        .filter(work -> work.bodyState() == ExecutionScope.BodyState.RUNNING && work.carrierClaimed())
+                        .findFirst().orElseThrow();
+                assertEquals(CombatTacticsControlModule.State.RUNNING, tactics.status().state());
+                geometryReleased.complete(null);
+                assertTrue(nextObservationPlanned.await(5, TimeUnit.SECONDS));
+                assertEquals(NavigationPlan.Outcome.TIMED_OUT, firstOutcome.get());
+                assertEquals("navigation_plan_timeout", tactics.status().reason());
+                assertEquals(CombatTacticsControlModule.State.RUNNING, tactics.status().state());
+                long observations = tactics.status().observations();
+                nextPlanReleased.complete(null);
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (tactics.status().observations() <= observations && System.nanoTime() < until) Thread.sleep(5);
+                assertTrue(tactics.status().observations() > observations);
+                assertSame(scope, fixture.runtime.context(fixture.tacticsRef).scope());
+                assertEquals(generation, fixture.tacticsRef.generation());
+                assertTrue(scope.snapshot().diagnostics().stream().anyMatch(work -> work.id() == original.id()
+                        && work.bodyState() == ExecutionScope.BodyState.RUNNING && !work.settled()));
+                tactics.stop();
+                assertEquals(0, scope.snapshot().acceptedWork());
+                assertEquals(0, scope.snapshot().pendingCarriers());
+                assertEquals(0, scope.resources().snapshot().outstanding());
+                assertEquals(new Point(0, 0), fixture.position.get());
+                fixture.assertCombatDrained();
+            } finally { geometryReleased.complete(null); nextPlanReleased.complete(null); }
+        } finally { geometryReleased.complete(null); nextPlanReleased.complete(null); }
     }
 
     @Test void normalTimeoutDrainsTheEngagementWithoutAnUncaughtLaneCancellation() throws Exception {
@@ -252,6 +347,7 @@ class CombatActionModuleTest {
         final Monster outside = mock(Monster.class);
         final CharacterRuntime runtime;
         final CharacterRuntime.ModuleContext caller;
+        CharacterRuntime.ModuleRef tacticsRef;
         final Server server = mock(Server.class);
         final MapleMap map = mock(MapleMap.class);
         final AtomicReference<Point> position = new AtomicReference<>(new Point(0, 0));
@@ -385,15 +481,9 @@ class CombatActionModuleTest {
                     CombatTacticsControlModule.DEFINITION.typeId(), CombatTacticsControlModule.DEFINITION.controls(),
                     CombatTacticsControlModule.DEFINITION.limits(), config -> new CombatTacticsControlModule(config, server),
                     CombatTacticsControlModule.DEFINITION.exports());
-            return runtime.mount(definition, new ModuleSelection<>("tactics", CombatTacticsControlModule.DEFAULT_CONFIG, true)).instance();
-        }
-
-        void mountNavigation() {
-            var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
-                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
-                    NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, server),
-                    NavigationActionModule.DEFINITION.exports());
-            runtime.mount(definition, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
+            var mounted = runtime.mount(definition, new ModuleSelection<>("tactics", CombatTacticsControlModule.DEFAULT_CONFIG, true));
+            tacticsRef = mounted.reference();
+            return mounted.instance();
         }
 
         void assertCombatDrained() {
