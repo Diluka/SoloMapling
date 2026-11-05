@@ -142,6 +142,8 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         } finally {
             drivers.remove(binding);
             try {
+                // World-stop cancellation and revoked admission may precede the binding's leave hook.
+                binding.whenActionsDrained().toCompletableFuture().join();
                 var cleanup = registration.acquireCleanup();
                 context.submitCleanup(cleanup, () -> {
                     cleanup.permit().requireExecuting(binding);

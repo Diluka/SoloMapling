@@ -223,7 +223,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
                       "北斗脚本提供 executeCommand(commandText) 通用执行函数，与 game_command 共用原生handle；权限沿原生，RETURNED不代表具体命令效果。"
                       "game_command 向专用 profile 原样转发完整命令文本，与脚本 executeCommand 共用原生实现；命令及脚本用法通过随源码技能查阅。"
                       "权限沿原生检查；RETURNED仅表示原生处理器返回，不证明命令执行成功或产生玩法效果。"
-                      "scene_snapshot/scene_record只读采集已加载实际场景，不需打开角色；输出数据帧和事件证据到MCP宿主新文件，不代表真人画面播放。"),
+                      "scene_snapshot/scene_record只读采集已加载实际场景，不需打开角色；全场服务端基线与真实输出事件分别保存到MCP宿主新文件，记录发送目标和可观察顺序，不代表真人画面播放。"),
         log_level="WARNING",
         lifespan=lifespan,
     )
@@ -282,7 +282,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
 
     @server.tool(annotations=capture_annotations)
     async def scene_snapshot(scene_ref: Identifier, output_file: OutputFile | None = None) -> CallToolResult:
-        """只读采集已加载实际scene_ref的数据帧，不需要actor_open、不启动模拟。可选output_file是MCP宿主本地UTF-8 JSON新文件，父目录须存在，已存在文件拒绝。无文件时返回同一结构化模型；超过4MiB需文件输出，文件/单记录上限32MiB。原生、模拟、事件与覆盖缺口分别保存，服务端输出不代表真人画面。"""
+        """只读采集已加载实际scene_ref的当前全场服务端基线，不需要actor_open、不启动模拟。基线按原生状态语义投影，不等同某个客户端已见内容。可选output_file是MCP宿主本地UTF-8 JSON新文件，父目录须存在，已存在文件拒绝。无文件时返回同一结构化模型；超过4MiB需文件输出，文件/单记录上限32MiB。额外诊断、模拟与覆盖缺口标明来源，快照不生成入场消息或补发动作。"""
         try:
             with ExitStack() as files:
                 output = None
@@ -319,7 +319,7 @@ def build_server(config: BridgeConfig) -> MCPServer:
         duration_ms: Annotated[int, Field(ge=100, le=120000, strict=True)] = SCENE_DEFAULT_DURATION_MS,
         interval_ms: Annotated[int, Field(ge=50, le=5000, strict=True)] = SCENE_DEFAULT_INTERVAL_MS,
     ) -> CallToolResult:
-        """一次调用由后端持续采集固定实际场景，UTF-8 NDJSON逐条flush到MCP宿主新文件，进行中可读。duration_ms默认10000、100..120000，interval_ms默认100、50..5000且不大于时长。父目录须存在，已有文件拒绝；路径不发送游戏后端。header/frame/end保存实际时间、完整动态帧及事件覆盖。只有后端采样与订阅真实停止后才确认结束；中断或写盘失败保留完整记录，未取得停止证明明确UNCONFIRMED。数据不等同真人客户端播放。"""
+        """一次调用只读录制固定实际场景，UTF-8 NDJSON逐条flush到MCP宿主新文件，进行中可读。schema v2以header/baseline/events/checkpoint/end分别保存全场服务端基线、真实消息输出及状态检查点；输出含发送目标、协议字段和可观察顺序，额外诊断明确区分，不从状态差分推导动作。duration_ms默认10000、100..120000；interval_ms默认100、50..5000且不大于时长，仅控制事件批次写出与检查点，不丢弃间隔内短暂动作。父目录须存在，已有文件拒绝；路径不发送游戏后端。只有采集载体与订阅真实停止后才确认结束；中断或写盘失败保留完整记录，未取得停止证明明确UNCONFIRMED。网络提交和内存消费分别标明，数据不等同真人客户端播放。"""
         try:
             try:
                 output = open(output_file, "x", encoding="utf-8")

@@ -26,6 +26,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
+import java.util.Objects;
 
 /** Read-only value projection of one already-loaded map. Capture service owns identity and timing. */
 final class SceneCaptureFrames {
@@ -126,7 +128,8 @@ final class SceneCaptureFrames {
         coverage.put("unavailable_pet_owner_count", unavailablePetOwners);
         coverage.put("object_lifecycle_identity", "unknown");
         coverage.put("unsupported_fields", List.of("native_velocity", "native_object_lifecycle_generation",
-                "monster_mist_skill", "other_object_specific_fields"));
+                "monster_mist_skill", "other_object_specific_fields", "complete_character_appearance",
+                "complete_recipient_initialization_state"));
         coverage.put("consistency", "best_effort");
         coverage.put("field_sources", Map.of(
                 "stance", "native_last_movement_stance",
@@ -134,6 +137,14 @@ final class SceneCaptureFrames {
                 "max_hp_and_max_mp", "native_current_effective_character_maxima",
                 "attack_animation", "separate_attack_output_events_when_covered_not_inferred_from_stance"));
         coverage.put("client_playback_verified", false);
+        coverage.put("view", "full_server_scene_state_not_any_single_client_view");
+        coverage.put("initialization", Map.of("source", "native_objects_and_current_effects",
+                "reference", "MapleMap.sendObjectPlacement_and_native_PacketCreator",
+                "packets_generated", false, "packets_replayed", false,
+                "read_interval_atomic", false));
+        coverage.put("visibility", "per_character_native_ranged_object_tracker_not_complete_client_state");
+        coverage.put("diagnostic_only_fields", List.of("hp_and_mp_of_other_characters", "monster_controller_qualification",
+                "simulation", "server_inventory_ownership", "object_lifecycle_identity"));
         return Map.of("native", nativeState, "simulation", SceneRuntimeManager.snapshot(map), "coverage", coverage);
     }
 
@@ -174,6 +185,9 @@ final class SceneCaptureFrames {
             row.put("base_max_mp", player.getMaxMp());
             var weapon = player.getInventory(InventoryType.EQUIPPED).getItem((short) -11);
             row.put("weapon_item_id", weapon == null ? null : weapon.getItemId());
+            row.put("native_visible_objects", Arrays.stream(player.getVisibleMapObjects())
+                    .filter(Objects::nonNull).map(visible -> Map.of("oid", visible.getObjectId(),
+                            "type", visible.getType().name())).toList());
             row.put("buffs", player.getAllBuffs().stream().map(buff -> {
                 var value = new LinkedHashMap<String, Object>();
                 value.put("source_id", buff.effect.getSourceId());

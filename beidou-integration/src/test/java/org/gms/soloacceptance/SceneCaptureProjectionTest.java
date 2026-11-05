@@ -93,6 +93,7 @@ class SceneCaptureProjectionTest {
             when(player.getInventory(InventoryType.EQUIPPED)).thenReturn(equipped);
             when(equipped.getItem((short) -11)).thenReturn(new Item(1302000, (short) -11, (short) 1));
             when(player.getPets()).thenReturn(new Pet[3]);
+            when(player.getVisibleMapObjects()).thenReturn(new MapObject[0]);
             when(storage.getAllCharacters()).thenReturn(List.of(player));
             when(map.getAllPlayers()).thenReturn(List.of(player));
 

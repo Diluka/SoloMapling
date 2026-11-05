@@ -1,69 +1,51 @@
-# 场景数据快照与录制
+# 场景状态基线与输出录制
 
-`scene_snapshot(scene_ref, output_file?)` 保存一次场景数据帧；`scene_record(scene_ref, output_file, duration_ms?, interval_ms?)` 在一次后端请求中持续采样并流回数据。两个工具读取已加载的实际场景，不需要 `actor_open`，不创建地图、角色或场景模拟，不分配怪物控制权。工具沿现有管理员 JWT 和观察权限，只有 `solomapling.acceptance.enabled` 开启时提供。
+`scene_snapshot(scene_ref, output_file?)` 读取当前场景基线；`scene_record(scene_ref, output_file, duration_ms?, interval_ms?)` 保存开始基线、真实输出事件与周期状态检查点。采集只读已加载的实际场景，不需要 `actor_open`，不创建地图、角色或模拟宿主，不分配怪物控制权，也不为采集构造初始化包或补发消息。沿现有管理员 JWT 和观察权限，只有 `solomapling.acceptance.enabled` 开启时提供。
 
-`scene_ref` 来自 `game_observe(scope="world")` 的实际场景目录。采集绑定该引用对应的世界代次、频道、原生地图对象和事件实例；角色换图表现为原场景成员变化，录制不会跟随角色。已销毁、被同 ID 新对象替换或世界代次变化的目标会拒绝采集或提前结束。
+`scene_ref` 来自 `game_observe(scope="world")`。采集固定其世界代次、频道、原生地图对象及事件实例；同地图 ID 的其他实例不混用，角色换图不会使录制跟随角色。场景销毁、被同 ID 新对象替换或世界代次变化会拒绝或提前结束采集。
 
-本功能记录服务端诊断数据。原生状态、场景模拟摘要和服务端输出事件各有来源；服务器发送路径不能证明真人客户端已收到或播放。
+## 文件和时间
 
-## 工具与文件
+格式版本为 `schema_version=2`。快照是 UTF-8 JSON；录制是逐条刷新、可在录制期间读取的 UTF-8 NDJSON。文件保存在 MCP 宿主，父目录须已存在，目标文件须尚不存在；不覆盖旧证据。写出失败保留完整前缀，缺少 `end` 的文件属于部分记录。
 
-- 单帧：不传文件时返回包含 `schema_version`、`identity`、`source`、`static_scene` 和 `frame` 的结构化值；传文件时使用同一模型写入 UTF-8 JSON。
-- 连续录制：文件为 UTF-8 NDJSON，每条完整记录写完即刷新，录制期间可读取已有内容。顺序为 `header`、若干 `frame`、`end`。
-- 文件保存在 MCP 宿主，不写进游戏容器。父目录必须存在，目标文件必须尚不存在；已有证据不覆盖。输出失败时保留已完成记录，不将缺少 `end` 的前缀称为完整文件。
+录制顺序为 `header`、一次 `baseline`、若干独立 `events` 批次与 `checkpoint`、`end`。`baseline/checkpoint` 共用从 1 开始的 `seq`，`events` 使用独立序号；结束摘要分别记录 `frame_count` 和 `event_batch_count`。取消可能发生在基线写出前。
 
-默认时长为 10000ms，支持 100～120000ms；默认间隔为 100ms，支持 50～5000ms，间隔不能大于时长。第一帧立即采样；之后按单调时钟调度，错过周期记入 `missed_intervals`，不复制旧帧补帧。
+默认 10000ms/100ms，时长支持 100～120000ms，间隔支持 50～5000ms 且不超过时长。间隔仅控制事件批次刷新和状态检查点。移动、攻击等动作来自真实消息，短于间隔的动作仍逐条保存，不由状态差分推导。检查点错过的周期记入 `missed_intervals`，不复制旧帧补齐。
 
-当前边界由 capabilities 的 `scene_capture` 公告：无文件的单帧响应上限为 4MiB；每条逻辑 JSON/NDJSON 记录上限为 32MiB；每次录制总输出上限为 256MiB，后端为结束摘要预留一条记录容量。触及大小限制会明确失败或以部分结果结束，不按对象数量静默裁切。每进程最多同时录制 4 次；最多保留 256 条终态安全摘要，按 FIFO 淘汰，摘要不持有原生对象。
+订阅先于基线读取建立，读取期间发生的事件保存在后续事件批次中。基线包含真实读取起止时间，属于非原子的读取区间；区间内事件可能与基线重叠，不能把它们机械重放成一个精确客户端。中途开始采集没有入场前历史，也不会补造先前初始化输出。
 
-## 数据结构
+无文件快照上限 4MiB；每条逻辑记录上限 32MiB，每段录制上限 256MiB。最多同时 4 段录制，终态安全摘要最多 256 条且不持有原生引用。事件窗口每订阅 4096 条，大小限制、丢失和读取失败明确表达。限制以 capabilities 的 `scene_capture` 为准。
 
-`identity` 包含 `scene_ref`、世界代次、世界/频道/地图 ID、`map_instance_key` 及 `runtime_key`。源码身份来自服务包公开 manifest；不可取得时明确 `available=false`，不读取应用私密配置。
+## 全场基线与客户端可见内容
 
-`static_scene` 保存地图边界、foothold 端点及关联、梯绳、门户位置/目标和可读物理参数。平台以原生 foothold 表示，重力等当前未覆盖字段在 coverage 中列出。静态投影失败时返回 `read_status=unavailable` 和固定原因，动态采集仍可继续。
+快照结构保持 `identity`、`source`、`static_scene` 和 `frame`。`identity` 固定场景、世界代次、世界/频道/地图及实例键，`source` 使用服务包公开源码身份，不读取私密应用配置。
 
-动态 `frame` 包含：
+`static_scene` 保存原生地图边界、foothold 端点与关联、梯绳、门户及可读物理参数。`frame.native` 按 players、monsters、items、npcs、reactors、portals、pets、summons、mists、dragons、other_objects 分类，保留完整原生对象副本和数量/读取失败信息，不沿用普通观察的 100 条限制。
 
-| 字段 | 含义 |
-| --- | --- |
-| `seq` | 从 1 开始的本次已写帧序号。 |
-| `started_at` / `finished_at` | 本帧真实采样起止时间。 |
-| `elapsed_ms` | 从本次采集起点计算的单调相对时间。 |
-| `native` | 原生对象的独立值投影。 |
-| `simulation` | 已存在场景运行体的只读摘要；不存在时为不可用，不启动模拟。 |
-| `events` | 上一帧至本帧的已覆盖事件；单帧快照明确没有观察时间窗。 |
-| `coverage` | 当前未支持字段、读取失败、生命周期身份和一致性范围。 |
+位置、姿态、方向、职业、武器、Buff/异常及对象属性读取原生对象，语义参照原生初始化与更新来源。`stance` 是最近原生移动姿态，攻击动作由独立消息表示。HP/MP、控制者资格、物品归属和 `simulation` 等额外服务端诊断信息在 coverage 中标注，不能视为所有客户端收到的属性。
 
-`native` 按 players、monsters、items、npcs、reactors、portals、pets、summons、mists、dragons 及 other_objects 分类。每类包含 `total_count`、`recorded_count`、`failed_count`、`complete`、`truncated` 和 `items`。读取原生地图完整对象副本，不沿用普通观察的 100 条默认限制。宠物拥有者数组无法读取时，该类总数为未知，不能用 0 或重复角色代替。
+每个角色的 `native_visible_objects` 是原生远程对象可见性集合的当前副本。它不包含完整客户端状态，也不替代原生非范围对象、隐藏对象和逐消息排除规则。快照明确为全场服务端视图，`snapshot_view=server_scene_state_not_recipient_initialization`，不声称等同某个接收者的初始化包。
 
-角色包含实际 HP/MP、上限、姿态/朝向、职业、当前武器、来源与可读 Buff/异常摘要；怪物包含 HP/MP、姿态、当前 controller、客户端来源、有效驱动资格和仇恨标志。地物保留物品/金币、数量、位置和可读归属/拾取状态。未确认的原生对象生命周期代次始终为 `unknown`，OID 不被包装成可靠的生成身份；速度不从位置差异伪装成原生值。
+OID 不被包装成可靠的生成代次；对象生命周期代次未知时明确为 `unknown`。速度不从位置差分伪装成原生值。角色 `changing_maps` 直接读取原生状态，观察不会触发入场确认。`simulation` 只读取已有场景宿主，不启动模拟。
 
-每帧标记 `server_diagnostic / best_effort`，采样期间的对象变化可形成读取失败或部分覆盖，不承诺全场景同一时刻原子冻结。
+## 真实输出与诊断事件
 
-角色的 `changing_maps` 直接读取原生 `isChangingMaps()`，用于区分地图入场仍待确认和已经就绪；场景采集只观察该状态，不执行入场确认。
+每个事件带 `category`、`source`、来源序号、观察时间与 `values`：
 
-## 事件来源和缺口
+- `category=output` 记录已声明场景消息在最终发送路径中的实际目标。普通 Client 在原 `announcerLock` 内 `writeAndFlush` 返回后记录，地图范围过滤和排除规则已由原生完成。`recipient` 标明 CID、客户端来源和本次订阅日志内的传输引用；`recipient_seq` 表示该接收者的受关注消息顺序。它不声称跨接收者的全局游戏因果顺序。
+- AcceptanceClient 和 BotClient 没有网络 socket，记录其原有场景消息消费路径，明确为 `headless_scene_dispatch_returned`，不伪称网络提交或内存包缓冲的严格顺序。
+- `category=diagnostic` 保存原生对象成员、HP、controller、姿态、攻击解析/结算等回调，以及广播入口摘要。广播入口不等于最终发送，处理器返回不等于命中成功。
 
-只读探针仅在目标场景有订阅时收集安全值，覆盖已接入的原生对象出现/移除、角色生命与姿态、怪物生命和 controller、攻击/受击派发结果及地图广播摘要。精确来源列表和未覆盖路径见 `scene_capture.event_coverage`。
+输出消息保留 opcode、消息类别、关键协议字段、关联对象、解码完整性和已声明消息的原始协议字节。攻击保留动作、方向、速度、技能、目标与伤害行；属性更新保留消息实际携带的字段及新值。复杂初始化或尚未解开的字段如实标记 partial，原始字节可用于匹配版本协议复核。未知或损坏消息不补造字段；无关聊天、认证等消息不采集正文。具体已支持 opcode 与缺口由 `scene_capture.event_coverage.message_projection` 公告。
 
-事件记录 `source`、该来源的 `source_seq`、`kind`、`observed_at`、`observed_monotonic_ns`、`time_type=observed` 和 `values`。这些是探针观察顺序和观察时间，不是跨来源的原子顺序或未经证实的原生发生时间。
+攻击输出的 `direction/stance` 保留北斗构包方法的两个原字节名，不能直接解释为左右布尔值或移动姿态。`encoded_action` 按小端组合这两个字节；`producer_body_action_id` 和 `producer_facing_left` 按当前 Solo 构包规则解释低15位动作与最高位朝向，并保存来源。此解释不替代匹配版本客户端的实际播放核验。
 
-每个订阅窗口最多保留 4096 条事件。`events` 带有 `total_since_last`、`dropped`、`gap`、`probe_read_failures` 和 `subscription_closed`；溢出丢失和读取失败会显式保留。最后一次帧之后的冻结事件写入 `end.events`；因大小限制未写出的采样事件如可保留，写入 `end.unwritten_frame_events`。短于采样间隔的事件由这些已声明的原生来源记录，其他未接入路径继续标为未覆盖。
+普通网络记录只证明原生传输提交，未观察 socket 完成、客户端接收或播放。匹配版本客户端的消息格式、动作语义、接收者和顺序可以据此核对；真人画面属于辅助冒烟，单独记录。
 
-## 结束与停止确认
+事件批次包含 `total_since_last`、`dropped`、`gap`、`probe_read_failures` 和 `subscription_closed`。读取失败不打断原生发送。最后一个检查点之后的冻结事件进入 `end.events`；因大小限制未写出的批次可保留在 `end.unwritten_frame_events`。采样正常结束不代表全部协议覆盖，`coverage.complete` 继续为 false。
 
-`end` 和后端终态将以下事实分别表达：
+## 结束和收尾
 
-- `file_complete`：后端已将完整结束记录写入本次HTTP流。目标失效或主动取消也可以写出完整end；此字段单独不能证明MCP宿主文件已经落盘。
-- `completed_normally`、`recording_complete`：本次按请求时长完成；提前取消、失效或大小限制为 false。
-- `sampling_stopped`：本次采样循环已实际退出。
-- `subscription_released`：本次原场景事件订阅已同步解除。
-- `coverage.complete`：数据覆盖是否完整；当前原生诊断及事件来源仍有明确缺口，保持 false。
+时长结束、取消、断流、文件失败、场景销毁和旧代次分别保留结束原因。只有原采集载体真实停止且订阅释放后，才确认 `sampling_stopped` 和 `subscription_released`。桥接未取得证明时报告 `UNCONFIRMED`，不能补造完整结束记录。
 
-摘要另含 `capture_id`、`reason`、真实起止时间、帧数、实际时长、采样设置、错过周期、事件丢失及读取失败计数。常见原因有 `duration_elapsed`、`cancelled`、`interrupted`、`runtime_changed`、`stale_scene_ref`、`scene_destroyed`、`recording_size_limit` 和 `output_failed`。
-
-HTTP 内部入口为 `POST /solo/acceptance/v1/scene/snapshot`、`POST /scene/record`、`GET /scene/record/{capture_id}` 和 `POST /scene/record/{capture_id}/cancel`，均以 `/solo/acceptance/v1` 为前缀并绑定管理员身份。采样直接在本次流的服务载体执行，没有脱离连接继续运行的后台 sampler。取消只唤醒本次载体，终态在真实收尾后登记；查询不允许用其他 owner 的 ID 读取或取消。
-
-MCP 中断、连接或文件写入失败时，桥关闭流并按已收到的 `capture_id` 请求取消、查询真实终态。只有已确认 `sampling_stopped` 与 `subscription_released` 才能报告后端停止。尚未收到 ID、查询失败或超时均保留停止未确认，已有文件保持部分状态。正常录制完成与覆盖完整分别验收，采集本身不得改变角色、controller 或游戏活动。
-
-宿主文件完整性以MCP调用结果、文件实际包含的end及成功关闭文件为准。真实写盘失败时，后端可能已把end写入流并在终态保留 `file_complete=true`，同时本地文件仍缺少end；此时MCP返回写盘错误及 `recording_complete=false`，已经确认的后端停止事实仍可为 `CONFIRMED`。不要用后端流写出事实覆盖本地文件失败。
+验收按只读、身份、协议字段/接收者/顺序、短暂事件保留、文件不覆盖与真实释放的最小合同，以及有界真实入场/移动/合法攻击冒烟执行。随机路线、掉落和某秒击杀不作为固定门禁。源码、隔离运行、实际部署和真人画面证据分别保留。

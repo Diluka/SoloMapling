@@ -431,7 +431,7 @@ class BridgeClient:
             max_response_bytes=SCENE_MAX_RECORD_BYTES,
         )
         identity, frame = snapshot.get("identity"), snapshot.get("frame")
-        if (type(snapshot.get("schema_version")) is not int or snapshot["schema_version"] != 1 or not isinstance(identity, dict)
+        if (type(snapshot.get("schema_version")) is not int or snapshot["schema_version"] != 2 or not isinstance(identity, dict)
                 or identity.get("scene_ref") != scene_ref or not isinstance(snapshot.get("static_scene"), dict)
                 or not isinstance(frame, dict) or not isinstance(frame.get("coverage"), dict)):
             raise BridgeError("INVALID_RESPONSE", "场景快照缺少有效身份或同一数据帧模型。")
@@ -461,8 +461,8 @@ class BridgeClient:
                     if response.status_code != 200:
                         self._decode(httpx.Response(response.status_code))
                     pending = bytearray()
-                    sequence = 0
                     frames = 0
+                    event_batches = 0
                     async for part in response.aiter_bytes():
                         pending.extend(part)
                         while b"\n" in pending:
@@ -480,25 +480,37 @@ class BridgeClient:
                             if capture_id is None:
                                 identifier = record.get("capture_id")
                                 identity = record.get("identity")
-                                if (kind != "header" or not isinstance(identifier, str)
+                                if (kind != "header" or type(record.get("schema_version")) is not int
+                                        or record["schema_version"] != 2 or not isinstance(identifier, str)
                                         or IDENTIFIER.fullmatch(identifier) is None
                                         or not isinstance(identity, dict) or identity.get("scene_ref") != scene_ref):
                                     raise BridgeError("INVALID_RESPONSE", "场景录制缺少有效的首条身份记录。")
                                 capture_id = identifier
-                            elif kind == "frame":
+                            elif kind in ("baseline", "checkpoint"):
                                 current = record.get("seq")
-                                if (type(current) is not int or not sequence < current <= MAX_LONG
+                                if (kind != ("baseline" if frames == 0 else "checkpoint")
+                                        or type(current) is not int or current != frames + 1 or current > MAX_LONG
                                         or record.get("capture_id", capture_id) != capture_id):
                                     raise BridgeError("INVALID_RESPONSE", "场景录制帧序号无效。")
-                                sequence = current
                                 frames += 1
+                            elif kind == "events":
+                                current = record.get("seq")
+                                events = record.get("events")
+                                if (frames == 0 or type(current) is not int or current != event_batches + 1
+                                        or current > MAX_LONG or record.get("capture_id", capture_id) != capture_id
+                                        or not isinstance(events, dict) or not isinstance(events.get("items"), list)):
+                                    raise BridgeError("INVALID_RESPONSE", "场景录制事件批次或顺序无效。")
+                                event_batches += 1
                             elif kind == "end":
                                 if (record.get("capture_id") != capture_id or type(record.get("frame_count")) is not int
                                         or record["frame_count"] != frames or record.get("file_complete") is not True
+                                        or type(record.get("event_batch_count")) is not int
+                                        or record["event_batch_count"] != event_batches
                                         or record.get("sampling_stopped") is not True
                                         or record.get("subscription_released") is not True
-                                        or type(record.get("recording_complete")) is not bool):
-                                    raise BridgeError("INVALID_RESPONSE", "场景录制结束记录缺少真实收尾或帧数证明。")
+                                        or type(record.get("recording_complete")) is not bool
+                                        or (frames == 0 and record["recording_complete"])):
+                                    raise BridgeError("INVALID_RESPONSE", "场景录制结束记录缺少真实收尾或帧数与事件批次证明。")
                                 await on_record(record)
                                 return record
                             else:

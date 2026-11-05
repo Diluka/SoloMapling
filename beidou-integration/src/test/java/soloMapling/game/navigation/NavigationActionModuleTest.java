@@ -36,6 +36,7 @@ import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.scene.SceneRuntimeManager;
+import soloMapling.game.scene.SceneActorBinding;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -197,37 +198,86 @@ class NavigationActionModuleTest {
         return shoe;
     }
 
-    @Test void acknowledgedNativeEntryFallsToRealGroundBeforeTheRouteStarts() {
+    @Test void acknowledgedNativeEntryFallsWhileIdleThenAcceptsTheRoute() throws Exception {
         var fixture = fixture(98_982_134, new Point(0, -39),
                 List.of(foothold(-200, 0, 300, 0, 1)), List.of());
-        var result = fixture.moveTo(new Point(120, 0));
+        var binding = SceneRuntimeManager.current(fixture.server, fixture.module.context().characterRef());
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (binding.backgroundSnapshot().stream().noneMatch(task -> task.get("name").equals("scene-entry-fall-41")
+                && task.get("settled").equals(true)) && System.nanoTime() < until) Thread.sleep(5);
 
-        assertEquals("ARRIVED", result.get("outcome"), result.toString());
+        assertEquals(new Point(0, 0), fixture.position.get(), "entry falls without a navigation call");
         var falling = fixture.movements.stream().takeWhile(position -> position.y < 0).toList();
         assertTrue(falling.size() >= 2, "the observed native spawn falls through physical frames");
         assertTrue(falling.stream().allMatch(position -> position.x == 0 && position.y > -39));
-        assertTrue(((List<?>) result.get("edge_types")).containsAll(List.of("DROP", "WALK")));
+        assertTrue(binding.backgroundSnapshot().stream().anyMatch(task -> task.get("name").equals("scene-entry-fall-41")
+                && task.get("settled").equals(true)), "the entry's original work and carrier have actually settled");
+
+        var result = fixture.moveTo(new Point(120, 0));
+        assertEquals("ARRIVED", result.get("outcome"), result.toString());
+        assertTrue(((List<?>) result.get("edge_types")).contains("WALK"));
         assertEquals(0, fixture.position.get().y);
         assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
     }
 
-    @Test void pausingDuringTheEntryFallSettlesTheSameMotionBeforeReturning() throws Exception {
+    @Test void pausingNavigationWaitingForEntryFallLeavesTheSceneOwnedFallRunning() throws Exception {
+        var enteredLanding = new CountDownLatch(1);
+        var releaseLanding = new CountDownLatch(1);
+        var enteredCleanupFrame = new CountDownLatch(1);
+        var releaseCleanupFrame = new CountDownLatch(1);
+        var enteredScene = new AtomicReference<SceneActorBinding>();
         var fixture = fixture(98_982_135, new Point(0, -120),
-                List.of(foothold(-200, 0, 300, 0, 1)), List.of());
-        var result = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(120, 0)));
-        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-        while (fixture.position.get().y == -120 && System.nanoTime() < until) Thread.sleep(5);
-        assertTrue(fixture.position.get().y > -120 && fixture.position.get().y < 0);
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured -> {
+                    doAnswer(call -> {
+                        enteredLanding.countDown();
+                        assertTrue(releaseLanding.await(5, TimeUnit.SECONDS));
+                        var binding = enteredScene.get();
+                        if (binding != null && binding.context().scope().snapshot().diagnostics().stream()
+                                .anyMatch(work -> work.kind() == ExecutionScope.WorkKind.CLEANUP
+                                        && work.bodyState() == ExecutionScope.BodyState.RUNNING)) {
+                            enteredCleanupFrame.countDown();
+                            assertTrue(releaseCleanupFrame.await(5, TimeUnit.SECONDS));
+                        }
+                        return null;
+                    }).when(configured.map).movePlayer(eq(configured.character), any());
+                });
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        enteredScene.set(binding);
+        try {
+            assertTrue(enteredLanding.await(3, TimeUnit.SECONDS));
+            var result = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(120, 0)));
+            long waitingUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (fixture.runtime.events().events().stream().noneMatch(event -> "map_entry_landing_wait".equals(event.reason()))
+                    && System.nanoTime() < waitingUntil) Thread.sleep(5);
+            var waiting = fixture.runtime.events().events().stream()
+                    .filter(event -> "map_entry_landing_wait".equals(event.reason())).findFirst().orElseThrow();
+            assertEquals(context.reference().instanceId(), waiting.moduleId());
+            assertTrue(context.scope().snapshot().diagnostics().stream().anyMatch(work -> work.id() == waiting.workId()
+                    && work.bodyState() == ExecutionScope.BodyState.RUNNING));
+            var stopped = fixture.runtime.stop(context.reference(), CharacterRuntime.StopMode.PAUSE);
 
-        var stopped = fixture.runtime.stop(fixture.module.context().reference(), CharacterRuntime.StopMode.PAUSE);
-
-        assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
-        var facts = result.get(5, TimeUnit.SECONDS);
-        assertEquals("CANCELLED", facts.get("outcome"), facts.toString());
-        assertEquals(true, facts.get("stable"));
+            assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
+            var facts = result.get(5, TimeUnit.SECONDS);
+            assertEquals("CANCELLED", facts.get("outcome"), facts.toString());
+            assertTrue(binding.backgroundSnapshot().stream().anyMatch(task -> task.get("name").equals("scene-entry-fall-41")
+                    && task.get("settled").equals(false) && task.get("cancel_requested").equals(false)));
+        } finally { releaseLanding.countDown(); }
+        try {
+            assertTrue(enteredCleanupFrame.await(3, TimeUnit.SECONDS));
+            var worldStop = ExecutionScope.tryBeginWorldStop().orElseThrow();
+            binding.context().scope().joinWorldStop(worldStop);
+            assertTrue(binding.active(), "world-stop cancellation can precede the native leave hook");
+            fixture.runtime.beginClose(Optional.of(worldStop));
+            assertFalse(fixture.runtime.whenModulesDrained().toCompletableFuture().isDone());
+            assertFalse(binding.scene().closed(), "the entry's native cleanup frame still owns the single cleanup slot");
+        } finally { releaseCleanupFrame.countDown(); }
+        fixture.runtime.whenModulesDrained().toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertEquals(new Point(0, 0), fixture.position.get());
-        assertEquals(0, fixture.module.context().scope().resources().snapshot().outstanding());
-        assertEquals(0, fixture.module.context().scope().snapshot().acceptedWork());
+        assertTrue(binding.scene().closed());
+        assertEquals(0, binding.context().scope().resources().snapshot().outstanding());
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+        assertEquals(0, context.scope().snapshot().acceptedWork());
     }
 
     @Test void javaActionEntryReturnsTypedResultAfterNativeMovementAndWorkSettlement() throws Exception {

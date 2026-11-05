@@ -1,6 +1,7 @@
 package soloMapling.beidou;
 
 import org.gms.client.Character;
+import org.gms.client.BotClient;
 import org.gms.client.Client;
 import org.gms.net.packet.InPacket;
 import org.gms.net.packet.Packet;
@@ -12,9 +13,52 @@ import org.gms.server.maps.AbstractAnimatedMapObject;
 import org.gms.server.maps.MapObject;
 import org.gms.server.maps.MapleMap;
 import org.gms.soloacceptance.SceneCaptureEvents;
+import org.gms.soloacceptance.actor.AcceptanceClient;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 /** Read-only observation of existing native paths; never creates a role or starts scene simulation. */
 public privileged aspect SceneCaptureEventsHooks {
+    private final ThreadLocal<Packet> transitionPacket = new ThreadLocal<>();
+    private final ThreadLocal<MapleMap> transitionTarget = new ThreadLocal<>();
+
+    // Native warp sends SET_FIELD before actor.map changes. Associate only that exact packet with its destination.
+    void around(Character actor, MapleMap destination, java.awt.Point position, Packet packet):
+            execution(private void Character.changeMapInternal(MapleMap, java.awt.Point, Packet))
+            && this(actor) && args(destination, position, packet) {
+        Packet previousPacket = transitionPacket.get();
+        MapleMap previousTarget = transitionTarget.get();
+        transitionPacket.set(packet);
+        transitionTarget.set(destination);
+        try {
+            proceed(actor, destination, position, packet);
+        } finally {
+            if (previousPacket == null) {
+                transitionPacket.remove();
+                transitionTarget.remove();
+            } else {
+                transitionPacket.set(previousPacket);
+                transitionTarget.set(previousTarget);
+            }
+        }
+    }
+
+    // This call is inside Client's original announcerLock, so recording cannot reorder its sends.
+    after(Client client, Packet packet) returning:
+            call(* io.netty.channel.Channel.writeAndFlush(Object))
+            && withincode(void Client.sendPacket(Packet)) && this(client) && args(packet) {
+        SceneCaptureEvents.output(client, packet, true,
+                transitionPacket.get() == packet ? transitionTarget.get() : null);
+    }
+
+    // Headless sources have no network channel. Keep their consumed scene outputs explicitly separate.
+    after(Client client, Packet packet) returning:
+            call(void SceneRuntimeManager.packet(Character, Packet)) && this(client) && args(*, packet)
+            && (withincode(void BotClient.sendPacket(Packet))
+                || withincode(void AcceptanceClient.sendPacket(Packet))) {
+        SceneCaptureEvents.output(client, packet, false,
+                transitionPacket.get() == packet ? transitionTarget.get() : null);
+    }
+
     void around(Monster monster, Character next):
             execution(private void Monster.setController(Character)) && this(monster) && args(next) {
         if (!SceneCaptureEvents.interested(monster.getMap())) { proceed(monster, next); return; }

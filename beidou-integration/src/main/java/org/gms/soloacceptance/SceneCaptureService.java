@@ -30,7 +30,7 @@ public final class SceneCaptureService {
 
     public static Map<String, Object> publicCapabilities() {
         var result = new LinkedHashMap<String, Object>();
-        result.put("schema_version", 1);
+        result.put("schema_version", 2);
         result.put("enabled_tools", java.util.List.of("scene_snapshot", "scene_record"));
         result.put("actor_required", false);
         result.put("read_only", true);
@@ -48,6 +48,9 @@ public final class SceneCaptureService {
         result.put("maximum_recording_bytes", MAX_RECORDING_BYTES);
         result.put("event_coverage", SceneCaptureEvents.coverage());
         result.put("snapshot_consistency", "best_effort");
+        result.put("snapshot_view", "server_scene_state_not_recipient_initialization");
+        result.put("recording_model", "baseline_output_events_and_state_checkpoints");
+        result.put("interval_semantics", "event_batch_flush_and_state_checkpoint_only");
         return Map.copyOf(result);
     }
 
@@ -65,9 +68,10 @@ public final class SceneCaptureService {
         frame.put("events", Map.of("items", java.util.List.of(), "coverage",
                 Map.of("complete", false, "reason", "snapshot_has_no_observation_interval")));
         var result = new LinkedHashMap<String, Object>();
-        result.put("schema_version", 1);
+        result.put("schema_version", 2);
         result.put("information_level", "server_diagnostic");
         result.put("snapshot_consistency", "best_effort");
+        result.put("snapshot_view", "server_scene_state_not_recipient_initialization");
         result.put("identity", target.identity());
         result.put("source", observations.captureSourceIdentity());
         result.put("static_scene", staticScene);
@@ -87,6 +91,7 @@ public final class SceneCaptureService {
         long deadline = baseline + TimeUnit.MILLISECONDS.toNanos(request.durationMs());
         long next = baseline;
         long frames = 0;
+        long eventBatches = 0;
         long bytes = 0;
         long missed = 0;
         long droppedEvents = 0;
@@ -103,12 +108,17 @@ public final class SceneCaptureService {
             subscription = SceneCaptureEvents.open(target.map());
             var header = new LinkedHashMap<String, Object>();
             header.put("type", "header");
-            header.put("schema_version", 1);
+            header.put("schema_version", 2);
             header.put("capture_id", recording.id);
             header.put("identity", target.identity());
             header.put("source", observations.captureSourceIdentity());
-            header.put("information_level", "server_diagnostic");
+            header.put("information_level", "observed_server_output_and_diagnostic_state");
             header.put("snapshot_consistency", "best_effort");
+            header.put("snapshot_view", "server_scene_state_not_recipient_initialization");
+            header.put("recording_model", "baseline_output_events_and_state_checkpoints");
+            header.put("interval_semantics", "event_batch_flush_and_state_checkpoint_only");
+            header.put("capture_start", "mid_scene_no_prior_output_replay");
+            header.put("baseline_event_overlap", "subscription_open_before_baseline_read_events_may_overlap_read_interval");
             header.put("started_at", started.toString());
             header.put("settings", Map.of("duration_ms", request.durationMs(), "interval_ms", request.intervalMs()));
             header.put("static_scene", staticScene(target));
@@ -124,7 +134,7 @@ public final class SceneCaptureService {
                 var frame = new LinkedHashMap<>(SceneCaptureFrames.frame(target.map()));
                 observations.requireCaptureCurrent(target);
                 if (subscription.sceneDisposed()) { reason = "scene_destroyed"; break; }
-                frame.put("type", "frame");
+                frame.put("type", frames == 0 ? "baseline" : "checkpoint");
                 frame.put("seq", frames + 1);
                 frame.put("started_at", frameStarted.toString());
                 var events = subscription.drain();
@@ -133,13 +143,15 @@ public final class SceneCaptureService {
                 probeFailures += (long) events.get("probe_read_failures");
                 var coverage = (Map<?, ?>) frame.get("coverage");
                 failedObjectReads += (int) coverage.get("failed_object_count");
-                frame.put("events", events);
                 frame.put("finished_at", Instant.now().toString());
                 frame.put("elapsed_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - baseline));
                 frame.put("missed_intervals", missed);
                 var encoded = encode(frame);
+                var eventBatch = Map.<String, Object>of("type", "events", "seq", eventBatches + 1,
+                        "events", events, "elapsed_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - baseline));
+                var encodedEvents = encode(eventBatch);
                 // Reserve one logical record for the final summary and trailing frozen events.
-                if (bytes + encoded.length + 1 > MAX_RECORDING_BYTES - MAX_RECORD_BYTES) {
+                if (bytes + encoded.length + encodedEvents.length + 2 > MAX_RECORDING_BYTES - MAX_RECORD_BYTES) {
                     reason = "recording_size_limit";
                     break;
                 }
@@ -148,6 +160,11 @@ public final class SceneCaptureService {
                 output.flush();
                 bytes += encoded.length + 1;
                 frames++;
+                output.write(encodedEvents);
+                output.write('\n');
+                output.flush();
+                bytes += encodedEvents.length + 1;
+                eventBatches++;
                 unwrittenEvents = Map.of();
                 next += interval;
                 long now = System.nanoTime();
@@ -184,13 +201,14 @@ public final class SceneCaptureService {
             summary.put("started_at", started.toString());
             summary.put("finished_at", Instant.now().toString());
             summary.put("frame_count", frames);
+            summary.put("event_batch_count", eventBatches);
             summary.put("elapsed_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - baseline));
             summary.put("missed_intervals", missed);
             summary.put("settings", Map.of("duration_ms", request.durationMs(), "interval_ms", request.intervalMs()));
             summary.put("completed_normally", "duration_elapsed".equals(reason));
             summary.put("recording_complete", "duration_elapsed".equals(reason));
             summary.put("coverage", Map.of("complete", false,
-                    "reason", "native_diagnostic_and_declared_event_sources_are_partial",
+                    "reason", "declared_output_protocols_and_diagnostic_sources_are_partial",
                     "dropped_event_count", droppedEvents, "probe_read_failures", probeFailures,
                     "failed_object_reads", failedObjectReads, "unwritten_sample", !unwrittenEvents.isEmpty()));
             summary.put("sampling_stopped", true);
