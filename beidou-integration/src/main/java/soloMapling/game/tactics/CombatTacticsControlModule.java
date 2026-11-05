@@ -283,6 +283,7 @@ public final class CombatTacticsControlModule implements ControlModule {
         points.add(new Point(observation.position().x - config.localEscapeDistancePx(), observation.position().y));
         points.add(new Point(observation.position().x + config.localEscapeDistancePx(), observation.position().y));
         var plans = new ArrayList<NavigationPlan>();
+        boolean planningTimedOut = false;
         for (var point : points) {
             if (work.cancelRequested()) return;
             var ground = RuntimeNavigationEngine.groundPoint(binding.nativeScene().map(), point);
@@ -297,6 +298,8 @@ public final class CombatTacticsControlModule implements ControlModule {
                     new MoveToRequest(ground.x, ground.y, (int) Math.min(120_000L, budget)), work);
             if (planned.status() == ModuleCall.Status.SUCCEEDED && planned.result().outcome() == NavigationPlan.Outcome.PLANNED
                     && planned.result().prediction().arrived()) plans.add(planned.result());
+            else if (planned.status() == ModuleCall.Status.SUCCEEDED
+                    && planned.result().outcome() == NavigationPlan.Outcome.TIMED_OUT) planningTimedOut = true;
         }
         int window = Math.max(config.predictionWindowMs(), (int) binding.dispatch().actionLockRemainingMs());
         if (proposal != null) window = Math.max(window, proposal.actionDurationMs());
@@ -325,6 +328,10 @@ public final class CombatTacticsControlModule implements ControlModule {
         }
         var decision = planner.decide(observation.hp(), observation.maxHp(), config.reserveHpPct(), engaged,
                 proposal != null && System.nanoTime() >= proposal.availableAtNanos() && binding.dispatch().actionLockRemainingMs() == 0, candidates);
+        if (planningTimedOut && decision.action() == TacticalDirective.Action.WAIT) {
+            decision = new CombatTacticsPlanner.Decision(TacticalDirective.Action.WAIT, "navigation_plan_timeout", null,
+                    decision.priority(), decision.risk());
+        }
         if (binding.dispatch().currentPriority() == SceneActionDispatch.Priority.EQUIPMENT_PICKUP
                 && decision.priority() != SceneActionDispatch.Priority.LETHAL_ESCAPE) {
             decision = new CombatTacticsPlanner.Decision(TacticalDirective.Action.DISENGAGE, "equipment_pickup_preempted", null,

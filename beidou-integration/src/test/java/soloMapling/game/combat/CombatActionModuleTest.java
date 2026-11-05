@@ -58,6 +58,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -131,18 +133,15 @@ class CombatActionModuleTest {
     }
 
     @Test void aLegalLongGroundApproachUsesTheEngagementBudgetThenReachesTheSameTarget() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture(false)) {
             fixture.hp.set(1);
             when(fixture.target.getPosition()).thenReturn(new Point(650, 0));
-            var navigation = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
-                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
-                    NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, fixture.server),
-                    NavigationActionModule.DEFINITION.exports());
-            fixture.runtime.mount(navigation, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
+            fixture.mountNavigation();
             var planned = fixture.caller.call(NavigationActionModule.PLAN, new MoveToRequest(590, 0, 10_000)).result();
             assertEquals(NavigationPlan.Outcome.PLANNED, planned.outcome());
             assertTrue(planned.prediction().arrived());
             assertTrue(planned.prediction().elapsedMs() > 4000, "the normal legal approach exceeds the old tactical preview cap");
+            fixture.mountTactics();
 
             var result = fixture.caller.call(CombatActionModule.ENGAGE,
                     new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 10_000)).result();
@@ -153,6 +152,38 @@ class CombatActionModuleTest {
             assertEquals(0, result.hits().getFirst().hpAfter());
             fixture.assertCombatDrained();
         }
+    }
+
+    @Test void anExpiredReadOnlyPlanIsAResultAndTheTacticalMonitorRemainsAvailable() throws Exception {
+        var geometryEntered = new CountDownLatch(1);
+        var geometryReleased = new CountDownLatch(1);
+        try (var fixture = new Fixture(Job.THIEF, 1332000, configured -> {
+            var geometry = configured.map.getFootholds();
+            doAnswer(call -> {
+                geometryEntered.countDown();
+                assertTrue(geometryReleased.await(5, TimeUnit.SECONDS));
+                return geometry;
+            }).when(configured.map).getFootholds();
+        }, false)) {
+            fixture.mountNavigation();
+            var planned = CompletableFuture.supplyAsync(() -> fixture.caller.call(NavigationActionModule.PLAN,
+                    new MoveToRequest(590, 0, 1)).result());
+            try {
+                assertTrue(geometryEntered.await(5, TimeUnit.SECONDS));
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1);
+                while (System.nanoTime() < deadline) Thread.onSpinWait();
+            } finally { geometryReleased.countDown(); }
+            var expired = planned.get(5, TimeUnit.SECONDS);
+            assertEquals(NavigationPlan.Outcome.TIMED_OUT, expired.outcome());
+            assertEquals("navigation_plan_timeout", expired.reason());
+            assertEquals(new Point(0, 0), fixture.position.get());
+            var tactics = fixture.mountTactics();
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (tactics.status().observations() < 2 && System.nanoTime() < until) Thread.sleep(5);
+            assertEquals(CombatTacticsControlModule.State.RUNNING, tactics.status().state());
+            assertTrue(tactics.status().observations() >= 2);
+            fixture.assertCombatDrained();
+        } finally { geometryReleased.countDown(); }
     }
 
     @Test void normalTimeoutDrainsTheEngagementWithoutAnUncaughtLaneCancellation() throws Exception {
@@ -337,11 +368,7 @@ class CombatActionModuleTest {
             }, () -> {});
             opening.completion().toCompletableFuture().join();
             if (tactics) {
-                var definition = new ModuleDefinition<CombatTacticsControlModule.Config, CombatTacticsControlModule>(
-                        CombatTacticsControlModule.DEFINITION.typeId(), CombatTacticsControlModule.DEFINITION.controls(),
-                        CombatTacticsControlModule.DEFINITION.limits(), config -> new CombatTacticsControlModule(config, server),
-                        CombatTacticsControlModule.DEFINITION.exports());
-                runtime.mount(definition, new ModuleSelection<>("tactics", CombatTacticsControlModule.DEFAULT_CONFIG, true));
+                mountTactics();
             }
             var combat = new ModuleDefinition<CombatActionModule.Config, CombatActionModule>(
                     CombatActionModule.DEFINITION.typeId(), CombatActionModule.DEFINITION.controls(),
@@ -351,6 +378,22 @@ class CombatActionModuleTest {
             var controller = new ModuleDefinition<Void, RuntimeModule>("test-controller", Set.of(),
                     new ExecutionScope.Limits(8, 2, 4, 2), config -> new RuntimeModule() {}, List.of());
             caller = runtime.context(runtime.mount(controller, new ModuleSelection<>("controller", null, true)).reference());
+        }
+
+        CombatTacticsControlModule mountTactics() {
+            var definition = new ModuleDefinition<CombatTacticsControlModule.Config, CombatTacticsControlModule>(
+                    CombatTacticsControlModule.DEFINITION.typeId(), CombatTacticsControlModule.DEFINITION.controls(),
+                    CombatTacticsControlModule.DEFINITION.limits(), config -> new CombatTacticsControlModule(config, server),
+                    CombatTacticsControlModule.DEFINITION.exports());
+            return runtime.mount(definition, new ModuleSelection<>("tactics", CombatTacticsControlModule.DEFAULT_CONFIG, true)).instance();
+        }
+
+        void mountNavigation() {
+            var definition = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
+                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
+                    NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, server),
+                    NavigationActionModule.DEFINITION.exports());
+            runtime.mount(definition, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
         }
 
         void assertCombatDrained() {

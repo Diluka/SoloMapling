@@ -151,17 +151,14 @@ class TrainingScheduleControlModuleTest {
                     f.actor, f.actor, f.client, (byte) 0, true);
             drop.setObjectId(800001);
             drop.setDropTime(System.currentTimeMillis() - 1_000);
-            var unknownPickup = new CountDownLatch(1);
             var unknown = new PickupResult(
                     PickupResult.Outcome.INDETERMINATE, "native_pickup_outcome_unknown", drop.getObjectId(),
                     JUNK, 1, 0, true, false, true, true, false);
-            doAnswer(call -> { unknownPickup.countDown(); return unknown; })
-                    .when(f.nativeActions).pickup(any(), any(), any());
-            // Prepare the native outcome before publishing a drop to an already-running control.
-            when(f.maps.get(TOWN).getMapObject(drop.getObjectId())).thenReturn(drop);
-            when(f.maps.get(TOWN).getMapObjects()).thenReturn(List.of(drop));
+            // The fixture's existing answers read these values; never restub mocks used by active controls.
+            f.pickupOutcome.set(unknown);
+            f.townObjects.set(List.of(drop));
             try {
-                assertTrue(unknownPickup.await(5, TimeUnit.SECONDS));
+                assertTrue(f.pickupOutcomeObserved.await(5, TimeUnit.SECONDS));
                 eventually(() -> f.loot.snapshot().indeterminateSequence() > 0);
                 assertEquals(TrainingScheduleStatus.Stage.TO_TRAINING, f.schedule.status().stage());
             }
@@ -394,6 +391,9 @@ class TrainingScheduleControlModuleTest {
         final Map<Integer, MapleMap> maps = new HashMap<>();
         final Map<InventoryType, Inventory> bags = new EnumMap<>(InventoryType.class);
         final Map<Integer, MapObject> drops = new java.util.concurrent.ConcurrentHashMap<>();
+        final AtomicReference<List<MapObject>> townObjects = new AtomicReference<>(List.of());
+        final AtomicReference<PickupResult> pickupOutcome = new AtomicReference<>();
+        final CountDownLatch pickupOutcomeObserved = new CountDownLatch(1);
         final AtomicInteger dropIds = new AtomicInteger(1000);
         final Map<String, CharacterRuntime.ModuleContext> contexts = new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicReference<MapleMap> currentMap = new AtomicReference<>();
@@ -448,8 +448,11 @@ class TrainingScheduleControlModuleTest {
             bags.get(InventoryType.ETC).addItem(new Item(KEPT, (short) 0, (short) 7));
             for (int mapId : List.of(TRAINING, TOWN, MARKET, STORE)) {
                 var map = mock(MapleMap.class); maps.put(mapId, map); when(map.getId()).thenReturn(mapId);
-                when(map.getMapObjects()).thenAnswer(call -> mapId == TRAINING ? new ArrayList<>(drops.values()) : List.of());
-                when(map.getMapObject(anyInt())).thenAnswer(call -> mapId == TRAINING ? drops.get(call.getArgument(0)) : null);
+                when(map.getMapObjects()).thenAnswer(call -> mapId == TRAINING ? new ArrayList<>(drops.values())
+                        : mapId == TOWN ? townObjects.get() : List.of());
+                when(map.getMapObject(anyInt())).thenAnswer(call -> mapId == TRAINING ? drops.get(call.getArgument(0))
+                        : mapId == TOWN ? townObjects.get().stream()
+                                .filter(object -> object.getObjectId() == call.<Integer>getArgument(0)).findFirst().orElse(null) : null);
                 when(map.getCharacterById(id)).thenAnswer(call -> present.get() && currentMap.get() == map ? actor : null);
             }
             addPortal(TRAINING, 17, "east00", TOWN, "west00", 60);
@@ -549,6 +552,8 @@ class TrainingScheduleControlModuleTest {
                         new PortalResult.Dispatch(true, true, false), new PortalResult.Transition(true, true, true, false, true), true, false, null);
             });
             when(nativeActions.pickup(any(), any(), any())).thenAnswer(call -> {
+                var prepared = pickupOutcome.get();
+                if (prepared != null) { pickupOutcomeObserved.countDown(); return prepared; }
                 PickupRequest request = call.getArgument(0); CharacterRuntime.ModuleContext context = call.getArgument(1);
                 ExecutionScope.WorkHandle work = call.getArgument(2); MapItem target = request.binding().target();
                 int itemId = target.getItem().getItemId(), quantity = target.getItem().getQuantity();

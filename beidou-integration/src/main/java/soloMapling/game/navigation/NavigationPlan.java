@@ -7,6 +7,7 @@ import soloMapling.game.scene.SceneActorBinding;
 import java.awt.Point;
 import java.util.Map;
 import java.util.LinkedHashMap;
+import soloMapling.game.action.NativeActionService;
 
 /** A trusted local plan; its native identity and physics session never cross the JSON boundary. */
 public final class NavigationPlan {
@@ -38,22 +39,25 @@ public final class NavigationPlan {
         var actor = binding.characterRef().character();
         var start = new Point(actor.getPosition());
         var target = new Point(input.x(), input.y());
-        RuntimeNavigationEngine.Session engine;
         try {
-            engine = binding.scene().characters().motion(binding).atAcknowledgedEntry()
+            var engine = binding.scene().characters().motion(binding).atAcknowledgedEntry()
                     ? RuntimeNavigationEngine.planFromEntry(actor, target, checkpoint)
                     : RuntimeNavigationEngine.plan(actor, target, checkpoint);
+            checkpoint.run();
+            if (!start.equals(actor.getPosition())) return new NavigationPlan(binding.nativeScene(), start, target,
+                    null, budget, Outcome.CONTEXT_CHANGED, "navigation_plan_start_changed", config, deadline);
+            var plan = new NavigationPlan(binding.nativeScene(), start, target, engine, budget, Outcome.PLANNED, null, config, deadline);
+            plan.prediction = engine.preview(budget, checkpoint);
+            return plan;
         } catch (RuntimeNavigationEngine.Failure failure) {
             var outcome = failure.reason().startsWith("UNSUPPORTED") ? Outcome.UNSUPPORTED
                     : "NO_PATH".equals(failure.reason()) ? Outcome.NO_PATH : Outcome.READ_FAILED;
             return new NavigationPlan(binding.nativeScene(), start, target, null, budget, outcome, failure.reason(), config, deadline);
+        } catch (NativeActionService.Invalid expired) {
+            if (!"navigation_plan_timeout".equals(expired.reason())) throw expired;
+            return new NavigationPlan(binding.nativeScene(), start, target, null, budget,
+                    Outcome.TIMED_OUT, expired.reason(), config, deadline);
         }
-        checkpoint.run();
-        if (!start.equals(actor.getPosition())) return new NavigationPlan(binding.nativeScene(), start, target,
-                null, budget, Outcome.CONTEXT_CHANGED, "navigation_plan_start_changed", config, deadline);
-        var plan = new NavigationPlan(binding.nativeScene(), start, target, engine, budget, Outcome.PLANNED, null, config, deadline);
-        plan.prediction = engine.preview(budget, checkpoint);
-        return plan;
     }
 
     public GameContext.SceneRef scene() { return scene; }
