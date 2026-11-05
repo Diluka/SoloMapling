@@ -10,18 +10,24 @@ import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.server.Shop;
+import org.gms.server.ItemInformationProvider;
 import org.gms.server.life.NPC;
 import org.gms.server.maps.MapleMap;
+import org.gms.server.maps.MapItem;
+import org.gms.server.maps.MapObject;
 import org.gms.server.maps.Portal;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import soloMapling.beidou.CharacterTestContext;
+import soloMapling.beidou.InventoryMetadataTestContext;
 import soloMapling.game.action.PortalResult;
+import soloMapling.game.action.PickupRequest;
+import soloMapling.game.action.PickupResult;
 import soloMapling.game.action.ReviveResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.hunting.HuntingControlModule;
 import soloMapling.game.hunting.HuntingSnapshot;
@@ -32,8 +38,8 @@ import soloMapling.game.inventory.CapacityRule;
 import soloMapling.game.inventory.InventoryFacts;
 import soloMapling.game.inventory.SaleItem;
 import soloMapling.game.inventory.SaleRules;
-import soloMapling.game.loot.LootActionModule;
-import soloMapling.game.loot.LootResult;
+import soloMapling.game.loot.LootControlModule;
+import soloMapling.game.loot.LootStatus;
 import soloMapling.game.nativeaction.NativeActionModule;
 import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.navigation.NavigationResult;
@@ -80,8 +86,106 @@ class TrainingScheduleControlModuleTest {
     private static final int NPC_ID = 1011100, KEPT = 4000001, JUNK = 4000000, UNSALEABLE = 4000002;
     private static final AtomicInteger IDS = new AtomicInteger(9200);
 
-    @BeforeEach void startWorld() { CharacterTestContext.install(); WorldEpoch.onWorldStarted(); }
+    @BeforeEach void startWorld() throws Exception { InventoryMetadataTestContext.install(); WorldEpoch.onWorldStarted(); }
     @AfterEach void stopWorld() { ExecutionScope.tryBeginWorldStop(); }
+
+    @Test void aCapacityRejectedReadSettlesBeforeTheSameScheduleRunUsesItsNextObservationOpportunity() throws Exception {
+        try (var f = new Fixture(JUNK, 1, 0, 0, false)) {
+            eventually(() -> f.schedule.status().stage() == TrainingScheduleStatus.Stage.HUNTING);
+            f.schedule.stop();
+            f.recovery.stop();
+            f.loot.stop();
+            var owner = f.contexts.get("hunting");
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var queued = new ArrayList<ExecutionScope.WorkHandle>();
+            var blocker = owner.acceptWork();
+            queued.add(blocker);
+            assertEquals(CharacterCommandLane.Status.ENQUEUED, owner.submit("hunting-observe", blocker, () -> {},
+                    () -> { entered.countDown(); awaitActualRelease(release); }, () -> {}).status());
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                for (int count = 0; count < 6; count++) {
+                    var work = owner.acceptWork();
+                    queued.add(work);
+                    assertEquals(CharacterCommandLane.Status.ENQUEUED,
+                            owner.submit("hunting-observe", work, () -> {}, () -> {}, () -> {}).status());
+                }
+                assertEquals(7, f.runtime.snapshot().lane().pending());
+                var started = f.schedule.start();
+                long runId = started.status().runId();
+                eventually(() -> f.schedule.status().state() == TrainingScheduleStatus.State.FAILED
+                        || f.schedule.status().toMap().get("observation_admission") != null);
+                assertEquals(TrainingScheduleStatus.State.RUNNING, f.schedule.status().state(), f.schedule.status().toString());
+                var admission = assertInstanceOf(Map.class, f.schedule.status().toMap().get("observation_admission"));
+                assertEquals("REJECTED", admission.get("status"));
+                assertEquals("CAPACITY", admission.get("rejection"));
+                var step = assertInstanceOf(Map.class, admission.get("step"));
+                assertEquals(true, step.get("rejected"));
+                assertEquals(true, step.get("skipped"));
+                assertEquals(true, step.get("carrier_settled"));
+                assertEquals(true, step.get("settled"));
+                assertEquals(false, assertInstanceOf(Map.class, admission.get("parent")).get("cancel_requested"));
+                assertEquals(true, admission.get("scope_active"));
+                assertEquals(7, f.runtime.snapshot().lane().pending());
+                var scope = f.runtime.context(f.scheduleRef).scope().snapshot();
+                assertEquals(1, scope.acceptedWork(), "busy reads return their work before waiting for the next opportunity");
+                release.countDown();
+                queued.forEach(work -> work.completion().toCompletableFuture().join());
+                f.loot.start();
+                eventually(() -> f.schedule.status().stage() == TrainingScheduleStatus.Stage.HUNTING);
+                assertEquals(runId, f.schedule.status().runId());
+                assertEquals(TrainingScheduleStatus.State.RUNNING, f.schedule.status().state());
+                f.schedule.stop();
+                f.loot.stop();
+                assertEquals(0, f.runtime.context(f.scheduleRef).scope().snapshot().acceptedWork());
+                assertEquals(0, f.runtime.snapshot().lane().pending());
+            } finally { release.countDown(); }
+        }
+    }
+
+    @Test void anUnknownPickupDuringInitialTravelCannotBecomeTheFirstCycleBaseline() throws Exception {
+        try (var f = new Fixture(JUNK, 1, 0, 0, false, TOWN)) {
+            assertTrue(f.blockedCallEntered.await(5, TimeUnit.SECONDS));
+            var drop = new MapItem(new Item(JUNK, (short) 0, (short) 1), new Point(f.position.get()),
+                    f.actor, f.actor, f.client, (byte) 0, true);
+            drop.setObjectId(800001);
+            drop.setDropTime(System.currentTimeMillis() - 1_000);
+            var unknown = new PickupResult(
+                    PickupResult.Outcome.INDETERMINATE, "native_pickup_outcome_unknown", drop.getObjectId(),
+                    JUNK, 1, 0, true, false, true, true, false);
+            // The fixture's existing answers read these values; never restub mocks used by active controls.
+            f.pickupOutcome.set(unknown);
+            f.townObjects.set(List.of(drop));
+            try {
+                assertTrue(f.pickupOutcomeObserved.await(5, TimeUnit.SECONDS));
+                eventually(() -> f.loot.snapshot().indeterminateSequence() > 0);
+                assertEquals(TrainingScheduleStatus.Stage.TO_TRAINING, f.schedule.status().stage());
+            }
+            finally { f.releaseBlockedCall.countDown(); }
+            eventually(() -> "loot_indeterminate".equals(f.schedule.status().reason()));
+            assertEquals(TrainingScheduleStatus.State.BLOCKED, f.schedule.status().state());
+            assertNull(f.schedule.status().currentCycle());
+            assertEquals(0, f.huntingIds.get());
+            assertEquals(0, f.sales.get());
+        }
+    }
+
+    @Test void replacingTheLootProviderAcrossAnUnavailableWindowDoesNotReuseItsCycleCounters() throws Exception {
+        try (var f = new Fixture(JUNK, 1, 0, 0, false)) {
+            eventually(() -> f.schedule.status().currentCycle() != null);
+            assertEquals(ExecutionScope.DrainResult.DRAINED,
+                    f.runtime.stop(f.lootRef, CharacterRuntime.StopMode.UNLOAD).await(Duration.ofSeconds(5)));
+            eventually(() -> "loot_unavailable".equals(f.schedule.status().reason()));
+            var replacement = new LootControlModule(new LootControlModule.Config(10, 30_000), f.server);
+            f.mount("replacement-loot", LootControlModule.DEFINITION, LootControlModule.DEFAULT_CONFIG, replacement);
+            eventually(() -> "loot_provider_changed".equals(f.schedule.status().reason()));
+            assertEquals(TrainingScheduleStatus.State.BLOCKED, f.schedule.status().state());
+            assertEquals(0, f.schedule.status().cyclesCompleted());
+            assertEquals(0, f.sales.get());
+            assertEquals(LootStatus.State.RUNNING, replacement.snapshot().state());
+        }
+    }
 
     @Test void activationOwnsSuccessiveCyclesAndRetainsOnlyTheLatestTwoWithoutAScriptCaller() throws Exception {
         try (var f = new Fixture(JUNK, 1, 0, 3, true)) {
@@ -98,8 +202,8 @@ class TrainingScheduleControlModuleTest {
                 assertEquals(1, cycle.huntingStarted().bags().getFirst().freeSlots());
                 assertEquals(0, cycle.capacityTriggered().bags().getFirst().freeSlots());
                 assertEquals(1, cycle.returned().bags().getFirst().freeSlots());
-                assertEquals(1, cycle.hunting().collectedObjects());
-                assertEquals(1, cycle.hunting().collectedQuantity());
+                assertEquals(1, cycle.loot().collectedObjects());
+                assertEquals(1, cycle.loot().collectedQuantity());
                 assertEquals(1, cycle.sale().soldQuantity());
                 assertEquals(5, cycle.sale().mesoAfter() - cycle.sale().mesoBefore());
                 assertEquals(List.of(TOWN, MARKET, STORE, MARKET, TOWN, TRAINING),
@@ -286,6 +390,11 @@ class TrainingScheduleControlModuleTest {
         final Client client = mock(Client.class);
         final Map<Integer, MapleMap> maps = new HashMap<>();
         final Map<InventoryType, Inventory> bags = new EnumMap<>(InventoryType.class);
+        final Map<Integer, MapObject> drops = new java.util.concurrent.ConcurrentHashMap<>();
+        final AtomicReference<List<MapObject>> townObjects = new AtomicReference<>(List.of());
+        final AtomicReference<PickupResult> pickupOutcome = new AtomicReference<>();
+        final CountDownLatch pickupOutcomeObserved = new CountDownLatch(1);
+        final AtomicInteger dropIds = new AtomicInteger(1000);
         final Map<String, CharacterRuntime.ModuleContext> contexts = new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicReference<MapleMap> currentMap = new AtomicReference<>();
         final AtomicReference<Point> position = new AtomicReference<>(new Point());
@@ -298,7 +407,10 @@ class TrainingScheduleControlModuleTest {
         final HuntingControlModule hunter = mock(HuntingControlModule.class);
         final ShopActionModule shop = mock(ShopActionModule.class);
         final NativeActionModule nativeActions = mock(NativeActionModule.class);
+        final ItemInformationProvider information = mock(ItemInformationProvider.class);
         final RecoveryControlModule recovery;
+        final LootControlModule loot;
+        final CharacterRuntime.ModuleRef lootRef;
         final CharacterRuntime runtime;
         final TrainingScheduleControlModule schedule;
         final List<TravelPlanRequest> plans = new CopyOnWriteArrayList<>();
@@ -336,6 +448,11 @@ class TrainingScheduleControlModuleTest {
             bags.get(InventoryType.ETC).addItem(new Item(KEPT, (short) 0, (short) 7));
             for (int mapId : List.of(TRAINING, TOWN, MARKET, STORE)) {
                 var map = mock(MapleMap.class); maps.put(mapId, map); when(map.getId()).thenReturn(mapId);
+                when(map.getMapObjects()).thenAnswer(call -> mapId == TRAINING ? new ArrayList<>(drops.values())
+                        : mapId == TOWN ? townObjects.get() : List.of());
+                when(map.getMapObject(anyInt())).thenAnswer(call -> mapId == TRAINING ? drops.get(call.getArgument(0))
+                        : mapId == TOWN ? townObjects.get().stream()
+                                .filter(object -> object.getObjectId() == call.<Integer>getArgument(0)).findFirst().orElse(null) : null);
                 when(map.getCharacterById(id)).thenAnswer(call -> present.get() && currentMap.get() == map ? actor : null);
             }
             addPortal(TRAINING, 17, "east00", TOWN, "west00", 60);
@@ -351,7 +468,13 @@ class TrainingScheduleControlModuleTest {
             var npc = mock(NPC.class); when(npc.getId()).thenReturn(NPC_ID); when(npc.getPosition()).thenReturn(new Point(-20, 0));
             when(maps.get(STORE).getNPCById(NPC_ID)).thenReturn(npc);
             currentMap.set(maps.get(TOWN));
-            var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8));
+            var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), command ->
+                    new Thread(() -> {
+                        try (var metadata = mockStatic(ItemInformationProvider.class)) {
+                            metadata.when(ItemInformationProvider::getInstance).thenReturn(information);
+                            command.run();
+                        }
+                    }));
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8, 1,
                     new ExecutionScope.Limits(16, 2, 16, 2)), executor);
             var ref = new GameContext.CharacterRef(runtime.acceptedEpoch(), actor, client, world, channel);
@@ -374,19 +497,25 @@ class TrainingScheduleControlModuleTest {
             when(hunter.start(any())).thenAnswer(call -> {
                 long next = huntingIds.incrementAndGet();
                 boolean fill = next <= lootActivities;
-                if (fill) onLane(contexts.get("hunting"), null, "hunting-observe", () ->
-                        bags.get(InventoryType.ETC).addItem(new Item(lootId, (short) 0, (short) lootQuantity)));
-                var state = huntSnapshot(next, true, fill ? lootQuantity : 0); hunting.set(state);
+                if (fill) onLane(contexts.get("hunting"), null, "hunting-observe", () -> {
+                    var drop = new MapItem(new Item(lootId, (short) 0, (short) lootQuantity), new Point(position.get()),
+                            actor, actor, client, (byte) 0, true);
+                    drop.setObjectId(dropIds.incrementAndGet());
+                    drop.setDropTime(System.currentTimeMillis() - 1_000);
+                    drops.put(drop.getObjectId(), drop);
+                });
+                var state = huntSnapshot(next, true, fill ? 1 : 0); hunting.set(state);
                 return new HuntingStartResult(HuntingStartResult.Outcome.STARTED, "started", state);
             });
             when(hunter.stop(anyLong())).thenAnswer(call -> {
                 long expected = call.getArgument(0); stoppedHunts.add(expected); var state = hunting.get();
                 if (state.activityId() != expected) return new HuntingStopResult(HuntingStopResult.Outcome.ACTIVITY_CHANGED, "changed", state);
-                var stopped = huntSnapshot(expected, false, state.collectedQuantity()); hunting.set(stopped);
+                var stopped = huntSnapshot(expected, false, state.kills()); hunting.set(stopped);
                 return new HuntingStopResult(HuntingStopResult.Outcome.STOPPED, "stopped", stopped);
             });
             mount("hunting", HuntingControlModule.DEFINITION, HuntingControlModule.DEFAULT_CONFIG, hunter);
-            var loot = mock(LootActionModule.class); mount("loot", LootActionModule.DEFINITION, LootActionModule.DEFAULT_CONFIG, loot);
+            loot = new LootControlModule(new LootControlModule.Config(10, 30_000), server);
+            lootRef = mount("loot", LootControlModule.DEFINITION, LootControlModule.DEFAULT_CONFIG, loot).reference();
 
             var travel = mock(TravelPlanModule.class);
             when(travel.plan(any(), any(), any())).thenAnswer(call -> {
@@ -421,6 +550,19 @@ class TrainingScheduleControlModuleTest {
                 return new PortalResult(PortalResult.Outcome.ENTERED, id, runtime.acceptedEpoch().toString(), request.portalId(),
                         endpoint(beforeMap, exit), endpoint(target, entry), portalState(beforeMap, beforePosition), portalState(target, position.get()),
                         new PortalResult.Dispatch(true, true, false), new PortalResult.Transition(true, true, true, false, true), true, false, null);
+            });
+            when(nativeActions.pickup(any(), any(), any())).thenAnswer(call -> {
+                var prepared = pickupOutcome.get();
+                if (prepared != null) { pickupOutcomeObserved.countDown(); return prepared; }
+                PickupRequest request = call.getArgument(0); CharacterRuntime.ModuleContext context = call.getArgument(1);
+                ExecutionScope.WorkHandle work = call.getArgument(2); MapItem target = request.binding().target();
+                int itemId = target.getItem().getItemId(), quantity = target.getItem().getQuantity();
+                onLane(context, work, "pickup", () -> {
+                    bags.get(InventoryType.ETC).addItem(new Item(itemId, (short) 0, (short) quantity));
+                    target.setPickedUp(true); drops.remove(target.getObjectId());
+                });
+                return new PickupResult(PickupResult.Outcome.COLLECTED, null, request.objectId(), itemId,
+                        quantity, quantity, true, true, true, false, false);
             });
             mount("native", NativeActionModule.DEFINITION, NativeActionModule.DEFAULT_CONFIG, nativeActions);
 
@@ -523,9 +665,8 @@ class TrainingScheduleControlModuleTest {
         }
         private static HuntingSnapshot huntSnapshot(long id, boolean active, int quantity) {
             return new HuntingSnapshot(active ? HuntingControlModule.State.HUNTING : HuntingControlModule.State.IDLE, id,
-                    "PATROL", "PATROL", null, 0, quantity > 0 ? 1 : 0, quantity > 0 ? 1 : 0, 0,
-                    quantity > 0 ? 1 : 0, quantity > 0 ? 1 : 0, quantity, false,
-                    quantity > 0 ? LootResult.Outcome.COMPLETED : null, null, active ? null : "stopped", Map.of());
+                    "PATROL", "PATROL", null, 0, quantity > 0 ? 1 : 0, quantity, 0,
+                    active ? null : "stopped", Map.of());
         }
         void assertScheduleDrained() {
             assertEquals(TrainingScheduleStatus.State.IDLE, schedule.status().state());

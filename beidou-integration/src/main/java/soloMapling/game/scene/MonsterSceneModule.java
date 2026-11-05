@@ -16,6 +16,8 @@ import org.gms.server.life.Monster;
 import org.gms.server.maps.Foothold;
 import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeMonsterMovementActions;
+import soloMapling.game.action.NativeContactDamageActions;
+import java.awt.Rectangle;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -81,6 +83,35 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
     public static boolean canDrive(Monster monster, Character character) {
         var binding = SceneRuntimeManager.find(character);
         return binding != null && binding.scene().monsters().hasDriver(monster, binding);
+    }
+
+    /** Conservative reach of the actual finite driver, including its batched clock and recoil input. */
+    record ContactReach(Rectangle area, String model) { }
+
+    ContactReach contactReach(Monster monster, int windowMs) {
+        var body = NativeContactDamageActions.contactBody(monster);
+        if (body == null) return null;
+        var position = monster.getPosition();
+        body = body.union(new Rectangle(2 * position.x - body.x - body.width, body.y, body.width, body.height));
+        // This ordinary-map object has no legal headless input producer and no autonomous native motion loop.
+        // Its body still damages a role entering it; jump AI remains unimplemented rather than zero-risk.
+        if (monster.getId() == 1210100 && monster.getController() == null && scene.map().getEventInstance() == null
+                && scene.map().getFootholdSpeed() == 1.0f) return new ContactReach(body, "undriven_stationary_body_v1");
+        var owner = SceneRuntimeManager.find(monster.getController());
+        if (owner == null || owner.scene() != scene || !hasDriver(monster, owner)) return null;
+        var foothold = scene.environment().geometry().findBelow(new Point(position.x, position.y - 1));
+        double force = Math.max(0.2, forces.computeIfAbsent(monster.getId(), id -> {
+            var data = DataProviderFactory.getDataProvider(WZFiles.MOB).getData(String.format("%07d.img", id));
+            return (DataTool.getIntConvert("info/speed", data) + 100) * 0.001;
+        }));
+        // v'=0.8v+u+s*v²/90, |s|<=0.5: this invariant contains normal, stop and recoil branches.
+        double maximumStep = 18.0 - Math.sqrt(324.0 - 180.0 * force);
+        int radius = (int) Math.ceil((TICK_MS / PHYSICS_MS) * maximumStep * (1 + windowMs / TICK_MS)) + 1;
+        int left = Math.max(Math.min(foothold.getX1(), foothold.getX2()), position.x - radius);
+        int right = Math.min(Math.max(foothold.getX1(), foothold.getX2()), position.x + radius);
+        var first = new Rectangle(body); first.translate(left - position.x, footing(foothold, left) - position.y);
+        var last = new Rectangle(body); last.translate(right - position.x, footing(foothold, right) - position.y);
+        return new ContactReach(first.union(last), POLICY_ID);
     }
 
     private boolean hasDriver(Monster monster, SceneActorBinding binding) {

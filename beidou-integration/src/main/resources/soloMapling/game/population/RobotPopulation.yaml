@@ -14,6 +14,13 @@ types:
         type: combat
         config:
           timeout_ms: 30000
+      tactics:
+        type: combat-tactics-control
+        config:
+          check_interval_ms: 100
+          prediction_window_ms: 1000
+          reserve_hp_pct: 30
+          local_escape_distance_px: 128
       native:
         type: native-actions
         config: {}
@@ -39,8 +46,10 @@ types:
         type: travel
         config: {}
       loot:
-        type: loot
-        config: {}
+        type: loot-control
+        config:
+          check_interval_ms: 100
+          equipment_timeout_ms: 30000
       shop:
         type: shop
         config: {}
@@ -59,6 +68,13 @@ types:
       combat:
         type: combat
         config: {}
+      tactics:
+        type: combat-tactics-control
+        config:
+          check_interval_ms: 100
+          prediction_window_ms: 1000
+          reserve_hp_pct: 30
+          local_escape_distance_px: 128
       native:
         type: native-actions
         config: {}
@@ -66,8 +82,10 @@ types:
         type: potions
         config: {}
       loot:
-        type: loot
-        config: {}
+        type: loot-control
+        config:
+          check_interval_ms: 100
+          equipment_timeout_ms: 30000
       hunting:
         type: hunting-control
         config: {}

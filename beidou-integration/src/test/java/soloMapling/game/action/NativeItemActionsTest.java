@@ -214,6 +214,87 @@ class NativeItemActionsTest {
         assertEquals(5, result.facts().get("inventory_quantity_delta")); assertEquals(true, result.facts().get("ground_removed"));
     }
 
+    @Test void semanticPickupCannotSubstituteAnotherObjectThatReusesTheSelectedOid() {
+        var selected = ground(new Item(4000000, (short) 1, (short) 5), new Point(0, 0));
+        var work = scope.acceptWork();
+        var handle = NativeItemActions.preparePickup(server, lane, permit, work, scene, selected);
+        NativeBasicActions.submit(handle);
+        var replacement = new MapItem(new Item(4000001, (short) 1, (short) 2), new Point(0, 0),
+                actor, actor, client, (byte) 2, true);
+        replacement.setObjectId(selected.getObjectId());
+        replacement.setDropTime(System.currentTimeMillis() - 1000);
+        objects.put(selected.getObjectId(), replacement);
+
+        executor.runNext();
+        var result = handle.result().toCompletableFuture().join();
+        assertTrue(work.isSettled());
+        assertEquals(FAILED, result.outcome());
+        assertEquals(NativeActionResult.Dispatch.NOT_STARTED, result.dispatch());
+        assertEquals("ground_item_changed", result.fixedReason());
+        assertSame(replacement, objects.get(selected.getObjectId()));
+        assertFalse(selected.isPickedUp());
+        assertFalse(replacement.isPickedUp());
+        assertEquals(0, inventories.get(InventoryType.ETC).countById(4000000));
+        assertEquals(0, inventories.get(InventoryType.ETC).countById(4000001));
+        verify(map, never()).pickItemDrop(any(), any(MapItem.class));
+        verify(client, never()).sendPacket(any());
+    }
+
+    @Test void semanticPickupKeepsRealInventoryGrowthWhenNativeRemovalFailsAndNeverReplays() {
+        var ground = ground(new Item(4000000, (short) 1, (short) 2), new Point(0, 0));
+        doThrow(new IllegalStateException("native map removal failed"))
+                .when(map).pickItemDrop(any(), eq(ground));
+        var work = scope.acceptWork();
+        var handle = NativeItemActions.preparePickup(server, lane, permit, work, scene, ground);
+        NativeBasicActions.submit(handle);
+        executor.runNext();
+
+        var result = handle.result().toCompletableFuture().join();
+        assertTrue(work.isSettled());
+        assertEquals(INDETERMINATE, result.outcome());
+        assertEquals(NativeActionResult.Dispatch.STARTED, result.dispatch());
+        assertEquals(2, inventories.get(InventoryType.ETC).countById(4000000));
+        assertEquals(2, result.facts().get("inventory_quantity_delta"));
+        assertEquals(false, result.facts().get("ground_removed"));
+        assertEquals("native_pickup_outcome_unknown", result.fixedReason());
+        assertTrue(result.handlerError());
+        assertSame(ground, objects.get(ground.getObjectId()));
+        assertFalse(ground.isPickedUp());
+        verify(map).pickItemDrop(any(), eq(ground));
+    }
+
+    @Test void semanticPickupUsesTheClientHalfOpenRectangleForNativeDispatchAndAssets() {
+        // Matching V17 client selection uses [-25,25) x [-50,10) relative to the native actor position.
+        record Edge(Point position, boolean included) { }
+        for (var edge : List.of(new Edge(new Point(-25, 0), true), new Edge(new Point(0, -50), true),
+                new Edge(new Point(25, 0), false), new Edge(new Point(0, 10), false))) {
+            int before = inventories.get(InventoryType.ETC).countById(4000000);
+            var ground = ground(new Item(4000000, (short) 1, (short) 1), edge.position());
+            var work = scope.acceptWork();
+            var handle = NativeItemActions.preparePickup(server, lane, permit, work, scene, ground);
+            NativeBasicActions.submit(handle);
+            executor.runNext();
+
+            var result = handle.result().toCompletableFuture().join();
+            assertTrue(work.isSettled());
+            if (edge.included()) {
+                assertEquals(SUCCEEDED, result.outcome(), edge.toString());
+                assertEquals(NativeActionResult.Dispatch.STARTED, result.dispatch());
+                assertEquals(before + 1, inventories.get(InventoryType.ETC).countById(4000000));
+                assertTrue(ground.isPickedUp());
+                assertFalse(objects.containsKey(ground.getObjectId()));
+            } else {
+                assertEquals(FAILED, result.outcome(), edge.toString());
+                assertEquals(NativeActionResult.Dispatch.NOT_STARTED, result.dispatch());
+                assertEquals("ground_item_out_of_pickup_range", result.fixedReason());
+                assertEquals(before, inventories.get(InventoryType.ETC).countById(4000000));
+                assertFalse(ground.isPickedUp());
+                assertSame(ground, objects.get(ground.getObjectId()));
+                verify(map, never()).pickItemDrop(any(), eq(ground));
+            }
+        }
+    }
+
     @Test void distantOrAlreadyPickedGroundDoesNotDispatchOrClaimInventoryGrowth() {
         MapItem item = ground(new Item(4000000, (short) 1, (short) 5), new Point(801, 0));
         assertEquals("ground_item_out_of_range", run(new NativeItemAction.Pickup(item.getObjectId())).fixedReason());

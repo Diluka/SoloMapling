@@ -56,15 +56,17 @@ stateDiagram-v2
 
 来源为旧 [`GrindBrain`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/GrindBrain.java)、[`CampStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/CampStrategy.java)、[`PatrolStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/PatrolStrategy.java)、[`RoamStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/RoamStrategy.java) 和 [`StackStrategy`](../../src/main/java/soloMapling/ArtificialPlayer/BotGrindSystem/StackStrategy.java)。实际路径和位移继续受当前导航能力约束。
 
-装配 `loot` 后，狩猎在已完成交战或确实等待目标的空档扫描实际普通地物，通过[拾取动作](loot.md)有限收集；延迟生成的掉落在后续扫描中发现。首次有目标时仍先交战，未装拾取提供者的旧组合继续原交战流程。容量不足、已入包事实和当前拾取结果由有界摘要提供；回城阈值及售物决定由[日程](training-schedule.md)消费真实背包事实。`stop(expectedActivityId)` 是Java组合方只结束自己启动活动的入口，当前活动已变化时返回准确状态，脚本 `hunting.stop` 保留既有语义。
+拾取由独立的[拾取控制](loot.md)持续观察：普通自身地物只做当前位置的即时机会，装备以具体意图协调主动拾取。狩猎不扫描或等待拾取，不持有拾取计数；`hunting.stop` 只结束本次狩猎，拾取、恢复和战术保持各自生命周期。容量与售物决定由[日程](training-schedule.md)消费真实背包及独立拾取摘要。`stop(expectedActivityId)` 只结束Java组合方自己启动的活动，当前活动已变化时返回准确状态。
 
 驻点占用、个人区段和楼层分配使用同一 [`BotSpotClaims`](../../src/main/java/soloMapling/ArtificialPlayer/BotSpotClaims.java) 登记来源。活动只持有本实例登记，换点、场景结束及停止时释放自己的占用。当前键为 `mapId + spotId`，首期按普通共享场景核验，跨频道和实例协调覆盖分别记录。
 
 ## 持续调度与目标保持
 
-一次活动依次读取当前事实、选择方式与驻点、必要时导航、选择目标及允许集合、调用交战，再按结果接续下一步。同一控制实例保持一个当前移动或交战安排，允许集合包含目标且遵守交战操作的32目标边界。
+一次活动依次读取当前事实、选择方式与驻点、必要时导航、选择目标及允许集合，经战术 `assessEngagement` 重新准入后调用交战，再按结果接续下一步。同一控制实例保持一个当前移动或交战安排，允许集合包含目标且遵守交战操作的32目标边界。
 
-交战调用使用活动中的独立受管工作。控制节拍继续观察原目标、驻点和楼层边界，目标不再符合旧保持规则时取消本次动作，等待其实际收尾后再重选。目标死亡或移除后读取当前状态继续；无怪、不可达和持续无进展沿旧规则等待、放弃目标或换点。
+战术准入和正式交战接收同一 `HuntingPlanner.activityArea()`：CAMP/PATROL复用原锚点范围及同ledge规则，STACK复用原整组楼层边界，ROAM复用相对当前角色的距离及sameStack规则。个人区段和分配楼层继续只影响原fresh选怪及额外目标，不被误套成sticky追击的新限制；区域不从诊断placement字段重建。
+
+交战调用使用活动中的独立受管工作。控制节拍继续观察原目标、驻点和楼层边界，目标不再符合旧保持规则时取消本次动作，等待其实际收尾后再重选。交战被装备或避险替换时，保留已经发生的事实，结束旧调用后按最新目标和风险重新准入，不恢复旧安排。目标死亡或移除后读取当前状态继续；无怪、不可达和持续无进展沿旧规则等待、放弃目标或换点。
 
 `duration_ms` 到期、角色死亡、实际场景变化或所需动作无法继续时结束本活动，记录原因，收尾后回待命。下一次开始重新读取当时的实际场景。模块暂停、停用、卸载和根关闭也结束活动；恢复激活保持 `IDLE`。
 
@@ -72,7 +74,7 @@ stateDiagram-v2
 
 ## 装配与工作归属
 
-机器人类型装配 `hunting-control`、`combat` 和 `navigation`：
+机器人类型装配 `hunting-control`、`combat`、`navigation` 和 `combat-tactics-control`；拾取作为独立兄弟按类型选择：
 
 ```yaml
 modules:

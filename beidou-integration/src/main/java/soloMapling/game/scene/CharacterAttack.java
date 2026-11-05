@@ -33,7 +33,12 @@ public final class CharacterAttack {
     public NativeBasicActions.CommandHandle prepareBasic(Server server, CharacterCommandLane lane,
             CharacterCommandLane.ControlPermit permit, ExecutionScope.WorkHandle work, NativeAttackAction action) {
         binding.awaitWork(work);
-        return binding.scene().abilities().prepareBasic(server, binding, lane, permit, work, action);
+        var admitted = binding.dispatch().requestNative(permit, work,
+                binding.nativeScene().map().getMonsterByOid(action.targetOid()), "basic_attack");
+        var arrangement = admitted.arrangement();
+        if (arrangement != null) work.completion().whenComplete((ignored, failure) ->
+                binding.dispatch().release(arrangement, "basic_attack_settled"));
+        return binding.scene().abilities().prepareBasic(server, binding, lane, permit, work, action, arrangement);
     }
 
     public BotAttackDriver.StrikeResult strikeLegacy(ExecutionScope.WorkHandle work, BotAttackProfile profile,

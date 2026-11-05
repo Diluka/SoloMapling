@@ -2,6 +2,8 @@ package soloMapling.game.training;
 
 import org.gms.client.inventory.InventoryType;
 import soloMapling.game.inventory.SaleItem;
+import soloMapling.game.execution.CharacterCommandLane;
+import soloMapling.game.execution.ExecutionScope;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,11 +12,27 @@ import java.util.Map;
 /** Bounded business progress; inventories, native role resources and action work stay with their owners. */
 public record TrainingScheduleStatus(State state, Stage stage, String reason, long runId,
                                      long cyclesCompleted, Integer currentMapId, Integer destinationMapId,
-                                     Cycle currentCycle, List<Cycle> recentCycles) {
+                                     Cycle currentCycle, List<Cycle> recentCycles, ObservationAdmission observationAdmission) {
     public enum State { IDLE, RUNNING, BLOCKED, STOPPING, FAILED }
     public enum Stage { STARTING, TO_TRAINING, HUNTING, TO_SHOP, SELLING, RETURNING, STOPPED }
 
     public TrainingScheduleStatus { recentCycles = List.copyOf(recentCycles); }
+
+    /** Last unentered read retains its actual admission and settled work, without native objects or error text. */
+    public record ObservationAdmission(CharacterCommandLane.Status status, CharacterCommandLane.Rejection rejection,
+                                        ExecutionScope.WorkSnapshot step, ExecutionScope.WorkSnapshot parent,
+                                        boolean scopeActive) {
+        public Map<String, Object> toMap() {
+            return Map.of("status", status.name(), "rejection", rejection.name(), "step", work(step),
+                    "parent", work(parent), "scope_active", scopeActive);
+        }
+
+        private static Map<String, Object> work(ExecutionScope.WorkSnapshot value) {
+            return Map.of("id", value.id(), "cancel_requested", value.cancelRequested(), "rejected", value.rejected(),
+                    "body_state", value.bodyState().name(), "skipped", value.skipped(),
+                    "carrier_settled", value.carrierSettled(), "settled", value.settled());
+        }
+    }
 
     public record BagCapacity(InventoryType inventoryType, int slotLimit, int freeSlots) {
         public Map<String, Object> toMap() {
@@ -32,17 +50,22 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
         }
     }
 
-    public record HuntingSummary(long activityId, int kills, int lootCalls, int collectedObjects,
-                                 int collectedQuantity, String endReason) {
+    public record HuntingSummary(long activityId, int kills, String endReason) {
         public Map<String, Object> toMap() {
             var result = new LinkedHashMap<String, Object>();
             result.put("activity_id", activityId);
             result.put("kills", kills);
-            result.put("loot_calls", lootCalls);
-            result.put("collected_objects", collectedObjects);
-            result.put("collected_quantity", collectedQuantity);
             result.put("end_reason", endReason);
             return result;
+        }
+    }
+
+    public record LootSummary(long baselineSequence, long latestSequence, long collectedObjects,
+                               long collectedQuantity, boolean indeterminate) {
+        public Map<String, Object> toMap() {
+            return Map.of("baseline_sequence", baselineSequence, "latest_sequence", latestSequence,
+                    "collected_objects", collectedObjects, "collected_quantity", collectedQuantity,
+                    "indeterminate", indeterminate);
         }
     }
 
@@ -78,7 +101,7 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
     }
 
     public record Cycle(long index, InventorySummary huntingStarted, InventorySummary capacityTriggered,
-                        HuntingSummary hunting, InventorySummary beforeSale, InventorySummary afterSale,
+                        HuntingSummary hunting, LootSummary loot, InventorySummary beforeSale, InventorySummary afterSale,
                         InventorySummary returned, SaleSummary sale, List<PortalStep> portalSteps,
                         boolean portalStepsTruncated, boolean complete) {
         public Cycle { portalSteps = List.copyOf(portalSteps); }
@@ -89,6 +112,7 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
             result.put("hunting_started", huntingStarted == null ? null : huntingStarted.toMap());
             result.put("capacity_triggered", capacityTriggered == null ? null : capacityTriggered.toMap());
             result.put("hunting", hunting == null ? null : hunting.toMap());
+            result.put("loot", loot == null ? null : loot.toMap());
             result.put("before_sale", beforeSale == null ? null : beforeSale.toMap());
             result.put("after_sale", afterSale == null ? null : afterSale.toMap());
             result.put("returned", returned == null ? null : returned.toMap());
@@ -111,6 +135,7 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
         result.put("destination_map_id", destinationMapId);
         result.put("current_cycle", currentCycle == null ? null : currentCycle.toMap());
         result.put("recent_cycles", recentCycles.stream().map(Cycle::toMap).toList());
+        result.put("observation_admission", observationAdmission == null ? null : observationAdmission.toMap());
         return result;
     }
 }

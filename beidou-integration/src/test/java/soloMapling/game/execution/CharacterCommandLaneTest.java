@@ -36,6 +36,33 @@ class CharacterCommandLaneTest {
     @BeforeEach void startWorld() { CharacterTestContext.install(); WorldEpoch.onWorldStarted(); }
     @AfterEach void stopOnlyOwnedLanes() { lanes.forEach(CharacterCommandLane::close); ExecutionScope.tryBeginWorldStop(); }
 
+    @Test void immediateOpportunityRejectsWhileBusyWithoutLeavingAQueuedCommand() throws Exception {
+        var fixture = real(3, 1);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var running = fixture.scope.acceptWork();
+        fixture.lane.submit(running, fixture.permit, () -> { entered.countDown(); await(release); }, () -> {});
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        try {
+            int pending = fixture.lane.snapshot().pending();
+            var opportunity = fixture.scope.acceptWork();
+            var rejected = fixture.lane.submitIfIdle(opportunity, fixture.permit, calls::incrementAndGet, () -> {});
+            assertEquals(CharacterCommandLane.Status.REJECTED, rejected.status());
+            assertEquals(CharacterCommandLane.Rejection.CAPACITY, rejected.rejection());
+            opportunity.completion().toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertTrue(opportunity.isSettled());
+            assertEquals(pending, fixture.lane.snapshot().pending());
+        } finally { release.countDown(); }
+        running.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(0, calls.get());
+        var available = fixture.scope.acceptWork();
+        assertEquals(CharacterCommandLane.Status.ENQUEUED,
+                fixture.lane.submitIfIdle(available, fixture.permit, calls::incrementAndGet, () -> {}).status());
+        available.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(1, calls.get());
+    }
+
     @Test
     void cancelledQueuedEntriesKeepAllSevenOrdinarySlotsAndCleanupStillHasItsReserve() throws Exception {
         Fixture fixture = real(8,1);

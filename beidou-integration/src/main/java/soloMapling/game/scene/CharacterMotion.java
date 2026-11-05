@@ -13,6 +13,7 @@ import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.navigation.MoveToRequest;
 import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.navigation.NavigationResult;
+import soloMapling.game.navigation.NavigationPlan;
 import soloMapling.game.navigation.NavigationResult.Outcome;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleTask;
@@ -38,12 +39,32 @@ public final class CharacterMotion {
         this.binding = binding;
         this.server = server;
         entryPosition = new Point(binding.characterRef().character().getPosition());
-        movement = new NativeMovementActions(binding::awaitWork);
+        movement = new NativeMovementActions(binding);
     }
 
     public NativeMovementActions movement() {
         binding.requireCurrent();
         return movement;
+    }
+
+    public boolean atAcknowledgedEntry() {
+        var actor = binding.characterRef().character();
+        return !actor.isChangingMaps() && entryPosition.equals(actor.getPosition());
+    }
+
+    public NavigationResult executePlan(NavigationPlan plan, CharacterRuntime.ModuleContext context,
+            ExecutionScope.WorkHandle work, SceneActionDispatch.Arrangement arrangement, String control) {
+        if (plan.outcome() != NavigationPlan.Outcome.PLANNED) {
+            return new NavigationResult(Outcome.valueOf(plan.outcome().name()), plan.reason(), null);
+        }
+        if (plan.scene().map() != binding.nativeScene().map() || plan.scene().actor() != binding.characterRef()
+                || !plan.start().equals(binding.characterRef().character().getPosition()) || plan.engine().attributesChanged()) {
+            return new NavigationResult(Outcome.CONTEXT_CHANGED, "navigation_plan_changed", null);
+        }
+        int remaining = plan.remainingMs();
+        if (remaining == 0) return new NavigationResult(Outcome.TIMED_OUT, "navigation_plan_budget_elapsed", null);
+        return moveTo(new MoveToRequest(plan.target().x, plan.target().y, remaining),
+                plan.executionConfig(), context, work, control, plan, arrangement);
     }
 
     /** Called on the acknowledged entry lane; only this unchanged native entry may start an idle fall. */
@@ -77,7 +98,14 @@ public final class CharacterMotion {
 
     private NavigationResult moveTo(MoveToRequest input, NavigationActionModule.Config config,
                                    CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, String control) {
+        return moveTo(input, config, context, work, control, null, null);
+    }
+
+    private NavigationResult moveTo(MoveToRequest input, NavigationActionModule.Config config,
+            CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, String control,
+            NavigationPlan plan, SceneActionDispatch.Arrangement arrangement) {
         var job = new Job(context, work, new Point(input.x(), input.y()), Math.min(config.timeoutMs(), input.timeoutMs()), control);
+        job.arrangement = arrangement;
         job.scene = binding.nativeScene();
         boolean ownsMotion = false;
         Outcome outcome = null;
@@ -99,6 +127,20 @@ public final class CharacterMotion {
                     }
                 }
             }
+            if (job.arrangement == null) {
+                var decision = binding.dispatch().request(SceneActionDispatch.Priority.NORMAL, context, work, null,
+                        SceneMembershipModule.CONTROL.equals(control) ? "entry_fall" : "navigation");
+                if (decision.arrangement() == null) return new NavigationResult(Outcome.BUSY, decision.reason(), null);
+                job.arrangement = decision.arrangement();
+            }
+            while (!job.arrangement.current()) {
+                checkpoint(job);
+                try { Thread.sleep(25); }
+                catch (InterruptedException interrupted) {
+                    job.interrupted = true;
+                    throw new Halt(Outcome.CANCELLED, "navigation_cancelled");
+                }
+            }
             synchronized (this) {
                 binding.requireCurrent();
                 if (SceneMembershipModule.CONTROL.equals(control)
@@ -111,14 +153,14 @@ public final class CharacterMotion {
                 active = job;
                 ownsMotion = true;
             }
-            var actor = context.prepareNative(control, work, () -> {},
+            var actor = context.prepareNative(control, work, job.arrangement::requireCurrent,
                     (lane, permit, original, character) -> character);
             binding.requireCurrent();
             job.scene = NativeContextChecks.captureScene(server, actor);
             if (actor != binding.characterRef()) throw new NativeActionService.Invalid("scene_actor_mismatch");
             job.position = new Point(actor.character().getPosition());
             checkpoint(job);
-            job.engine = !actor.character().isChangingMaps() && entryPosition.equals(job.position)
+            job.engine = plan != null ? plan.engine() : !actor.character().isChangingMaps() && entryPosition.equals(job.position)
                     ? RuntimeNavigationEngine.planFromEntry(actor.character(), job.target, () -> checkpoint(job))
                     : RuntimeNavigationEngine.plan(actor.character(), job.target, () -> checkpoint(job));
             job.registration = context.scope().resources().beginOwnedResult(work, "navigation_motion");
@@ -188,6 +230,7 @@ public final class CharacterMotion {
                     });
                 }
             } finally {
+                if (arrangement == null) binding.dispatch().release(job.arrangement, "navigation_finished");
                 if (ownsMotion) {
                     synchronized (this) { active = null; movement.endNavigation(); }
                 }
@@ -205,12 +248,13 @@ public final class CharacterMotion {
         var frame = new AtomicReference<RuntimeNavigationEngine.Frame>();
         var failure = new AtomicReference<Throwable>();
         ScopeResources.CleanupAttempt cleanup = stopping ? job.registration.acquireCleanup() : null;
-        var step = cleanup == null ? job.context.acceptWork() : cleanup.work();
+        var step = cleanup == null ? job.context.acceptWork(job.work) : cleanup.work();
         Runnable body = () -> {
             try {
                 if (cleanup != null) cleanup.permit().requireExecuting(job);
                 else {
                     checkpoint(job);
+                    if (job.arrangement != null) job.arrangement.requireCurrent();
                     NativeMovementGeometry.requireOrdinaryMovementMode(job.scene.actor().character(), job.scene.map());
                     if (job.engine.attributesChanged()) throw new Halt(Outcome.BLOCKED, "attributes_changed");
                 }
@@ -225,7 +269,8 @@ public final class CharacterMotion {
                 }
                 var next = job.engine.nextFrame(stopping);
                 boolean applied = NativeMovementActions.dispatchNavigationFrame(server, job.scene, step, next.position(),
-                        next.velocityX(), next.velocityY(), next.stance(), next.footholdId(), next.durationMs());
+                        next.velocityX(), next.velocityY(), next.stance(), next.footholdId(), next.durationMs(),
+                        () -> { if (cleanup == null) job.arrangement.requireCurrent(); });
                 Point actual = job.scene.actor().character().getPosition();
                 job.position = new Point(actual);
                 if (!applied || !actual.equals(next.position())
@@ -238,7 +283,8 @@ public final class CharacterMotion {
             } catch (RuntimeException | Error unavailable) { failure.set(unavailable); }
         };
         try {
-            if (cleanup == null) job.context.submit(job.control, step, () -> {}, body, () -> {});
+            if (cleanup == null) job.context.submit(job.control, step,
+                    () -> { if (job.arrangement != null) job.arrangement.requireCurrent(); }, body, () -> {});
             else job.context.submitCleanup(cleanup, body, () -> {});
         } catch (RuntimeException rejected) {
             step.reject();
@@ -256,6 +302,7 @@ public final class CharacterMotion {
 
     private void checkpoint(Job job) {
         if (Thread.interrupted()) { job.interrupted = true; job.stopRequested = true; }
+        if (job.arrangement != null && !job.arrangement.valid()) throw new Halt(Outcome.PREEMPTED, "scene_arrangement_preempted");
         if (job.stopRequested || job.work.cancelRequested()) throw new Halt(Outcome.CANCELLED, "navigation_cancelled");
         if (System.nanoTime() - job.started >= TimeUnit.MILLISECONDS.toNanos(job.timeoutMs)) {
             throw new Halt(Outcome.TIMED_OUT, "navigation_timeout");
@@ -286,6 +333,7 @@ public final class CharacterMotion {
         boolean interrupted;
         GameContext.SceneRef scene;
         RuntimeNavigationEngine.Session engine;
+        SceneActionDispatch.Arrangement arrangement;
         ScopeResources.Registration registration;
         Point position;
         boolean stable;

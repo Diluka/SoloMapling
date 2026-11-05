@@ -489,11 +489,19 @@ public final class CharacterRuntime {
         }
         public CharacterCommandLane.Submission submit(String control, ExecutionScope.WorkHandle work,
                                                        Runnable preflight, Runnable body, Runnable settled) {
+            return submit(control, work, preflight, body, settled, false);
+        }
+        public CharacterCommandLane.Submission submitIfIdle(String control, ExecutionScope.WorkHandle work,
+                                                             Runnable preflight, Runnable body, Runnable settled) {
+            return submit(control, work, preflight, body, settled, true);
+        }
+        private CharacterCommandLane.Submission submit(String control, ExecutionScope.WorkHandle work,
+                                                        Runnable preflight, Runnable body, Runnable settled, boolean immediate) {
             requireOwn(work);
             CharacterCommandLane current;
             CharacterCommandLane.ControlPermit permit;
             synchronized (monitor) { current = requireLane(); permit = permit(this, control, preflight); }
-            return current.submit(work, permit, body, settled);
+            return immediate ? current.submitIfIdle(work, permit, body, settled) : current.submit(work, permit, body, settled);
         }
         public <T> T prepareNative(String control, ExecutionScope.WorkHandle work, Runnable preflight,
                                    NativePreparation<T> preparation) {

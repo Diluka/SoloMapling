@@ -53,7 +53,7 @@ NPC 原脚本 [1032110.js](../../../upstream/BeiDou-Server/gms-server/scripts-zh
 
 ## 模块共享函数
 
-在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是JSON对象。MCP专用角色固定按 `RobotPopulation.yaml` 的 `mcp_test` 类型装配，包含动作能力及狩猎、恢复控制。实际服务的源码身份及目录仍需与本次环境对应。
+在已有 OPEN 北斗上下文中，沿上文的 `invoke/source` 执行 `modules.help()`，查看运行体实际装配的共享函数及当前可用性；按其声明使用 `modules.call(name, args)`，其中 `args` 是JSON对象。MCP专用角色固定按 `RobotPopulation.yaml` 的 `mcp_test` 类型装配，包含动作能力及独立狩猎、恢复、战术与拾取控制，不装自动训练日程。实际服务的源码身份及目录仍需与本次环境对应。
 
 函数缺失或提供者暂停、停用时正常返回 `UNAVAILABLE`；按实际结果选择后续流程。函数声明、装配与结果契约见[机器人模块参考](../../../docs/robot-runtime/modules.md#共享函数声明与调用)。北斗原有 `cm/qm/pi/rm/em` 方法继续按[源码导航](source-navigation.md)查阅。
 
@@ -77,7 +77,11 @@ modules.call("hunting.start", {style: "AUTO", duration_ms: 30000});
 
 独立调试时，`travel.plan` 仅返回静态门户路线；在实际入口处用 `native.enterPortal` 进入普通门户。真实跨图会沿原生规则关闭旧CM，当前操作返回实际新场景后，该脚本Context可能已为CLOSED；下一段刷新角色/场景并新建Context。保持原请求和实际结果，不能用旧context_id或盲目重复过图。
 
-`loot.collect` 接受实际地物OID集合；`shop.open/sell/close` 在走近实际NPC后操作普通商店，出售输入明确背包类别、槽位、期望ID和数量。二者分别确认实际入包、扣物和金币变化，接口见[拾取](../../../docs/robot-runtime/loot.md)和[商店](../../../docs/robot-runtime/shop.md)。商店动作保留当前受管CM，完成商店关闭后可沿原Context继续。
+拾取控制每次激活自动观察自己的原始归属地物，独立于狩猎；`loot.stop` 等当前安排和在途指令真实收尾，`loot.start` 恢复观察。单次 `native.pickup` 接受一个实际 `object_id`，只做原生拾取，不扫描或自动接近。`navigation.plan` 只向脚本返回当前场景的规划摘要，普通导航仍用 `navigation.moveTo`；控制模块的可信Java计划与运动执行分开调用。参数和实际入包证据按当前目录及[拾取控制](../../../docs/robot-runtime/loot.md)查阅，旧批量 `loot.collect` 已退出。
+
+自己的手工丢弃地物也符合原始自身归属规则，可能随后被控制拾回。手工 `drop/pickup` 专项准备前，先在有效受管上下文调用 `modules.call("loot.stop", {})` 并确认真实收尾；结束后正常 `modules.call("loot.start", {})`。原生丢弃成功与之后的自动拾回分别留证，不把地物持续保留当作已保证条件，也不为测试排除 `player_drop`。
+
+`shop.open/sell/close` 在走近实际NPC后操作普通商店，出售输入明确背包类别、槽位、期望ID和数量；分别核真实扣物和金币变化，接口见[商店](../../../docs/robot-runtime/shop.md)。商店动作保留当前受管CM，完成商店关闭后可沿原Context继续。
 
 ## 一次调用完成同场景导航
 

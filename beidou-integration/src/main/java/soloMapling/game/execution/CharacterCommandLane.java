@@ -119,21 +119,26 @@ public final class CharacterCommandLane implements AutoCloseable {
     }
 
     public Submission submit(ExecutionScope.WorkHandle work, ControlPermit permit, Runnable body, Runnable onWorkSettled) {
-        return submitEntry(work, permit, null, false, body, onWorkSettled);
+        return submitEntry(work, permit, null, false, body, onWorkSettled, false);
+    }
+
+    /** Atomically reserves this lane's next physical command or settles the unused opportunity immediately. */
+    public Submission submitIfIdle(ExecutionScope.WorkHandle work, ControlPermit permit, Runnable body, Runnable onWorkSettled) {
+        return submitEntry(work, permit, null, false, body, onWorkSettled, true);
     }
 
     public Submission submitInitialization(ExecutionScope.WorkHandle work, AdmissionPermit permit,
                                             Runnable body, Runnable onWorkSettled) {
-        return submitEntry(work, null, permit, false, body, onWorkSettled);
+        return submitEntry(work, null, permit, false, body, onWorkSettled, false);
     }
 
     public Submission submitOwnedCleanup(ScopeResources.CleanupAttempt attempt, Runnable body, Runnable onWorkSettled) {
         Objects.requireNonNull(attempt);
-        return submitEntry(attempt.work(), null, null, true, body, onWorkSettled);
+        return submitEntry(attempt.work(), null, null, true, body, onWorkSettled, false);
     }
 
     private Submission submitEntry(ExecutionScope.WorkHandle work, ControlPermit control, AdmissionPermit admission,
-                                     boolean isCleanup, Runnable body, Runnable settled) {
+                                     boolean isCleanup, Runnable body, Runnable settled, boolean immediate) {
         Objects.requireNonNull(work); Objects.requireNonNull(body); Objects.requireNonNull(settled);
         Entry entry = new Entry(work, control, admission, isCleanup, body, settled);
         Rejection rejection = Rejection.NONE;
@@ -155,7 +160,8 @@ public final class CharacterCommandLane implements AutoCloseable {
                 }
             }
             if (closed || !permit || isCleanup != work.isCleanup() || acceptedEpoch != work.acceptedEpoch()) rejection = Rejection.PERMIT;
-            else if (isCleanup ? cleanup >= cleanupReserve : ordinary >= capacity - cleanupReserve) rejection = Rejection.CAPACITY;
+            else if (immediate && (ordinary != 0 || cleanup != 0 || carrierRunning)
+                    || (isCleanup ? cleanup >= cleanupReserve : ordinary >= capacity - cleanupReserve)) rejection = Rejection.CAPACITY;
             else {
                 entry.slotHeld = true;
                 if (isCleanup) cleanup++;
@@ -336,6 +342,12 @@ public final class CharacterCommandLane implements AutoCloseable {
             this.lane = lane; this.scope = scope; this.ref = ref; this.grant = grant; this.nativeVerify = nativeVerify;
         }
         public GameContext.CharacterRef characterRef() { return ref; }
+        public ExecutionScope ownerScope() { return scope; }
+        public boolean revoked() { return grant.revoked(); }
+        public void requireCurrent() {
+            if (grant.revoked()) throw new IllegalStateException("grant_revoked");
+            nativeVerify.run();
+        }
         public void revoke() { grant.revoke(); }
     }
 

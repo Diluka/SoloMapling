@@ -34,11 +34,19 @@ import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.scene.PresentationSceneModule;
+import soloMapling.game.scene.SceneRuntimeManager;
+import soloMapling.game.scene.IncomingDamageEstimate;
+import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.RoleBinding;
 
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -259,6 +267,71 @@ class NativeContactDamageActionsTest {
         assertEquals(100, actor.getHp());
         assertEquals(50, actor.getMp());
         assertTrue(work.isSettled());
+    }
+
+    @Test void aManagedLegacyRoleTakesNativeContactAndForecastsOnlyTheUnprotectedPartOfItsPath() throws Exception {
+        lane.close(); lane = null;
+        doReturn(Job.BOWMAN).when(actor).getJob();
+        when(map.getFootholdSpeed()).thenReturn(1.0f);
+        var original = target;
+        target = new Monster(1210100, original.getStats());
+        target.setObjectId(501); target.setPosition(new Point(0, 0)); target.setMap(map);
+        when(map.getAllMonsters()).thenReturn(List.of(target));
+        when(map.getMonsterByOid(501)).thenReturn(target);
+        when(map.getMapObject(501)).thenReturn(target);
+        bodies.when(() -> BotMobHitboxProvider.getMobBounds(target)).thenAnswer(call -> new Rectangle(-10, -20, 20, 20));
+        int mesos = actor.getMeso();
+        var runtime = new CharacterRuntime(scene.actor().epoch(), new CharacterRuntime.Options(8, 1,
+                new ExecutionScope.Limits(16, 2, 12, 2)), executor);
+        RoleBinding source = new RoleBinding() {
+            @Override public String kind() { return "legacy-contact-test"; }
+            @Override public Object identity() { return actor; }
+            @Override public GameContext.CharacterRef characterRef() { return scene.actor(); }
+            @Override public void requireCurrent() { NativeContextChecks.requireCharacterCurrent(server, scene.actor()); }
+            @Override public Map<String, Object> observe() { return Map.of("character_id", actor.getId()); }
+            @Override public ReleaseProof release(ScopeResources.DrainPermit permit) {
+                permit.requireExecuting(actor); return new ReleaseProof(true);
+            }
+        };
+        var opening = runtime.acceptOpeningWork();
+        try {
+            runtime.submitOpening(opening, () -> {
+                runtime.reserveOrigin(opening).adopt(source); runtime.bindAdoptedOrigin();
+                runtime.initializeSceneMembership(server);
+            }, () -> {});
+            opening.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var binding = SceneRuntimeManager.current(server, scene.actor());
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (binding.characterState().contactSnapshot().count() == 0 && System.nanoTime() < until) Thread.sleep(5);
+            assertEquals(1, binding.characterState().contactSnapshot().count());
+            var damage = binding.scene().characters().damage(binding);
+            damage.stop();
+            var hit = binding.characterState().contactSnapshot().latest();
+            assertTrue(hit.dispatched()); assertFalse(hit.handlerError());
+            assertEquals(90, hit.hpLost()); assertEquals(10, actor.getHp()); assertEquals(50, actor.getMp());
+            var protectedRisk = damage.estimateIncoming(1000, actor.getPosition());
+            assertEquals(IncomingDamageEstimate.Coverage.SUPPORTED, protectedRisk.coverage());
+            assertEquals(0, protectedRisk.hpLossUpper());
+            var stationary = damage.estimateIncoming(5000, actor.getPosition());
+            assertEquals(180, stationary.hpLossUpper());
+            var leaving = damage.estimateIncoming(5000, List.of(
+                    new IncomingDamageEstimate.PathSample(new Point(0, 0), 0),
+                    new IncomingDamageEstimate.PathSample(new Point(100, 0), 1000),
+                    new IncomingDamageEstimate.PathSample(new Point(100, 0), 5000),
+                    new IncomingDamageEstimate.PathSample(new Point(0, 0), 5001)));
+            assertEquals(0, leaving.hpLossUpper(), "a protected entry point is not revisited inside the queried window");
+            assertEquals(1, binding.characterState().contactSnapshot().count(), "forecasting never consumes another contact slot");
+            assertEquals(10, actor.getHp()); assertEquals(50, actor.getMp()); assertEquals(mesos, actor.getMeso());
+            assertSame(armor, actor.getInventory(InventoryType.EQUIPPED).getItem((short) -5));
+            assertEquals(1, armor.getQuantity());
+        } finally {
+            runtime.beginClose(Optional.empty());
+            runtime.whenModulesDrained().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var cleanup = runtime.acquireOriginCleanup();
+            runtime.submitOriginCleanup(cleanup, () -> runtime.releaseOrigin(cleanup), () -> {});
+            assertEquals(ExecutionScope.DrainResult.DRAINED, runtime.awaitClosed(Duration.ofSeconds(5)));
+            assertTrue(SceneRuntimeManager.snapshots().isEmpty());
+        }
     }
 
     private NativeContactDamageActions.ContactResult contact() {

@@ -22,6 +22,7 @@ public final class SceneActorBinding {
     private final CharacterRuntime.ModuleContext context;
     private final GameContext.SceneRef nativeScene;
     private final SceneCharacterState characterState;
+    private final SceneActionDispatch dispatch;
     private record BackgroundTask(String name, ModuleTask task) { }
     private final List<BackgroundTask> tasks = new ArrayList<>();
     private final Set<ExecutionScope.WorkHandle> entryWork = new LinkedHashSet<>();
@@ -35,6 +36,7 @@ public final class SceneActorBinding {
         this.context = context;
         this.nativeScene = nativeScene;
         this.characterState = characterState;
+        dispatch = new SceneActionDispatch(this);
     }
 
     public SceneRuntime scene() { return scene; }
@@ -43,6 +45,7 @@ public final class SceneActorBinding {
     public GameContext.CharacterRef characterRef() { return nativeScene.actor(); }
     public GameContext.SceneRef nativeScene() { return nativeScene; }
     public SceneCharacterState characterState() { return characterState; }
+    public SceneActionDispatch dispatch() { return dispatch; }
     public boolean active() { return active; }
 
     public void requireCurrent() {
@@ -98,6 +101,8 @@ public final class SceneActorBinding {
     CompletionStage<Void> leave() {
         synchronized (tasks) {
             active = false;
+            dispatch.leave();
+            entryWork.forEach(work -> work.scope().requestCancel(work));
             tasks.forEach(background -> background.task().cancel());
             var waiting = new ArrayList<CompletableFuture<?>>();
             tasks.forEach(background -> waiting.add(background.task().completion().toCompletableFuture()));

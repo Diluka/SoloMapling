@@ -116,6 +116,31 @@ public final class BotAttackData {
         return override != null ? override : randomActionFor(weaponType);
     }
 
+    /** Names for this class's already adapted canonical client enum values; never WZ child ordinals. */
+    public static String actionName(int action) {
+        return switch (action) {
+            case SWING_O1 -> "swingO1"; case SWING_O2 -> "swingO2"; case SWING_O3 -> "swingO3";
+            case SWING_T1 -> "swingT1"; case SWING_T2 -> "swingT2"; case SWING_T3 -> "swingT3";
+            case SWING_P1 -> "swingP1"; case STAB_T1 -> "stabT1";
+            case STAB_O1 -> "stabO1"; case STAB_O2 -> "stabO2";
+            case SHOOT_1 -> "shoot1"; case SHOOT_2 -> "shoot2";
+            case CLAW_1, WAND_1 -> "swingO1";
+            case CLAW_2 -> "swingO2";
+            case CLAW_3, WAND_2 -> "swingO3";
+            case SAVAGE -> "savage"; case ALERT_3 -> "alert3";
+            case MAGIC_1 -> "magic1"; case MAGIC_2 -> "magic2"; case MAGIC_3 -> "magic3";
+            case BURSTER_2 -> "burster2"; case AVENGER -> "avenger"; case ALERT_5 -> "alert5";
+            case ASSASSINATION -> "assassination"; case BRANDISH_1 -> "brandish1";
+            case SANCTUARY -> "sanctuary"; case METEOR -> "meteor"; case BLIZZARD -> "blizzard";
+            case GENESIS -> "genesis"; case BLAST -> "blast"; default -> null;
+        };
+    }
+
+    public static int[] possibleActionsFor(int skillId, WeaponType weaponType) {
+        var override = SKILL_ACTION.get(skillId);
+        return override == null ? variantsFor(weaponType).clone() : new int[]{override};
+    }
+
     // Big Bang (F/P, I/L, Bishop) is a keydown CHARGE skill: its MAGIC_ATTACK packet carries a
     // trailing charge int that the viewer's client reads back (see MagicDamageHandler / the
     // parser's BIG_BANG branch). Sending charge = -1 omits those 4 bytes, the client over-reads,

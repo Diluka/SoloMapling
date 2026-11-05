@@ -21,6 +21,8 @@ import org.gms.server.maps.MapleMap;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.inventory.InventoryFacts;
+import soloMapling.game.inventory.ItemCapacity;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -45,6 +47,9 @@ public final class NativeItemActions {
                 Map.entry("equipment_kind", "ordinary_non_cash_equipment"),
                 Map.entry("pickup_kind", "ordinary_inventory_items_no_meso_nx_scripts_or_consume_on_pickup"),
                 Map.entry("pickup_maximum_distance", Map.of("x", 800, "y", 600)),
+                Map.entry("semantic_pickup_range", Map.of("minimum_x", -25, "maximum_x_exclusive", 25,
+                        "minimum_y", -50, "maximum_y_exclusive", 10,
+                        "source", "matching_v17_keyboard_pickup_client")),
                 Map.entry("pickup_native_minimum_drop_age_ms", 400),
                 Map.entry("use_item_kind", "ordinary_hp_mp_potions_no_buff_or_map_effect"),
                 Map.entry("drop", Map.of("minimum_quantity", 1, "maximum_quantity", (int) Short.MAX_VALUE,
@@ -59,12 +64,20 @@ public final class NativeItemActions {
                                                            NativeItemAction action) {
         Objects.requireNonNull(action);
         return NativeBasicActions.prepare(server, lane, permit, work, scene, action.action(), context -> switch (action) {
-            case NativeItemAction.Pickup pickup -> pickup(context, pickup);
+            case NativeItemAction.Pickup pickup -> pickup(context, pickup, null);
             case NativeItemAction.Drop drop -> drop(context, drop);
             case NativeItemAction.Use use -> use(context, use);
             case NativeItemAction.Equip equip -> equipment(context, equip.sourceSlot(), equip.targetSlot(), true);
             case NativeItemAction.Unequip unequip -> equipment(context, unequip.sourceSlot(), unequip.targetSlot(), false);
         });
+    }
+
+    /** Semantic pickup fixes the native object before submission; the existing MCP basic action keeps its contract. */
+    public static NativeBasicActions.CommandHandle preparePickup(Server server, CharacterCommandLane lane,
+            CharacterCommandLane.ControlPermit permit, ExecutionScope.WorkHandle work, GameContext.SceneRef scene,
+            MapItem expected) {
+        return NativeBasicActions.prepare(server, lane, permit, work, scene, "pickup",
+                context -> pickup(context, new NativeItemAction.Pickup(expected.getObjectId()), expected));
     }
 
     /** The finite ordinary-item pickup contract, shared by action preparation and loot selection. */
@@ -78,12 +91,21 @@ public final class NativeItemActions {
                 && type != InventoryType.UNDEFINED && type != InventoryType.EQUIPPED;
     }
 
-    private static NativeBasicResult pickup(NativeBasicActions.Context context, NativeItemAction.Pickup request) {
+    /** Matching V17 keyboard pickup's PtInRect bounds; the broad native anti-cheat limit is separate. */
+    public static boolean withinPickupRange(Point actor, Point ground) {
+        long x = (long) ground.x - actor.x, y = (long) ground.y - actor.y;
+        return x >= -25 && x < 25 && y >= -50 && y < 10;
+    }
+
+    private static NativeBasicResult pickup(NativeBasicActions.Context context, NativeItemAction.Pickup request,
+                                             MapItem expected) {
         context.requireCurrent();
         Character actor = context.actor().character();
+        if (expected != null && (!actor.isAlive() || actor.isChangingMaps())) throw invalid("actor_state_rejected");
         MapleMap map = context.scene().map();
         MapObject object = map.getMapObject(request.objectId());
         if (!(object instanceof MapItem ground)) throw invalid("ground_item_not_found");
+        if (expected != null && ground != expected) throw invalid("ground_item_changed");
         ground.lockItem();
         try {
             if (map.getMapObject(request.objectId()) != ground || ground.isPickedUp()) throw invalid("ground_item_changed");
@@ -93,6 +115,12 @@ public final class NativeItemActions {
             }
             InventoryType type = ItemConstants.getInventoryType(item.getItemId());
             Point actorPosition = actor.getPosition(), dropPosition = ground.getPosition();
+            if (expected != null) {
+                if (!withinPickupRange(actorPosition, dropPosition)) throw invalid("ground_item_out_of_pickup_range");
+                var capacity = InventoryFacts.capacity(actor, item);
+                if (!capacity.fits()) throw invalid(capacity.outcome() == ItemCapacity.Outcome.NO_SPACE
+                        ? "inventory_full" : "pickup_restricted");
+            }
             if (Math.abs((long) actorPosition.x - dropPosition.x) > 800
                     || Math.abs((long) actorPosition.y - dropPosition.y) > 600) throw invalid("ground_item_out_of_range");
             Inventory inventory = requireInventory(actor, type);

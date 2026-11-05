@@ -1,41 +1,80 @@
-# 普通地物拾取
+# 自身掉落拾取控制
 
-`LootActionModule` 是类型 `loot` 的有限动作模块。调用者给出当前实际场景的地物OID，模块按顺序接近并拾取；模块装载本身不会开始扫描或拾取。已交付的 `NativeItemActions` 继续承担真实普通物品拾取，导航消费现有 `navigation.moveTo`。
+`LootControlModule` 是独立的 `loot-control` 控制模块。每次激活自动观察当前角色自己的掉落，和狩猎、恢复、战术及日程分别持有生命周期。脚本结束不停止监控；`loot.stop` 等本模块工作真实退出后待命，`loot.start` 可再次开始。
+
+```yaml
+loot:
+  type: loot-control
+  config:
+    check_interval_ms: 100
+    equipment_timeout_ms: 30000
+```
+
+两个间隔均为正整数，装备活动期限上限120000ms。长期类型由人口文件明确装配；临时材料和测试类型保留在本地人口文件。
 
 ```javascript
-modules.call("loot.collect", {
-    object_ids: [1000000042, 1000000043],
-    timeout_ms: 30000
-});
+modules.call("loot.start", {});
+modules.call("loot.stop", {});
 ```
 
-Java消费者通过同一声明调用：
+Java 通过 `LootControlModule.START/STOP` 使用相同目录声明，也可读取具体实例的 `snapshot()`。停止只收尾该控制，不停止狩猎、恢复或战术。
 
-```java
-context.call(LootActionModule.COLLECT, new LootRequest(objectIds, 30_000), currentWork);
+## 分类与归属
+
+控制只选择原始 `MapItem.ownerId == 当前CID` 的对象。队伍共享、自由拾取或归属过期后的资格不改变原始自身归属。自己的手工 `player_drop` 同样属于自身地物，没有额外排除规则；准备手动丢弃/拾取专项时先显式停止本角色拾取控制，结束后正常重新开始。
+
+原生库存类型 `EQUIP` 为装备，其他类别为普通。分类和当前执行覆盖分别表达：单次后端支持普通库存物品，金币、NX卡、243类脚本物品、拾取即生效物品及宠物物品保留明确的 `unsupported_pickup_item` 跳过结果。
+
+HP、位置、地物与背包继续读取原生对象；控制只保存当前场景必要的对象处理状态、当前一个装备活动及最近结果。停止或暂停保留同一实例中已处理对象的身份，恢复不会重交同场景机会。普通机会状态在实际换场景或对象消失后清理；未知效果对象单独按原生对象身份保持不可自动重放，直至该原生对象生命周期结束，不因停启监控或换图重访重新取得资格。
+
+## 普通物品的机会
+
+普通分支只观察当前位置。物品进入正常拾取范围且满足原生最低400ms年龄后，向 `native.pickup` 提交一次精确对象绑定的即时机会。
+
+角色原 lane 的空闲检查和受理是一次原子操作。当前工作繁忙、存在更高优先级安排或不可取消动作锁时跳过；普通机会不排队、不生成接近路线或后台等待任务，也不在繁忙解除后重放同一对象的机会。当前普通运动安排本身不排斥可立即执行的短拾取，实际移动和战斗继续各自推进。
+
+正常范围来自配套V17客户端普通键盘拾取链：`0x94F65C → 0x50463C → 0xA09118`，扫描用角色坐标构造矩形，地物当前位置需满足 `-25 <= dx < 25`、`-50 <= dy < 10`。机会检测与实际派发使用同一 `NativeItemActions.withinPickupRange`。旧60px接近阈值退出，800×600仍只表示原有基础动作/原生宽松反作弊边界。V17原件SHA256为`1198fa57ca5a7c489bae43ec13c69681d9cabe0f96762f3dc0357facf2e7d4df`；角色MovePlayer输入与Java位置偏移为0，地物目标坐标也直接对应MapItem位置，无需借用怪物运动的2px偏移。静态证据固化在部署证据目录`20261105-scene-output-332/client-v17-pickup-contract/CONTRACT.md`。
+
+## 装备主动拾取
+
+装备一次绑定一个精确 `MapItem`，按以下阶段组织：
+
+1. 在本模块独立有限工作上请求 `EQUIPMENT_PICKUP` 意图。
+2. 等待原冲突动作真实退出及原生动作锁允许切换。
+3. 单独调用 `navigation.plan`，再由角色场景 `executePlan` 执行实际运动。
+4. 在正常范围内调用同一单次 `native.pickup`，确认实际入包及地物移除。
+
+优先级为 `LETHAL_ESCAPE > EQUIPMENT_PICKUP > TACTICAL_AVOID > NORMAL`。致命避险替换装备安排后，旧安排失效、尚未派发的短命令跳过，运动按原生规则收尾；已经入包的物品和实际位移保留。重新选择目标时读取当时的装备、位置和危险，不恢复旧运动帧。
+
+目标消失、死亡、换图、容量不足、不可达、期限或未知结果结束本次装备活动。活动和导航使用本控制原scope、原有限work及角色唯一lane；规划提供者保留自己的scope/work，没有第二执行队列。监控本身不作为可抢占的有限活动。
+
+## 单次原生命令
+
+```javascript
+modules.call("native.pickup", {object_id: 1000000042});
 ```
 
-`object_ids` 为1～32个不同的正整数，重复OID按首次顺序合并；`timeout_ms` 为整次接近和拾取的预算，范围1～120000ms，默认30000ms。每个对象取当前真实MapItem、库存和原生归属。需要接近时先执行场景内导航，实际进入背包仍通过原生 `ItemPickupHandler`。
+`NativeActionModule.PICKUP` 使用 `PickupRequest → PickupResult`。它只处理当前位置的一个实际地物，不扫描、选目标或自动接近。受信控制可通过Java内部绑定传入此前已选择的精确对象、即时方式及安排；脚本只提供OID。
 
-## 结果与执行归属
+实际执行复用 `NativeItemActions` 和 `ItemPickupHandler`。派发前在原地物锁内重验精确对象及正常距离，原生归属、年龄、容量、任务和物品资格继续生效。结果分别表达 `COLLECTED/REJECTED/BUSY/CAPACITY_FULL/CANCELLED/PREEMPTED/INDETERMINATE/UNAVAILABLE/CONTEXT_CHANGED`，保留物品ID、原地物数量、实际库存增量、派发、身份和移除事实。
 
-结果包含总体 `outcome`、`reason`、`elapsed_ms`、逐对象 `items` 及确认的 `collected_objects/collected_quantity`。`COMPLETED` 表示本轮对象处理结束；只有逐项 `COLLECTED` 计入确认入包摘要。各项返回object_id、物品ID、地物数量、观察到的库存数量增量、原生结果与派发状态，不重复输出完整库存快照。
+派发返回与真实入包分别核验。未知效果不自动重放；结果中已观察到的数量增量保留。取消请求和公共结果完成均不能代替原提供者短work真实结算。
 
-- 物体已消失、尚未落稳、归属拒绝、未支持的物品和拾取限制分别说明；导航失败为该对象的 `UNREACHABLE`。
-- `CAPACITY_FULL` 结束本轮收集并保留此前已入包事实，供控制模块读取真实背包并决定回城。
-- 原生派发后结果不确定时返回 `INDETERMINATE`，保留观察到的增量，确认入包计数仅包含已证实的对象。本轮不自动重放该动作。
-- 同一模块已有收集调用时返回 `BUSY`。取消、期限、暂停、卸载或场景变化结束当前调用；已经发生的入包效果保留。
+## 日程和诊断
 
-目录调用运行于拾取提供者的原scope/work。每次原生读取与拾取使用继承本调用取消关系的新短work；`NativeBasicActions.submit`仅向原角色lane提交一次。调用等待原生结果及短work真实结算，导航也需实际退出后才返回。
+`LootStatus` 的 `sequence`、`collected_objects` 和 `collected_quantity` 在同一实例中单调累计；计数保留观察到的真实库存正增量，`indeterminate_sequence` 单独表示最近未知结果，不能由数量非零推导完整成功。`latest` 为最近一次安全结果。装备活动以精确活动ID和目标OID说明。
 
-原生规则包含至少400ms的地物年龄，以及原生归属、任务和容量资格；此版本没有相邻两次拾取的300ms冷却。动作在对象间使用250ms节拍，这是沿旧有机拾取范围的调度策略。
+日程在开始本周期狩猎前冻结自己的拾取序号/计数基线，后续读取独立摘要及真实背包。容量触发后先结束自己持有的狩猎，再等待当时观察到的精确装备活动真实结束，最后组织回店。等待取消不取消拾取兄弟模块；回店意图本身不取得高于装备的优先级。
 
-## 狩猎中的拾取阶段
+`HuntingControlModule` 只选择目标、交战和巡点，不再扫描或等待拾取，也不代管拾取计数。旧 `LootActionModule/LootRequest/LootResult` 和 `loot.collect` 已退出。
 
-`HuntingControlModule` 装配可用 `loot` 后，在一次交战结束或真实 `WAIT` 空档中安排有限收集。首次开始或返场重新开始时，已有可交战目标先走原选怪与交战；收集不会抢在首次决策前清理旧地物。
+## 有界真实冒烟
 
-狩猎扫描沿旧 `GrindLoot` 的近层策略：900px范围、垂直差不超过120px、至少1500ms落稳时间，按距离和OID稳定选择最多32个普通可归属地物。执行仍交给拾取动作，原版V1的移动和移除逻辑不作为真实入包实现复用。原生延迟生成的掉落可在后续交战间隙或等待节拍再次发现；没有可用拾取模块时保留原独立狩猎行为。
+固定源码、运行版本、实际CID与场景引用，使用本轮隔离环境准备少量自身/外来地物；材料准备和控制效果分别留证。每个场景最多观察60秒：
 
-Hunting快照增加 `loot_calls`、`collecting`、`collected_objects`、`collected_quantity`、`loot_outcome`、`loot_reason`；最后两项描述最近收集结果，不替代角色背包。狩猎停止等待当前收集、接近移动及原生短work真实结束，保留已确认入包数量。收集结果不确定时，本次狩猎以 `loot_indeterminate` 结束，交由外层处理。
+- 普通物品在正常移动中进入范围，核实际一次派发、库存增量和移除；繁忙样本核跳过且后续无积压重放。
+- 装备出现后核意图、独立计划、实际运动和单次入包；自然出现致命威胁时核旧安排失效及实际收尾，预算内未出现则记未覆盖。
+- 容量触发后核精确装备活动结束、独立日程回店售物及返场；不把辅助采集改动升级为整套日程门禁。
+- 停止或离场核本模块work、运动及原生短命令实际退出；其他兄弟保持自己的生命周期。
 
-组合控制持有开始结果的 `activity_id` 和对应Hunting实例，可用Java `stop(expectedActivityId)` 精确停止自己启动的活动。当前活动已变化时返回 `ACTIVITY_CHANGED` 与真实当前快照，不停止后继活动；无参stop与脚本入口继续停止当前活动。
+结果分通过、产品失败、未覆盖/不确定。正常距离的客户端静态协议证据、源码合同、隔离实际资产和正式正常业务分别记录；不把受控提供者返回值当成资产后端全链通过。

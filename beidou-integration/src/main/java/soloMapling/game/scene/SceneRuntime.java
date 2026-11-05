@@ -121,6 +121,7 @@ public final class SceneRuntime {
             var member = new LinkedHashMap<String, Object>();
             member.put("character_id", actor.characterRef().character().getId());
             member.put("runtime_id", actor.runtime().id());
+            member.put("action_dispatch", actor.dispatch().snapshot());
             var contacts = actor.characterState().contactSnapshot();
             member.put("contact_count", contacts.count());
             member.put("background_tasks", actor.backgroundSnapshot());
