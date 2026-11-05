@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +44,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -204,7 +204,7 @@ class NativeScriptRuntimeTest {
 
     @Test void outputArrivesBeforeTheInvocationReturnsAndMatchesItsBoundedFinalText() throws Exception {
         Fixture fixture = fixture();
-        List<NativeScriptExecution.Output> output = new CopyOnWriteArrayList<>();
+        List<NativeScriptExecution.Output> output = Collections.synchronizedList(new ArrayList<>());
         long began = System.nanoTime();
         var phases = new LinkedHashMap<String, Long>();
         var lastOutput = new AtomicLong();
@@ -268,7 +268,8 @@ class NativeScriptRuntimeTest {
                 evidence.put("phases_relative_ns", Map.copyOf(phases));
                 long last = lastOutput.get();
                 evidence.put("last_output_relative_ns", last == 0 ? "unobserved" : last - began);
-                var captured = List.copyOf(output);
+                List<NativeScriptExecution.Output> captured;
+                synchronized (output) { captured = List.copyOf(output); }
                 var channels = new LinkedHashMap<String, Map<String, Object>>();
                 for (String channel : List.of("stdout", "stderr")) {
                     var entries = captured.stream().filter(item -> item.channel().equals(channel)).toList();
