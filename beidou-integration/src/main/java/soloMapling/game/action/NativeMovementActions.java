@@ -550,11 +550,13 @@ public final class NativeMovementActions {
         boolean moved = job.initialX != job.lastX || job.initialY != job.lastY;
         boolean completed = job.input.action != null && job.durationCompleted;
         boolean interrupted = job.input.work.cancelRequested() || !job.stops.isEmpty() || !sameWorld(job.input);
-        NativeActionResult.Outcome outcome = "native_movement_outcome_unknown".equals(job.reason) ? INDETERMINATE
+        boolean idleUnconfirmed = job.primary.dispatched && !job.idleObserved;
+        NativeActionResult.Outcome outcome = "native_movement_outcome_unknown".equals(job.reason) || idleUnconfirmed ? INDETERMINATE
                 : "stop".equals(job.primary.action) ? job.idleObserved ? SUCCEEDED : FAILED
                 : completed ? moved && job.idleObserved ? SUCCEEDED : FAILED : interrupted ? CANCELLED : FAILED;
         if (outcome == SUCCEEDED && !job.primary.dispatched) outcome = FAILED;
-        String reason = outcome == SUCCEEDED ? null : job.reason == null ? "native_movement_not_observed" : job.reason;
+        String reason = outcome == SUCCEEDED ? null : job.reason != null ? job.reason
+                : idleUnconfirmed ? "native_movement_idle_unconfirmed" : "native_movement_not_observed";
         completeAndSettle(job.primary, job.input, outcome, reason, facts, job.handlerError);
         for (MoveHandle stop : List.copyOf(job.stops)) {
             Pending input = job.stopInputs.get(stop);

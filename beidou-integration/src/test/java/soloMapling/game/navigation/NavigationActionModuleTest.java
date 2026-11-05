@@ -236,6 +236,69 @@ class NavigationActionModuleTest {
         assertEquals(0, context.scope().resources().snapshot().outstanding());
     }
 
+    @Test void leavingAfterBasicMovementPreservesItsNativeFactsWithoutInventingAnIdleInTheOldScene() throws Exception {
+        var moved = new CountDownLatch(1);
+        var heldLane = new CountDownLatch(1);
+        var releaseLane = new CountDownLatch(1);
+        var fixture = fixture(98_982_141, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
+                        doAnswer(call -> {
+                            if (configured.position.get().x > 0) moved.countDown();
+                            return null;
+                        })
+                                .when(configured.map).movePlayer(eq(configured.character), any()));
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        var movement = fixture.module.movement();
+        var work = context.acceptWork();
+        var moving = movement.prepareMove(fixture.server, context, work, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 3000), () -> {});
+        movement.submitMove(moving);
+        assertTrue(moved.await(3, TimeUnit.SECONDS));
+        var blocker = context.acceptWork();
+        context.submit("movement", blocker, () -> {}, () -> {
+            heldLane.countDown();
+            try { assertTrue(releaseLane.await(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new AssertionError(interrupted); }
+        }, () -> {});
+        Point beforeDeparture;
+        int oldSceneFrames;
+        var destination = mock(MapleMap.class);
+        when(destination.getId()).thenReturn(98_982_142);
+        when(destination.getCharacterById(41)).thenReturn(fixture.character);
+        try {
+            assertTrue(heldLane.await(3, TimeUnit.SECONDS));
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (context.scope().snapshot().diagnostics().stream().noneMatch(pending ->
+                    pending.id() != work.snapshot().id() && pending.id() != blocker.snapshot().id()
+                            && pending.bodyState() == ExecutionScope.BodyState.NOT_STARTED && pending.carrierClaimed())
+                    && System.nanoTime() < until) Thread.sleep(5);
+            assertTrue(context.scope().snapshot().diagnostics().stream().anyMatch(pending ->
+                    pending.id() != work.snapshot().id() && pending.id() != blocker.snapshot().id()
+                            && pending.bodyState() == ExecutionScope.BodyState.NOT_STARTED && pending.carrierClaimed()));
+            beforeDeparture = new Point(fixture.position.get());
+            oldSceneFrames = fixture.movements.size();
+            assertTrue(beforeDeparture.x > 0);
+            SceneRuntimeManager.leave(fixture.character);
+            when(fixture.character.getMap()).thenReturn(destination);
+            when(fixture.map.getCharacterById(41)).thenReturn(null);
+            assertFalse(work.isSettled(), "the already queued old carrier must still leave the original lane");
+        } finally { releaseLane.countDown(); }
+        var result = moving.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(NativeActionResult.Outcome.INDETERMINATE, result.outcome());
+        assertEquals(NativeActionResult.Dispatch.STARTED, result.dispatch());
+        assertEquals(Map.of("x", 0, "y", 0), result.facts().get("before"));
+        assertEquals(Map.of("x", beforeDeparture.x, "y", beforeDeparture.y), result.facts().get("after"));
+        assertEquals(98_982_141, result.facts().get("map_id"));
+        assertEquals(false, result.facts().get("native_idle_observed"));
+        assertEquals(false, result.facts().get("movement_stopped"));
+        assertEquals(oldSceneFrames, fixture.movements.size(), "leaving cannot append an idle frame to the old scene");
+        verify(destination, never()).movePlayer(any(), any());
+        assertTrue(work.isSettled());
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+    }
+
     @Test void basicDirectionInputRejectsNativeSlowWithoutAFrameOrClockDebt() throws Exception {
         var fixture = fixture(98_982_139, new Point(0, 0),
                 List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
