@@ -42,7 +42,7 @@ class SceneCaptureServiceTest {
     void oneBackendCallStreamsImmediateFramesAndEndsOnlyAfterItsProbeIsReleased() throws Exception {
         var fixture = new Fixture();
         var output = new EvidenceStream(row -> {
-            if (row.path("type").asText().equals("frame")) {
+            if (row.path("type").asText().equals("baseline")) {
                 assertTrue(SceneCaptureEvents.interested(fixture.map));
             }
         });
@@ -53,9 +53,13 @@ class SceneCaptureServiceTest {
         var end = records.getLast();
         assertTrue(end.path("completed_normally").asBoolean());
         assertTrue(end.path("file_complete").asBoolean());
-        assertEquals(records.stream().filter(row -> row.path("type").asText().equals("frame")).count(),
+        assertEquals(records.stream().filter(row -> List.of("baseline", "checkpoint").contains(row.path("type").asText())).count(),
                 end.path("frame_count").asLong());
         assertEquals(1, records.get(1).path("seq").asInt());
+        assertEquals("baseline", records.get(1).path("type").asText());
+        assertEquals("events", records.get(2).path("type").asText());
+        assertEquals(records.stream().filter(row -> row.path("type").asText().equals("events")).count(),
+                end.path("event_batch_count").asLong());
         assertTrue(end.path("sampling_stopped").asBoolean());
         assertTrue(end.path("subscription_released").asBoolean());
         assertFalse(end.path("coverage").path("complete").asBoolean());
@@ -70,7 +74,7 @@ class SceneCaptureServiceTest {
         var fixture = new Fixture();
         var firstFrame = new CountDownLatch(1);
         var output = new EvidenceStream(row -> {
-            if (row.path("type").asText().equals("frame")) firstFrame.countDown();
+            if (row.path("type").asText().equals("baseline")) firstFrame.countDown();
         });
         var failure = new AtomicReference<Throwable>();
         var carrier = Thread.ofVirtual().start(() -> {
@@ -98,7 +102,7 @@ class SceneCaptureServiceTest {
         var fixture = new Fixture();
         var replacement = mock(MapleMap.class);
         var output = new EvidenceStream(row -> {
-            if (row.path("type").asText().equals("frame")) fixture.loaded.set(Map.of(104040000, replacement));
+            if (row.path("type").asText().equals("baseline")) fixture.loaded.set(Map.of(104040000, replacement));
         });
         fixture.captures.record("admin", new SceneCaptureRequest.Record(fixture.sceneRef, 1_000, 50), output);
         var end = output.rows().getLast();
@@ -118,7 +122,7 @@ class SceneCaptureServiceTest {
         assertThrows(IOException.class,
                 () -> fixture.captures.record("admin", new SceneCaptureRequest.Record(fixture.sceneRef, 1_000, 50), failed));
         assertEquals(2, failed.rows().size());
-        assertEquals("frame", failed.rows().getLast().path("type").asText());
+        assertEquals("baseline", failed.rows().getLast().path("type").asText());
         var status = fixture.captures.status("admin", failed.captureId);
         assertEquals("output_failed", status.get("reason"));
         assertEquals(false, status.get("file_complete"));
@@ -148,7 +152,7 @@ class SceneCaptureServiceTest {
             flushed = text.length();
             if (row.path("type").asText().equals("header")) captureId = row.path("capture_id").asText();
             onRecord.accept(row);
-            if (failAfterFirstFrame && row.path("type").asText().equals("frame")) fail = true;
+            if (failAfterFirstFrame && row.path("type").asText().equals("baseline")) fail = true;
         }
 
         List<JsonNode> rows() {

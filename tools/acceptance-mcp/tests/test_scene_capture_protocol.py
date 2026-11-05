@@ -29,10 +29,18 @@ class CaptureStub(BridgeStub):
         self.stopped = Event()
         self.finish.set()
         self.snapshot = {
-            "schema_version": 1, "identity": {"scene_ref": SCENE_REF, "map_instance_key": "map-capture-fixture"},
+            "schema_version": 2, "identity": {"scene_ref": SCENE_REF, "map_instance_key": "map-capture-fixture"},
             "static_scene": {"footholds": []},
             "frame": {"native": {},
                       "simulation": {"available": False}, "events": [], "coverage": {"complete": False}},
+        }
+        self.event_batch = {
+            "type": "events", "seq": 1,
+            "events": {"items": [{"category": "output", "source": "server_output.client_send",
+                                   "values": {"recipient_character_id": 4, "recipient_seq": 1,
+                                              "opcode_name": "CLOSE_RANGE_ATTACK"}}],
+                       "total_since_last": 1, "dropped": 0, "gap": False,
+                       "probe_read_failures": 0, "subscription_closed": False},
         }
         super().__init__()
         owner = self
@@ -53,13 +61,18 @@ class CaptureStub(BridgeStub):
                 self.send_header("Content-Type", "application/x-ndjson")
                 self.end_headers()
                 try:
-                    for record in [{"type": "header", "capture_id": CAPTURE_ID,
+                    for record in [{"type": "header", "schema_version": 2,
+                                    "capture_id": CAPTURE_ID,
                                     "identity": {"scene_ref": SCENE_REF}},
-                                   {"type": "frame", "seq": 1, **owner.snapshot["frame"]}]:
+                                   {"type": "baseline", "seq": 1, **owner.snapshot["frame"]}]:
                         self.wfile.write((json.dumps(record) + "\n").encode())
                         self.wfile.flush()
                     owner.finish.wait(timeout=5)
                     owner.stopped.set()
+                    for record in [owner.event_batch,
+                                   {"type": "checkpoint", "seq": 2, **owner.snapshot["frame"]}]:
+                        self.wfile.write((json.dumps(record) + "\n").encode())
+                        self.wfile.flush()
                     self.wfile.write((json.dumps(owner.ending()) + "\n").encode())
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
@@ -70,7 +83,8 @@ class CaptureStub(BridgeStub):
         self.http.RequestHandlerClass = CaptureHandler
 
     def ending(self) -> dict:
-        return {"type": "end", "capture_id": CAPTURE_ID, "frame_count": 1, "elapsed_ms": 100,
+        return {"type": "end", "capture_id": CAPTURE_ID, "frame_count": 2, "event_batch_count": 1,
+                "elapsed_ms": 100,
                 "reason": "duration_elapsed", "sampling_stopped": True, "subscription_released": True,
                 "recording_complete": True, "file_complete": True, "coverage": {"complete": False}}
 
@@ -126,10 +140,14 @@ class SceneCaptureProtocolTests(unittest.IsolatedAsyncioTestCase):
             response = await request
         self.assertFalse(response.is_error)
         records = [json.loads(line) for line in self.output.read_text().splitlines()]
-        self.assertEqual(["header", "frame", "end"], [value["type"] for value in records])
+        self.assertEqual(["header", "baseline", "events", "checkpoint", "end"],
+                         [value["type"] for value in records])
+        self.assertEqual([1, 1, 2], [value["seq"] for value in records[1:-1]])
+        self.assertEqual(self.stub.event_batch, records[2])
         self.assertTrue(records[-1]["sampling_stopped"])
         self.assertTrue(records[-1]["subscription_released"])
-        self.assertEqual(1, response.structured_content["frame_count"])
+        self.assertEqual(2, response.structured_content["frame_count"])
+        self.assertEqual(1, response.structured_content["event_batch_count"])
         self.assertEqual(str(self.output), response.structured_content["output_file"])
         self.assertNotIn("output_file", next(request for request in self.stub.requests
                                              if request["path"] == RECORD_PATH)["body"]["data"])
@@ -149,7 +167,18 @@ class SceneCaptureProtocolTests(unittest.IsolatedAsyncioTestCase):
                 while not any(value["path"].endswith("/cancel") for value in self.stub.requests) or not self.stub.stopped.is_set():
                     await asyncio.sleep(0.02)
         self.assertTrue(self.stub.stopped.is_set())
-        self.assertEqual(["header", "frame"], [json.loads(line)["type"] for line in self.output.read_text().splitlines()])
+        self.assertEqual(["header", "baseline"],
+                         [json.loads(line)["type"] for line in self.output.read_text().splitlines()])
+
+    async def test_invalid_event_sequence_preserves_prefix_and_confirms_backend_stop(self) -> None:
+        self.stub.event_batch["seq"] = 2
+        async with self.stdio_client() as client:
+            response = await client.call_tool("scene_record", {"scene_ref": SCENE_REF,
+                                                               "output_file": str(self.output)})
+        self.assertEqual("INVALID_RESPONSE", response.structured_content["error"]["code"])
+        self.assertEqual("CONFIRMED", response.structured_content["backend_stop"])
+        self.assertEqual(["header", "baseline"],
+                         [json.loads(line)["type"] for line in self.output.read_text().splitlines()])
 
     async def test_output_failure_requests_stop_and_keeps_the_original_failure(self) -> None:
         self.stub.finish.clear()
@@ -164,7 +193,7 @@ class SceneCaptureProtocolTests(unittest.IsolatedAsyncioTestCase):
                 raise OSError("the filesystem also fails while closing")
 
             def write(inner, text):
-                if '"type": "frame"' in text:
+                if '"type": "baseline"' in text:
                     raise OSError("controlled filesystem failure")
                 return inner.file.write(text)
 

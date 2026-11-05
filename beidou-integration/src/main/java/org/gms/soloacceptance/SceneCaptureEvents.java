@@ -2,6 +2,7 @@ package org.gms.soloacceptance;
 
 import org.gms.client.BotClient;
 import org.gms.client.Character;
+import org.gms.client.Client;
 import org.gms.net.packet.Packet;
 import org.gms.net.server.channel.handlers.AbstractDealDamageHandler.AttackInfo;
 import org.gms.server.life.Monster;
@@ -31,7 +32,7 @@ public final class SceneCaptureEvents {
             "native.character.hp_change_action", "native.animated.stance_assignment",
             "native.map.object_add", "native.map.object_remove", "native.map.player_membership",
             "native.attack.parse_damage", "native.attack.apply_attack", "native.damage.handler",
-            "server_output.map_broadcast", "native.map.lifecycle");
+            "server_output.map_broadcast", "server_output.client_send", "native.map.lifecycle");
 
     private SceneCaptureEvents() { }
 
@@ -48,9 +49,16 @@ public final class SceneCaptureEvents {
     public static Map<String, Object> coverage() {
         return Map.of("state", "partial", "time_type", "observed", "ordering", "source_observation_order",
                 "capacity_per_subscription", CAPACITY, "sources", SOURCES,
+                "output_paths", List.of("native_client_netty_submission_inside_announcer_lock",
+                        "acceptance_and_bot_scene_dispatch_without_socket"),
+                "recipient_ordering", "native_transport_submission_order_for_one_client_and_capture_journal",
+                "message_projection", SceneOutputPackets.coverage(),
                 "not_covered", List.of("direct_mutations_without_the_listed_native_callbacks",
-                        "special_npc_destroy_and_orphan_summon_detach_paths", "client_receipt_or_playback",
-                        "non_map_broadcast_client_output", "summon_and_pet_attack_handlers"));
+                        "client_network_completion_receipt_or_playback",
+                        "packets_outside_the_declared_scene_opcode_set",
+                        "headless_transport_order_or_acceptance_packet_buffer_order",
+                        "events_before_subscription_or_after_unsubscription",
+                        "outputs_without_a_bound_native_character_or_exact_scene"));
     }
 
     public static boolean interested(MapleMap map) {
@@ -203,6 +211,38 @@ public final class SceneCaptureEvents {
         });
     }
 
+    /** Called at an existing transport boundary, after native recipient filtering has finished. */
+    public static void output(Client client, Packet packet, boolean nativeTransport, MapleMap initializationTarget) {
+        Character actor = client.getPlayer();
+        if (actor == null) return;
+        var map = initializationTarget == null ? actor.getMap() : initializationTarget;
+        capture(map, "server_output.client_send", "scene_packet_output", () -> {
+            var message = SceneOutputPackets.decode(packet);
+            if (message == null) return null;
+            var values = new LinkedHashMap<String, Object>(message);
+            synchronized (JOURNALS) {
+                var journal = JOURNALS.get(map);
+                if (journal == null) return null;
+                var recipient = journal.recipients.computeIfAbsent(client,
+                        ignored -> new Recipient("recipient-" + (journal.recipients.size() + 1)));
+                values.put("recipient", Map.of("character_id", actor.getId(),
+                        "object_oid", actor.getObjectId(), "client_source", source(client),
+                        "transport_ref", recipient.id));
+                values.put("recipient_seq", ++recipient.sequence);
+            }
+            values.put("recipient_sequence_scope", "declared_scene_messages_in_this_capture_journal");
+            values.put("scene_association", initializationTarget == null ? "recipient_current_native_map_at_send"
+                    : "exact_native_warp_destination_for_this_packet");
+            values.put("send_boundary", nativeTransport ? "native_client_netty_write_and_flush_returned"
+                    : "headless_scene_dispatch_returned");
+            values.put("recipient_ordering", nativeTransport ? "native_announcer_lock_submission_order"
+                    : "callback_observation_order_not_transport_or_packet_buffer_order");
+            values.put("network_completion", nativeTransport ? "unobserved" : "no_socket");
+            values.put("client_receipt_or_playback_verified", false);
+            return Map.copyOf(values);
+        });
+    }
+
     private static Map<String, Object> attack(Character actor, AttackInfo attack) {
         return Map.of("character_id", actor.getId(), "skill_id", attack.skill, "skill_level", attack.skilllevel,
                 "input_stance", attack.stance, "input_direction", attack.direction, "input_speed", attack.speed,
@@ -222,8 +262,12 @@ public final class SceneCaptureEvents {
     }
 
     private static String source(Character actor) {
-        if (actor.getClient() instanceof AcceptanceClient) return "acceptance_client";
-        return actor.getClient() instanceof BotClient ? "bot_client" : "native_client";
+        return source(actor.getClient());
+    }
+
+    private static String source(Client client) {
+        if (client instanceof AcceptanceClient) return "acceptance_client";
+        return client instanceof BotClient ? "bot_client" : "native_client";
     }
 
     /** Projection failures are capture coverage failures; native gameplay keeps its original result. */
@@ -237,6 +281,7 @@ public final class SceneCaptureEvents {
             kind = "probe_read_failed";
             readFailed = true;
         }
+        if (values == null) return;
         String observedAt = Instant.now().toString();
         long observedNanos = System.nanoTime();
         synchronized (JOURNALS) {
@@ -244,6 +289,7 @@ public final class SceneCaptureEvents {
             if (journal == null) return;
             long sourceSeq = journal.sourceSequences.merge(source, 1L, Long::sum);
             var event = Map.<String, Object>of("source", source, "source_seq", sourceSeq, "kind", kind,
+                    "category", source.equals("server_output.client_send") && !readFailed ? "output" : "diagnostic",
                     "observed_at", observedAt, "observed_monotonic_ns", observedNanos, "time_type", "observed",
                     "values", values);
             for (var subscription : journal.subscriptions) {
@@ -264,6 +310,14 @@ public final class SceneCaptureEvents {
     private static final class Journal {
         private final Set<Subscription> subscriptions = new LinkedHashSet<>();
         private final Map<String, Long> sourceSequences = new LinkedHashMap<>();
+        private final Map<Client, Recipient> recipients = new IdentityHashMap<>();
+    }
+
+    private static final class Recipient {
+        private final String id;
+        private long sequence;
+
+        private Recipient(String id) { this.id = id; }
     }
 
     public static final class Subscription implements AutoCloseable {
