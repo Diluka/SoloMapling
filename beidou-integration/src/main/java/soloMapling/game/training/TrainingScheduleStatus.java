@@ -2,6 +2,8 @@ package soloMapling.game.training;
 
 import org.gms.client.inventory.InventoryType;
 import soloMapling.game.inventory.SaleItem;
+import soloMapling.game.execution.CharacterCommandLane;
+import soloMapling.game.execution.ExecutionScope;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,11 +12,27 @@ import java.util.Map;
 /** Bounded business progress; inventories, native role resources and action work stay with their owners. */
 public record TrainingScheduleStatus(State state, Stage stage, String reason, long runId,
                                      long cyclesCompleted, Integer currentMapId, Integer destinationMapId,
-                                     Cycle currentCycle, List<Cycle> recentCycles) {
+                                     Cycle currentCycle, List<Cycle> recentCycles, ObservationAdmission observationAdmission) {
     public enum State { IDLE, RUNNING, BLOCKED, STOPPING, FAILED }
     public enum Stage { STARTING, TO_TRAINING, HUNTING, TO_SHOP, SELLING, RETURNING, STOPPED }
 
     public TrainingScheduleStatus { recentCycles = List.copyOf(recentCycles); }
+
+    /** Last unentered read retains its actual admission and settled work, without native objects or error text. */
+    public record ObservationAdmission(CharacterCommandLane.Status status, CharacterCommandLane.Rejection rejection,
+                                        ExecutionScope.WorkSnapshot step, ExecutionScope.WorkSnapshot parent,
+                                        boolean scopeActive) {
+        public Map<String, Object> toMap() {
+            return Map.of("status", status.name(), "rejection", rejection.name(), "step", work(step),
+                    "parent", work(parent), "scope_active", scopeActive);
+        }
+
+        private static Map<String, Object> work(ExecutionScope.WorkSnapshot value) {
+            return Map.of("id", value.id(), "cancel_requested", value.cancelRequested(), "rejected", value.rejected(),
+                    "body_state", value.bodyState().name(), "skipped", value.skipped(),
+                    "carrier_settled", value.carrierSettled(), "settled", value.settled());
+        }
+    }
 
     public record BagCapacity(InventoryType inventoryType, int slotLimit, int freeSlots) {
         public Map<String, Object> toMap() {
@@ -117,6 +135,7 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
         result.put("destination_map_id", destinationMapId);
         result.put("current_cycle", currentCycle == null ? null : currentCycle.toMap());
         result.put("recent_cycles", recentCycles.stream().map(Cycle::toMap).toList());
+        result.put("observation_admission", observationAdmission == null ? null : observationAdmission.toMap());
         return result;
     }
 }

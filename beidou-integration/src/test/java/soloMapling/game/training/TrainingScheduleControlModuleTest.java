@@ -27,6 +27,7 @@ import soloMapling.game.action.ReviveResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.hunting.HuntingControlModule;
 import soloMapling.game.hunting.HuntingSnapshot;
@@ -87,6 +88,61 @@ class TrainingScheduleControlModuleTest {
 
     @BeforeEach void startWorld() throws Exception { InventoryMetadataTestContext.install(); WorldEpoch.onWorldStarted(); }
     @AfterEach void stopWorld() { ExecutionScope.tryBeginWorldStop(); }
+
+    @Test void aCapacityRejectedReadSettlesBeforeTheSameScheduleRunUsesItsNextObservationOpportunity() throws Exception {
+        try (var f = new Fixture(JUNK, 1, 0, 0, false)) {
+            eventually(() -> f.schedule.status().stage() == TrainingScheduleStatus.Stage.HUNTING);
+            f.schedule.stop();
+            f.recovery.stop();
+            f.loot.stop();
+            var owner = f.contexts.get("hunting");
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var queued = new ArrayList<ExecutionScope.WorkHandle>();
+            var blocker = owner.acceptWork();
+            queued.add(blocker);
+            assertEquals(CharacterCommandLane.Status.ENQUEUED, owner.submit("hunting-observe", blocker, () -> {},
+                    () -> { entered.countDown(); awaitActualRelease(release); }, () -> {}).status());
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                for (int count = 0; count < 6; count++) {
+                    var work = owner.acceptWork();
+                    queued.add(work);
+                    assertEquals(CharacterCommandLane.Status.ENQUEUED,
+                            owner.submit("hunting-observe", work, () -> {}, () -> {}, () -> {}).status());
+                }
+                assertEquals(7, f.runtime.snapshot().lane().pending());
+                var started = f.schedule.start();
+                long runId = started.status().runId();
+                eventually(() -> f.schedule.status().state() == TrainingScheduleStatus.State.FAILED
+                        || f.schedule.status().toMap().get("observation_admission") != null);
+                assertEquals(TrainingScheduleStatus.State.RUNNING, f.schedule.status().state(), f.schedule.status().toString());
+                var admission = assertInstanceOf(Map.class, f.schedule.status().toMap().get("observation_admission"));
+                assertEquals("REJECTED", admission.get("status"));
+                assertEquals("CAPACITY", admission.get("rejection"));
+                var step = assertInstanceOf(Map.class, admission.get("step"));
+                assertEquals(true, step.get("rejected"));
+                assertEquals(true, step.get("skipped"));
+                assertEquals(true, step.get("carrier_settled"));
+                assertEquals(true, step.get("settled"));
+                assertEquals(false, assertInstanceOf(Map.class, admission.get("parent")).get("cancel_requested"));
+                assertEquals(true, admission.get("scope_active"));
+                assertEquals(7, f.runtime.snapshot().lane().pending());
+                var scope = f.runtime.context(f.scheduleRef).scope().snapshot();
+                assertEquals(1, scope.acceptedWork(), "busy reads return their work before waiting for the next opportunity");
+                release.countDown();
+                queued.forEach(work -> work.completion().toCompletableFuture().join());
+                f.loot.start();
+                eventually(() -> f.schedule.status().stage() == TrainingScheduleStatus.Stage.HUNTING);
+                assertEquals(runId, f.schedule.status().runId());
+                assertEquals(TrainingScheduleStatus.State.RUNNING, f.schedule.status().state());
+                f.schedule.stop();
+                f.loot.stop();
+                assertEquals(0, f.runtime.context(f.scheduleRef).scope().snapshot().acceptedWork());
+                assertEquals(0, f.runtime.snapshot().lane().pending());
+            } finally { release.countDown(); }
+        }
+    }
 
     @Test void anUnknownPickupDuringInitialTravelCannotBecomeTheFirstCycleBaseline() throws Exception {
         try (var f = new Fixture(JUNK, 1, 0, 0, false, TOWN)) {

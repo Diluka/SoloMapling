@@ -11,6 +11,7 @@ import soloMapling.game.action.ReviveResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
+import soloMapling.game.execution.CharacterCommandLane;
 import soloMapling.game.hunting.HuntingControlModule;
 import soloMapling.game.hunting.HuntingSnapshot;
 import soloMapling.game.hunting.HuntingStartOptions;
@@ -92,7 +93,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
     private long cycleSequence;
     private long cyclesCompleted;
     private TrainingScheduleStatus last = new TrainingScheduleStatus(State.IDLE, Stage.STOPPED, "not_started",
-            0, 0, null, null, null, List.of());
+            0, 0, null, null, null, List.of(), null);
 
     public TrainingScheduleControlModule(Config config, Server server) {
         this.config = config;
@@ -219,7 +220,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
     private TrainingScheduleStatus snapshot(Activity activity) {
         return new TrainingScheduleStatus(activity.state, activity.stage, activity.reason, activity.id,
                 cyclesCompleted, activity.currentMapId, activity.destinationMapId,
-                activity.cycle == null ? null : activity.cycle.snapshot(false), List.copyOf(recent));
+                activity.cycle == null ? null : activity.cycle.snapshot(false), List.copyOf(recent), activity.observationAdmission);
     }
 
     private void run(Activity activity, ExecutionScope.WorkHandle work) {
@@ -658,26 +659,49 @@ public final class TrainingScheduleControlModule implements ControlModule {
     }
 
     private <T> T observe(Activity activity, Function<GameContext.SceneRef, T> read) {
-        var value = new AtomicReference<T>();
-        var failure = new AtomicReference<Throwable>();
-        var entered = new AtomicBoolean();
-        var step = activity.context.acceptWork(activity.task.work());
-        try {
-            activity.context.submit("training-observe", step, () -> {}, () -> {
-                entered.set(true);
-                try {
-                    if (activity.task.work().cancelRequested()) throw new CancellationException("training_stopped");
-                    var scene = NativeContextChecks.captureScene(server, activity.context.characterRef());
-                    value.set(read.apply(scene));
-                    NativeContextChecks.requireSceneCurrent(server, scene);
-                } catch (RuntimeException | Error problem) { failure.set(problem); }
-            }, () -> {});
-        } catch (RuntimeException rejected) { step.reject(); throw rejected; }
-        step.completion().toCompletableFuture().join();
-        if (failure.get() instanceof Error fatal) throw fatal;
-        if (failure.get() instanceof RuntimeException problem) throw problem;
-        if (!entered.get()) throw new CancellationException("training_work_not_entered");
-        return value.get();
+        var parent = activity.task.work();
+        while (true) {
+            if (parent.cancelRequested() || !activity.context.scope().isActive()) {
+                throw new CancellationException("training_stopped");
+            }
+            var value = new AtomicReference<T>();
+            var failure = new AtomicReference<Throwable>();
+            var entered = new AtomicBoolean();
+            var step = activity.context.acceptWork(parent);
+            CharacterCommandLane.Submission submission;
+            try {
+                submission = activity.context.submit("training-observe", step, () -> {}, () -> {
+                    entered.set(true);
+                    try {
+                        if (parent.cancelRequested()) throw new CancellationException("training_stopped");
+                        var scene = NativeContextChecks.captureScene(server, activity.context.characterRef());
+                        value.set(read.apply(scene));
+                        NativeContextChecks.requireSceneCurrent(server, scene);
+                    } catch (RuntimeException | Error problem) { failure.set(problem); }
+                }, () -> {});
+            } catch (RuntimeException rejected) { step.reject(); throw rejected; }
+            var settled = step.completion().toCompletableFuture().join();
+            if (failure.get() instanceof Error fatal) throw fatal;
+            if (failure.get() instanceof RuntimeException problem) throw problem;
+            if (entered.get()) return value.get();
+            var admission = new TrainingScheduleStatus.ObservationAdmission(submission.status(), submission.rejection(),
+                    settled, parent.snapshot(), activity.context.scope().isActive());
+            synchronized (this) { activity.observationAdmission = admission; }
+            if (parent.cancelRequested() || !admission.scopeActive()) {
+                throw new CancellationException("training_stopped");
+            }
+            if (submission.status() != CharacterCommandLane.Status.REJECTED
+                    || submission.rejection() != CharacterCommandLane.Rejection.CAPACITY) {
+                throw new IllegalStateException("training_observation_not_entered: " + admission);
+            }
+            activity.context.recordActivity(step, "observation_busy", "CAPACITY");
+            // Only this read was rejected. Keep the current shop/portal call stack and its existing effects.
+            try { Thread.sleep(config.checkIntervalMs()); }
+            catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("training_observation_wait_cancelled");
+            }
+        }
     }
 
     private Observation observe(Activity activity) {
@@ -716,6 +740,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
         volatile State state = State.RUNNING;
         Stage stage = Stage.STARTING;
         String reason;
+        TrainingScheduleStatus.ObservationAdmission observationAdmission;
         Integer currentMapId;
         Integer destinationMapId;
         BlockedCondition blockedOn;
