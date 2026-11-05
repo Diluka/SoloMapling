@@ -75,8 +75,15 @@ final class SceneOutputPackets {
                     int skill = level > 0 ? p.getInt() : 0;
                     fields.put("skill_id", skill);
                     fields.put("display", Byte.toUnsignedInt(p.get()));
-                    fields.put("direction", Byte.toUnsignedInt(p.get()));
-                    fields.put("stance", Byte.toUnsignedInt(p.get()));
+                    int direction = Byte.toUnsignedInt(p.get());
+                    int stance = Byte.toUnsignedInt(p.get());
+                    fields.put("direction", direction);
+                    fields.put("stance", stance);
+                    int encodedAction = direction | stance << 8;
+                    fields.put("encoded_action", encodedAction);
+                    fields.put("producer_body_action_id", encodedAction & 0x7fff);
+                    fields.put("producer_facing_left", (encodedAction & 0x8000) != 0);
+                    fields.put("action_encoding_source", "Solo_BotAttackData_and_NativeCombatActions_low15_action_highbit_facing");
                     fields.put("speed", Byte.toUnsignedInt(p.get()));
                     fields.put("attack_tail_marker", Byte.toUnsignedInt(p.get()));
                     fields.put("projectile_item_id", p.getInt());

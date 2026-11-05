@@ -38,6 +38,8 @@ OID 不被包装成可靠的生成代次；对象生命周期代次未知时明�
 
 输出消息保留 opcode、消息类别、关键协议字段、关联对象、解码完整性和已声明消息的原始协议字节。攻击保留动作、方向、速度、技能、目标与伤害行；属性更新保留消息实际携带的字段及新值。复杂初始化或尚未解开的字段如实标记 partial，原始字节可用于匹配版本协议复核。未知或损坏消息不补造字段；无关聊天、认证等消息不采集正文。具体已支持 opcode 与缺口由 `scene_capture.event_coverage.message_projection` 公告。
 
+攻击输出的 `direction/stance` 保留北斗构包方法的两个原字节名，不能直接解释为左右布尔值或移动姿态。`encoded_action` 按小端组合这两个字节；`producer_body_action_id` 和 `producer_facing_left` 按当前 Solo 构包规则解释低15位动作与最高位朝向，并保存来源。此解释不替代匹配版本客户端的实际播放核验。
+
 普通网络记录只证明原生传输提交，未观察 socket 完成、客户端接收或播放。匹配版本客户端的消息格式、动作语义、接收者和顺序可以据此核对；真人画面属于辅助冒烟，单独记录。
 
 事件批次包含 `total_since_last`、`dropped`、`gap`、`probe_read_failures` 和 `subscription_closed`。读取失败不打断原生发送。最后一个检查点之后的冻结事件进入 `end.events`；因大小限制未写出的批次可保留在 `end.unwritten_frame_events`。采样正常结束不代表全部协议覆盖，`coverage.complete` 继续为 false。

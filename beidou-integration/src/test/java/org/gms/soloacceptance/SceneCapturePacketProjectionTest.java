@@ -38,7 +38,7 @@ class SceneCapturePacketProjectionTest {
         when(actor.getClient()).thenReturn(client);
         when(actor.getMap()).thenReturn(map);
         var damage = Map.of(300, List.of(17, 23));
-        var melee = PacketCreator.closeRangeAttack(actor, 1001004, 3, 6, 0x12, damage, 4, 1, 9);
+        var melee = PacketCreator.closeRangeAttack(actor, 1001004, 3, 0x80, 0x12, damage, 4, 16, 0);
         var ranged = PacketCreator.rangedAttack(actor, 4001004, 2, 7, 0x12, 2070000, damage, 5, 0, 8);
         var magic = PacketCreator.magicAttack(actor, 2001004, 4, 8, 0x12, damage, 250, 6, 1, 7);
         try (var subscription = SceneCaptureEvents.open(map)) {
@@ -54,10 +54,13 @@ class SceneCapturePacketProjectionTest {
             assertEquals(7, fields.get("character_id"));
             assertEquals(1001004, fields.get("skill_id"));
             assertEquals(3, fields.get("skill_level"));
-            assertEquals(6, fields.get("stance"));
-            assertEquals(1, fields.get("direction"));
+            assertEquals(0x80, fields.get("stance"));
+            assertEquals(16, fields.get("direction"));
+            assertEquals(0x8010, fields.get("encoded_action"));
+            assertEquals(16, fields.get("producer_body_action_id"));
+            assertEquals(true, fields.get("producer_facing_left"));
             assertEquals(4, fields.get("speed"));
-            assertEquals(9, fields.get("display"));
+            assertEquals(0, fields.get("display"));
             assertEquals(List.of(Map.of("monster_oid", 300, "target_marker", 0, "damage", List.of(17, 23))), fields.get("targets"));
             var rangedValues = assertInstanceOf(Map.class, assertInstanceOf(Map.class, records.get(1)).get("values"));
             var rangedFields = assertInstanceOf(Map.class, rangedValues.get("protocol_fields"));

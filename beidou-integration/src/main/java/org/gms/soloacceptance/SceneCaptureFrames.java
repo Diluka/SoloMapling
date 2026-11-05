@@ -128,7 +128,8 @@ final class SceneCaptureFrames {
         coverage.put("unavailable_pet_owner_count", unavailablePetOwners);
         coverage.put("object_lifecycle_identity", "unknown");
         coverage.put("unsupported_fields", List.of("native_velocity", "native_object_lifecycle_generation",
-                "monster_mist_skill", "other_object_specific_fields"));
+                "monster_mist_skill", "other_object_specific_fields", "complete_character_appearance",
+                "complete_recipient_initialization_state"));
         coverage.put("consistency", "best_effort");
         coverage.put("field_sources", Map.of(
                 "stance", "native_last_movement_stance",
