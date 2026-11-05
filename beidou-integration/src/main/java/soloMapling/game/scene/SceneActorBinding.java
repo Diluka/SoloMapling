@@ -87,13 +87,21 @@ public final class SceneActorBinding {
         synchronized (tasks) { cleanupProofs.add(proof); }
     }
 
+    /** Native controller cleanup follows this entry's already registered action carriers. */
+    CompletionStage<Void> whenActionsDrained() {
+        synchronized (tasks) {
+            return CompletableFuture.allOf(entryWork.stream().map(work -> work.completion().toCompletableFuture())
+                    .toArray(CompletableFuture[]::new));
+        }
+    }
+
     CompletionStage<Void> leave() {
         synchronized (tasks) {
             active = false;
             tasks.forEach(background -> background.task().cancel());
             var waiting = new ArrayList<CompletableFuture<?>>();
             tasks.forEach(background -> waiting.add(background.task().completion().toCompletableFuture()));
-            entryWork.forEach(work -> waiting.add(work.completion().toCompletableFuture()));
+            waiting.add(whenActionsDrained().toCompletableFuture());
             return CompletableFuture.allOf(waiting.toArray(CompletableFuture[]::new)).thenCompose(ignored -> {
                 synchronized (tasks) {
                     return CompletableFuture.allOf(cleanupProofs.stream().map(CompletionStage::toCompletableFuture)

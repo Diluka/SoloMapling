@@ -1,6 +1,7 @@
 package soloMapling.game.scene;
 
 import org.gms.net.server.Server;
+import org.gms.constants.game.CharacterStance;
 import soloMapling.ArtificialPlayer.GCMoveSystem.RuntimeNavigationEngine;
 import soloMapling.game.action.NativeActionService;
 import soloMapling.game.action.NativeMovementActions;
@@ -14,6 +15,7 @@ import soloMapling.game.navigation.NavigationActionModule;
 import soloMapling.game.navigation.NavigationResult;
 import soloMapling.game.navigation.NavigationResult.Outcome;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.runtime.ModuleTask;
 
 import java.awt.Point;
 import java.util.LinkedHashSet;
@@ -30,6 +32,7 @@ public final class CharacterMotion {
     private final NativeMovementActions movement;
     private final Point entryPosition;
     private Job active;
+    private ModuleTask entryLanding;
 
     CharacterMotion(SceneActorBinding binding, Server server) {
         this.binding = binding;
@@ -43,6 +46,23 @@ public final class CharacterMotion {
         return movement;
     }
 
+    /** Called on the acknowledged entry lane; only this unchanged native entry may start an idle fall. */
+    void startEntryLanding() {
+        var actor = binding.characterRef().character();
+        if (!actor.isAlive() || !entryPosition.equals(actor.getPosition())
+                || CharacterStance.isClimbing(actor.getStance()) || binding.nativeScene().map().getFootholds() == null) return;
+        var ground = RuntimeNavigationEngine.groundPoint(binding.nativeScene().map(), entryPosition);
+        if (ground == null || ground.y - entryPosition.y <= 1) return;
+        synchronized (this) {
+            entryLanding = binding.startTask("scene-entry-fall-" + actor.getId(), work -> {
+                var result = moveTo(new MoveToRequest(entryPosition.x, ground.y), NavigationActionModule.DEFAULT_CONFIG,
+                        binding.context(), work, SceneMembershipModule.CONTROL);
+                binding.context().recordActivity(work, "map_entry_landing_" + result.outcome().name().toLowerCase(
+                        java.util.Locale.ROOT), "SCENE_ENTRY");
+            });
+        }
+    }
+
     void leave() {
         synchronized (this) {
             if (active != null) active.stopRequested = true;
@@ -52,19 +72,43 @@ public final class CharacterMotion {
 
     public NavigationResult moveTo(MoveToRequest input, NavigationActionModule.Config config,
                                    CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) {
-        var job = new Job(context, work, new Point(input.x(), input.y()), Math.min(config.timeoutMs(), input.timeoutMs()));
-        synchronized (this) {
-            binding.requireCurrent();
-            if (active != null || !movement.tryBeginNavigation()) {
-                return new NavigationResult(Outcome.BUSY, "navigation_busy", null);
-            }
-            active = job;
-        }
+        return moveTo(input, config, context, work, "movement");
+    }
+
+    private NavigationResult moveTo(MoveToRequest input, NavigationActionModule.Config config,
+                                   CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, String control) {
+        var job = new Job(context, work, new Point(input.x(), input.y()), Math.min(config.timeoutMs(), input.timeoutMs()), control);
+        job.scene = binding.nativeScene();
+        boolean ownsMotion = false;
         Outcome outcome = null;
         String reason = null;
         try {
             binding.awaitWork(work);
-            var actor = context.prepareNative("movement", work, () -> {},
+            ModuleTask landing;
+            synchronized (this) { landing = "movement".equals(control) ? entryLanding : null; }
+            // A normal navigation request may follow login immediately; wait for this exact entry carrier,
+            // without cancelling it or extending the caller's original deadline.
+            while (landing != null && !landing.work().isSettled()) {
+                checkpoint(job);
+                try { Thread.sleep(25); }
+                catch (InterruptedException interrupted) {
+                    job.interrupted = true;
+                    throw new Halt(Outcome.CANCELLED, "navigation_cancelled");
+                }
+            }
+            synchronized (this) {
+                binding.requireCurrent();
+                if (SceneMembershipModule.CONTROL.equals(control)
+                        && !entryPosition.equals(binding.characterRef().character().getPosition())) {
+                    return new NavigationResult(Outcome.CONTEXT_CHANGED, "entry_position_changed", null);
+                }
+                if (active != null || !movement.tryBeginNavigation()) {
+                    return new NavigationResult(Outcome.BUSY, "navigation_busy", null);
+                }
+                active = job;
+                ownsMotion = true;
+            }
+            var actor = context.prepareNative(control, work, () -> {},
                     (lane, permit, original, character) -> character);
             binding.requireCurrent();
             job.scene = NativeContextChecks.captureScene(server, actor);
@@ -141,7 +185,9 @@ public final class CharacterMotion {
                     });
                 }
             } finally {
-                synchronized (this) { active = null; movement.endNavigation(); }
+                if (ownsMotion) {
+                    synchronized (this) { active = null; movement.endNavigation(); }
+                }
                 if (job.interrupted) Thread.currentThread().interrupt();
             }
         }
@@ -189,7 +235,7 @@ public final class CharacterMotion {
             } catch (RuntimeException | Error unavailable) { failure.set(unavailable); }
         };
         try {
-            if (cleanup == null) job.context.submit("movement", step, () -> {}, body, () -> {});
+            if (cleanup == null) job.context.submit(job.control, step, () -> {}, body, () -> {});
             else job.context.submitCleanup(cleanup, body, () -> {});
         } catch (RuntimeException rejected) {
             step.reject();
@@ -230,6 +276,7 @@ public final class CharacterMotion {
         final ExecutionScope.WorkHandle work;
         final Point target;
         final int timeoutMs;
+        final String control;
         final long started = System.nanoTime();
         final Set<String> modes = new LinkedHashSet<>();
         volatile boolean stopRequested;
@@ -240,8 +287,8 @@ public final class CharacterMotion {
         Point position;
         boolean stable;
         int steps;
-        Job(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, Point target, int timeoutMs) {
-            this.context = context; this.work = work; this.target = target; this.timeoutMs = timeoutMs;
+        Job(CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work, Point target, int timeoutMs, String control) {
+            this.context = context; this.work = work; this.target = target; this.timeoutMs = timeoutMs; this.control = control;
         }
     }
 }

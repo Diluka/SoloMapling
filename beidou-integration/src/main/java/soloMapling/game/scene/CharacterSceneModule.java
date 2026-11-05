@@ -31,7 +31,10 @@ public final class CharacterSceneModule implements SceneRuntimeModule {
                 if (entry.cancelRequested()) return;
                 var character = binding.characterRef().character();
                 // Portal/revive may have completed this entry synchronously in the preceding lane body.
-                if (!character.isChangingMaps()) return;
+                if (!character.isChangingMaps()) {
+                    actor.motion.startEntryLanding();
+                    return;
+                }
                 boolean handlerError;
                 try {
                     handlerError = NativeMapEntryActions.acknowledge(scene.server(), binding.nativeScene(),
@@ -49,6 +52,7 @@ public final class CharacterSceneModule implements SceneRuntimeModule {
                     throw new IllegalStateException("scene_map_entry_ack_failed");
                 }
                 context.recordActivity(entry, "map_entry_ready", "SCENE_ENTRY");
+                actor.motion.startEntryLanding();
             }, () -> {});
             if (submission.status() == CharacterCommandLane.Status.REJECTED) {
                 throw new CharacterRuntime.Invalid("scene_map_entry_not_accepted");
