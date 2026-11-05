@@ -151,12 +151,20 @@ class TrainingScheduleControlModuleTest {
                     f.actor, f.actor, f.client, (byte) 0, true);
             drop.setObjectId(800001);
             drop.setDropTime(System.currentTimeMillis() - 1_000);
-            when(f.maps.get(TOWN).getMapObjects()).thenReturn(List.of(drop));
-            when(f.maps.get(TOWN).getMapObject(drop.getObjectId())).thenReturn(drop);
-            doReturn(new PickupResult(
+            var unknownPickup = new CountDownLatch(1);
+            var unknown = new PickupResult(
                     PickupResult.Outcome.INDETERMINATE, "native_pickup_outcome_unknown", drop.getObjectId(),
-                    JUNK, 1, 0, true, false, true, true, false)).when(f.nativeActions).pickup(any(), any(), any());
-            try { eventually(() -> f.loot.snapshot().indeterminateSequence() > 0); }
+                    JUNK, 1, 0, true, false, true, true, false);
+            doAnswer(call -> { unknownPickup.countDown(); return unknown; })
+                    .when(f.nativeActions).pickup(any(), any(), any());
+            // Prepare the native outcome before publishing a drop to an already-running control.
+            when(f.maps.get(TOWN).getMapObject(drop.getObjectId())).thenReturn(drop);
+            when(f.maps.get(TOWN).getMapObjects()).thenReturn(List.of(drop));
+            try {
+                assertTrue(unknownPickup.await(5, TimeUnit.SECONDS));
+                eventually(() -> f.loot.snapshot().indeterminateSequence() > 0);
+                assertEquals(TrainingScheduleStatus.Stage.TO_TRAINING, f.schedule.status().stage());
+            }
             finally { f.releaseBlockedCall.countDown(); }
             eventually(() -> "loot_indeterminate".equals(f.schedule.status().reason()));
             assertEquals(TrainingScheduleStatus.State.BLOCKED, f.schedule.status().state());

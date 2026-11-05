@@ -95,8 +95,14 @@ class NavigationActionModuleTest {
     }
 
     @Test void basicDirectionMoveAndStopSettleTheSceneOwnedClockAndOriginalWork() throws Exception {
+        var moved = new CountDownLatch(1);
+        var observingStopInput = new AtomicBoolean();
         var fixture = fixture(98_982_136, new Point(0, 0),
-                List.of(foothold(-200, 0, 300, 0, 1)), List.of());
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
+                        doAnswer(call -> {
+                            if (observingStopInput.get()) moved.countDown();
+                            return null;
+                        }).when(configured.map).movePlayer(eq(configured.character), any()));
         var context = fixture.module.context();
         var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
         var movement = fixture.module.movement();
@@ -112,9 +118,7 @@ class NavigationActionModuleTest {
         assertEquals(true, completed.facts().get("completed_duration"));
         assertEquals(0, context.scope().resources().snapshot().outstanding());
 
-        var moved = new CountDownLatch(1);
-        doAnswer(call -> { moved.countDown(); return null; })
-                .when(fixture.map).movePlayer(eq(fixture.character), any());
+        observingStopInput.set(true);
         var moveWork = context.acceptWork();
         var moving = movement.prepareMove(fixture.server, context, moveWork, binding.nativeScene(),
                 new NativeMovementAction("RIGHT", 3000), () -> {});
