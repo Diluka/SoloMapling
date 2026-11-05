@@ -143,7 +143,7 @@ public final class CombatActionModule implements ActionModule {
                 task.tactics = context.provider(CombatTacticsControlModule.ASSESS).orElse(null);
                 if (task.tactics == null) return result(task, Outcome.UNAVAILABLE, "tactics_unavailable");
                 task.engagement = task.tactics.attachEngagement(new EngagementContext(
-                        new EngagementCandidate(task.scene, task.target, input.allowedTargetOids(), input.activityArea()), work));
+                        new EngagementCandidate(task.scene, task.target, input.allowedTargetOids(), input.activityArea()), work, task.deadline));
                 if (task.engagement == null) return result(task, Outcome.UNAVAILABLE, "tactics_unavailable");
                 while (true) {
                     checkpoint(task);

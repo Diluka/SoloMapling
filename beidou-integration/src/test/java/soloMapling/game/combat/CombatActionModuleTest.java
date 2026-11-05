@@ -29,6 +29,9 @@ import org.gms.provider.wz.WZFiles;
 import org.gms.provider.wz.XMLWZFile;
 import org.mockito.MockedStatic;
 import soloMapling.game.tactics.CombatTacticsControlModule;
+import soloMapling.game.navigation.NavigationActionModule;
+import soloMapling.game.navigation.MoveToRequest;
+import soloMapling.game.navigation.NavigationPlan;
 import java.nio.file.Path;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.beidou.InventoryMetadataTestContext;
@@ -123,6 +126,31 @@ class CombatActionModuleTest {
             assertEquals("UNAVAILABLE", result.get("outcome"));
             assertEquals("tactics_unavailable", result.get("reason"));
             verify(fixture.target, never()).damage(any(), anyInt(), anyBoolean());
+            fixture.assertCombatDrained();
+        }
+    }
+
+    @Test void aLegalLongGroundApproachUsesTheEngagementBudgetThenReachesTheSameTarget() throws Exception {
+        try (var fixture = new Fixture()) {
+            fixture.hp.set(1);
+            when(fixture.target.getPosition()).thenReturn(new Point(650, 0));
+            var navigation = new ModuleDefinition<NavigationActionModule.Config, NavigationActionModule>(
+                    NavigationActionModule.DEFINITION.typeId(), NavigationActionModule.DEFINITION.controls(),
+                    NavigationActionModule.DEFINITION.limits(), config -> new NavigationActionModule(config, fixture.server),
+                    NavigationActionModule.DEFINITION.exports());
+            fixture.runtime.mount(navigation, new ModuleSelection<>("navigation", NavigationActionModule.DEFAULT_CONFIG, true));
+            var planned = fixture.caller.call(NavigationActionModule.PLAN, new MoveToRequest(590, 0, 10_000)).result();
+            assertEquals(NavigationPlan.Outcome.PLANNED, planned.outcome());
+            assertTrue(planned.prediction().arrived());
+            assertTrue(planned.prediction().elapsedMs() > 4000, "the normal legal approach exceeds the old tactical preview cap");
+
+            var result = fixture.caller.call(CombatActionModule.ENGAGE,
+                    new CombatRequest(91, Set.of(91), CombatRequest.Choice.AUTO, 10_000)).result();
+
+            assertEquals(CombatResult.Outcome.TARGET_DEAD, result.outcome(), result.toString());
+            assertTrue(fixture.position.get().x > 500, "the scene's existing movement actually approached the target");
+            assertEquals(91, result.hits().getFirst().objectId());
+            assertEquals(0, result.hits().getFirst().hpAfter());
             fixture.assertCombatDrained();
         }
     }

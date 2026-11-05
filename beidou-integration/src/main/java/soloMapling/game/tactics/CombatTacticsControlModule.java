@@ -272,11 +272,13 @@ public final class CombatTacticsControlModule implements ControlModule {
                 && engagement.context.candidate().scene().map() == binding.nativeScene().map()
                 && engagement.context.candidate().target().isAlive();
         var points = new ArrayList<Point>();
+        Point approachPoint = null;
         if (monitor.move != null) points.add(monitor.move.plan.target());
         if (engaged && proposal != null) {
             var target = engagement.context.candidate().target().getPosition();
             int offset = Math.max(10, Math.min(160, proposal.plan().reachX() / 2));
-            points.add(new Point(target.x + (observation.position().x > target.x ? offset : -offset), target.y));
+            approachPoint = new Point(target.x + (observation.position().x > target.x ? offset : -offset), target.y);
+            points.add(approachPoint);
         }
         points.add(new Point(observation.position().x - config.localEscapeDistancePx(), observation.position().y));
         points.add(new Point(observation.position().x + config.localEscapeDistancePx(), observation.position().y));
@@ -286,8 +288,13 @@ public final class CombatTacticsControlModule implements ControlModule {
             var ground = RuntimeNavigationEngine.groundPoint(binding.nativeScene().map(), point);
             if (ground == null || engaged && engagement.context.candidate().activityBounds() != null
                     && !engagement.context.candidate().activityBounds().contains(ground)) continue;
+            boolean chasing = point.equals(approachPoint) || engaged && monitor.move != null
+                    && monitor.move.priority == SceneActionDispatch.Priority.NORMAL && point.equals(monitor.move.plan.target());
+            long budget = chasing ? TimeUnit.NANOSECONDS.toMillis(engagement.context.deadlineNanos() - System.nanoTime())
+                    : Math.max(1000L, config.predictionWindowMs() * 4L);
+            if (budget < 1) continue;
             var planned = monitor.context.call(NavigationActionModule.PLAN,
-                    new MoveToRequest(ground.x, ground.y, (int) Math.min(120_000L, Math.max(1000L, config.predictionWindowMs() * 4L))), work);
+                    new MoveToRequest(ground.x, ground.y, (int) Math.min(120_000L, budget)), work);
             if (planned.status() == ModuleCall.Status.SUCCEEDED && planned.result().outcome() == NavigationPlan.Outcome.PLANNED
                     && planned.result().prediction().arrived()) plans.add(planned.result());
         }
