@@ -88,12 +88,15 @@ public final class CharacterMotion {
             synchronized (this) { landing = "movement".equals(control) ? entryLanding : null; }
             // A normal navigation request may follow login immediately; wait for this exact entry carrier,
             // without cancelling it or extending the caller's original deadline.
-            while (landing != null && !landing.work().isSettled()) {
-                checkpoint(job);
-                try { Thread.sleep(25); }
-                catch (InterruptedException interrupted) {
-                    job.interrupted = true;
-                    throw new Halt(Outcome.CANCELLED, "navigation_cancelled");
+            if (landing != null && !landing.work().isSettled()) {
+                context.recordActivity(work, "map_entry_landing_wait", "SCENE_ENTRY");
+                while (!landing.work().isSettled()) {
+                    checkpoint(job);
+                    try { Thread.sleep(25); }
+                    catch (InterruptedException interrupted) {
+                        job.interrupted = true;
+                        throw new Halt(Outcome.CANCELLED, "navigation_cancelled");
+                    }
                 }
             }
             synchronized (this) {

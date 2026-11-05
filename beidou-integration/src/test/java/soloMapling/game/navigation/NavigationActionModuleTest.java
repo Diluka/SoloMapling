@@ -244,13 +244,17 @@ class NavigationActionModuleTest {
         var context = fixture.module.context();
         var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
         enteredScene.set(binding);
-        var result = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(120, 0)));
         try {
             assertTrue(enteredLanding.await(3, TimeUnit.SECONDS));
-            long admittedUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-            while (context.scope().snapshot().acceptedWork() == 0
-                    && System.nanoTime() < admittedUntil) Thread.sleep(5);
-            assertTrue(context.scope().snapshot().acceptedWork() > 0);
+            var result = CompletableFuture.supplyAsync(() -> fixture.moveTo(new Point(120, 0)));
+            long waitingUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (fixture.runtime.events().events().stream().noneMatch(event -> "map_entry_landing_wait".equals(event.reason()))
+                    && System.nanoTime() < waitingUntil) Thread.sleep(5);
+            var waiting = fixture.runtime.events().events().stream()
+                    .filter(event -> "map_entry_landing_wait".equals(event.reason())).findFirst().orElseThrow();
+            assertEquals(context.reference().instanceId(), waiting.moduleId());
+            assertTrue(context.scope().snapshot().diagnostics().stream().anyMatch(work -> work.id() == waiting.workId()
+                    && work.bodyState() == ExecutionScope.BodyState.RUNNING));
             var stopped = fixture.runtime.stop(context.reference(), CharacterRuntime.StopMode.PAUSE);
 
             assertEquals(ExecutionScope.DrainResult.DRAINED, stopped.await(Duration.ofSeconds(5)));
