@@ -65,7 +65,7 @@ tail -f /absolute/debug/script-output.ndjson /absolute/debug/script-errors.ndjso
 
 文件采用追加方式。恢复时将最后保存的输出 `seq` 作为 `since_output`，避免重复记录已读取片段；若使用较早游标，重读片段仍会追加到文件。`gap` 和每条事件的操作 ID、序号用于识别窗口缺失及跨调用记录。
 
-`console`、`print` 等语言输出按 UTF-8 收集到本次 `stdout/stderr`，保留分片写入的完整 Unicode 字符；每路最多 16,384 字节，超出设置 `output_truncated=true`。这是脚本语言输出，游戏聊天仍沿角色的原生字符集规则。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
+`console`、`print` 等语言输出按普通 UTF-8 收集到本次 `stdout/stderr`；每路以 16,384 字节为硬上限，超出部分截断并设置 `output_truncated=true`。这是脚本语言输出，游戏聊天仍沿角色的原生字符集规则。非空 `source` 返回最后表达式的值；空 `source` 执行原入口并返回其可序列化结果。
 
 JSON 结果最多 16,384 个 UTF-8 字节，最大深度 32，并受节点和字符串累计额度限制。原生对象、函数、循环引用、Promise、非有限数及非法 Unicode 字符串不能作为 JSON 结果传出；脚本应明确投影所需的安全字段。终态结果不保留 Graal `Value`、Context、原生角色或 Throwable 引用。
 

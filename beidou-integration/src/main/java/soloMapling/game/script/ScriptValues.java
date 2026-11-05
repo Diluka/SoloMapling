@@ -161,25 +161,11 @@ public final class ScriptValues {
             truncated |= accepted < length;
         }
         public synchronized String text() {
-            int end = truncated ? completeEnd(0, bytes.position()) : bytes.position();
-            return new String(bytes.array(), 0, end, StandardCharsets.UTF_8);
+            return new String(bytes.array(), 0, bytes.position(), StandardCharsets.UTF_8);
         }
-        /** The caller advances only with the returned complete UTF-8 byte offset. */
-        public synchronized Slice readFrom(int offset, int maximumBytes) {
-            int end = completeEnd(offset, Math.min(bytes.position(), offset + maximumBytes));
+        public synchronized Slice readFrom(int offset) {
+            int end = bytes.position();
             return new Slice(new String(bytes.array(), offset, end - offset, StandardCharsets.UTF_8), end, truncated);
-        }
-        private int completeEnd(int offset, int end) {
-            if (end == offset) return end;
-            byte[] data = bytes.array();
-            int start = end - 1;
-            while (start >= offset && (data[start] & 0xc0) == 0x80) start--;
-            if (start >= offset) {
-                int lead = data[start] & 0xff;
-                int needed = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
-                if (end - start < needed) return start;
-            }
-            return end;
         }
     }
 }

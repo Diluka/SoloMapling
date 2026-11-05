@@ -1,7 +1,6 @@
 package soloMapling.game.script.nativeenv;
 
 import com.oracle.truffle.js.scriptengine.GraalJSScriptEngine;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.PolyglotException;
@@ -30,10 +29,6 @@ import soloMapling.game.runtime.RuntimeModule;
 import soloMapling.game.script.ScriptResult;
 
 import java.time.Duration;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -48,10 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
@@ -184,168 +176,51 @@ class NativeScriptRuntimeTest {
         assertClosed(fixture.closeContext(opened.contextId()));
     }
 
-    @Test void languageOutputKeepsSplitSurrogatePairsAndRespectsUtf8Budget() throws Exception {
-        Fixture fixture = fixture();
-        NativeScriptResult opened = fixture.start(
-                "console.log('中文😀'); print('🌟'); console.error('😀'); ({label:'中文😀'})", Map.of());
-        assertOpen(opened);
-        assertEquals(Map.of("label", "中文😀"), opened.result());
-        assertEquals("中文😀\n🌟\n", opened.stdout());
-        assertEquals("😀\n", opened.stderr());
-        assertFalse(opened.outputTruncated());
-
-        NativeScriptResult bounded = fixture.invoke(opened.contextId(), null, List.of(),
-                "print('x'.repeat(16382) + '😀'); 'done'");
-        assertOpen(bounded);
-        assertEquals("x".repeat(16382), bounded.stdout());
-        assertTrue(bounded.outputTruncated());
-        assertClosed(fixture.closeContext(opened.contextId()));
-    }
-
-    @Test void outputArrivesBeforeTheInvocationReturnsAndMatchesItsBoundedFinalText() throws Exception {
+    @Test void languageOutputStopsAtTheByteLimit() throws Exception {
         Fixture fixture = fixture();
         List<NativeScriptExecution.Output> output = Collections.synchronizedList(new ArrayList<>());
-        long began = System.nanoTime();
-        var phases = new LinkedHashMap<String, Long>();
-        var lastOutput = new AtomicLong();
-        java.util.function.Consumer<NativeScriptExecution.Output> observe = item -> {
-            output.add(item);
-            lastOutput.set(System.nanoTime());
-        };
-        phases.put("first_submitted", System.nanoTime() - began);
+        var execution = fixture.context.runNativeScript(fixture.context.acceptWork(),
+                request("start", null, Map.of(), null, List.of(),
+                        "print('x'.repeat(17000)); console.error('diagnostic'); 42", Map.of(), 5000),
+                fixture.adapter, output::add);
+        NativeScriptResult result = await(execution);
+        assertOpen(result);
+        assertEquals("x".repeat(16384), result.stdout());
+        assertEquals("diagnostic\n", result.stderr());
+        assertTrue(result.outputTruncated());
+        assertEquals(result.stdout(), output.stream().filter(item -> item.channel().equals("stdout"))
+                .map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
+        assertTrue(output.stream().anyMatch(NativeScriptExecution.Output::truncated));
+        assertClosed(fixture.closeContext(result.contextId()));
+        fixture.assertDrained();
+    }
+
+    @Test void outputArrivesBeforeTheInvocationReturnsAndMatchesItsFinalText() throws Exception {
+        Fixture fixture = fixture();
+        List<NativeScriptExecution.Output> output = Collections.synchronizedList(new ArrayList<>());
         NativeScriptExecution execution = fixture.context.runNativeScript(fixture.context.acceptWork(),
                 request("start", null, Map.of(), null, List.of(),
-                        "console.log('A😀'); hostWait(); print('B中文'); console.error('诊断'); 42", Map.of(), 5000),
-                fixture.adapter, observe);
+                        "console.log('started'); hostWait(); print('finished'); console.error('diagnostic'); 42",
+                        Map.of(), 5000), fixture.adapter, output::add);
         try {
             assertTrue(fixture.adapter.hostEntered.await(5, TimeUnit.SECONDS));
-            phases.put("host_wait_entered_observed", System.nanoTime() - began);
             assertFalse(execution.completion().toCompletableFuture().isDone());
-            assertEquals("A😀\n", output.stream().map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
+            assertEquals("started\n", output.stream().map(NativeScriptExecution.Output::text)
+                    .collect(java.util.stream.Collectors.joining()));
         } finally {
-            phases.put("host_wait_released", System.nanoTime() - began);
             fixture.adapter.hostReleased.countDown();
         }
-        NativeScriptResult opened = awaitOutput(execution, fixture, output, phases, lastOutput, began);
-        phases.put("first_completed", System.nanoTime() - began);
-        assertOpen(opened);
-        assertEquals(opened.stdout(), output.stream().filter(item -> item.channel().equals("stdout"))
+        NativeScriptResult result = await(execution);
+        assertOpen(result);
+        assertFalse(result.outputTruncated());
+        assertEquals("started\nfinished\n", result.stdout());
+        assertEquals("diagnostic\n", result.stderr());
+        assertEquals(result.stdout(), output.stream().filter(item -> item.channel().equals("stdout"))
                 .map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
-        assertEquals(opened.stderr(), output.stream().filter(item -> item.channel().equals("stderr"))
+        assertEquals(result.stderr(), output.stream().filter(item -> item.channel().equals("stderr"))
                 .map(NativeScriptExecution.Output::text).collect(java.util.stream.Collectors.joining()));
-
-        output.clear();
-        lastOutput.set(0);
-        phases.put("bounded_invoke_submitted", System.nanoTime() - began);
-        var boundedExecution = fixture.context.runNativeScript(fixture.context.acceptWork(),
-                request("invoke", opened.contextId(), Map.of(), null, List.of(),
-                        "print('x'.repeat(16382) + '😀'); 'done'", Map.of(), 5000), fixture.adapter, observe);
-        NativeScriptResult bounded = awaitOutput(boundedExecution, fixture, output, phases, lastOutput, began);
-        assertOpen(bounded);
-        assertEquals("x".repeat(16382), bounded.stdout());
-        assertEquals(bounded.stdout(), output.stream().map(NativeScriptExecution.Output::text)
-                .collect(java.util.stream.Collectors.joining()));
-        assertTrue(output.stream().anyMatch(NativeScriptExecution.Output::truncated));
-        assertTrue(output.stream().allMatch(item -> item.text().getBytes(StandardCharsets.UTF_8).length <= 4096));
-        assertClosed(fixture.closeContext(opened.contextId()));
-    }
-
-    /** Failure-only evidence for the exact timed-out invocation; it never starts or cancels another call. */
-    private static NativeScriptResult awaitOutput(NativeScriptExecution execution, Fixture fixture,
-            List<NativeScriptExecution.Output> output, Map<String, Long> phases, AtomicLong lastOutput,
-            long began) throws Exception {
-        try { return await(execution); }
-        catch (TimeoutException failure) {
-            phases.put("completion_wait_timed_out", System.nanoTime() - began);
-            try {
-                var reports = Path.of("beidou-integration", "target", "test-reports").toAbsolutePath();
-                Files.createDirectories(reports);
-                var directory = Files.createTempDirectory(reports, "native-script-output-timeout-");
-                var evidence = new LinkedHashMap<String, Object>();
-                evidence.put("pid", ProcessHandle.current().pid());
-                evidence.put("request_timeout_ms", 5000);
-                evidence.put("completion_wait_seconds", 10);
-                evidence.put("observed_at_monotonic_ns", System.nanoTime());
-                evidence.put("phases_relative_ns", Map.copyOf(phases));
-                long last = lastOutput.get();
-                evidence.put("last_output_relative_ns", last == 0 ? "unobserved" : last - began);
-                List<NativeScriptExecution.Output> captured;
-                synchronized (output) { captured = List.copyOf(output); }
-                var channels = new LinkedHashMap<String, Map<String, Object>>();
-                for (String channel : List.of("stdout", "stderr")) {
-                    var entries = captured.stream().filter(item -> item.channel().equals(channel)).toList();
-                    channels.put(channel, Map.of("count", entries.size(),
-                            "utf8_bytes", entries.stream().mapToLong(item -> item.text().getBytes(StandardCharsets.UTF_8).length).sum(),
-                            "truncated", entries.stream().anyMatch(NativeScriptExecution.Output::truncated)));
-                }
-                evidence.put("output_count", captured.size());
-                evidence.put("last_output_sequence", captured.size());
-                evidence.put("output_channels", channels);
-                evidence.put("internal_phase_times", "not_exposed_use_original_thread_stacks");
-                var json = new ObjectMapper().writerWithDefaultPrettyPrinter();
-                Files.writeString(directory.resolve("output-and-phases.json"), json.writeValueAsString(evidence),
-                        StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
-                // jcmd includes virtual threads; collect it before any ledger snapshot can wait on a lock.
-                evidence.put("thread_dump_requested_at_monotonic_ns", System.nanoTime());
-                try {
-                    var dump = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "jcmd").toString(),
-                            Long.toString(ProcessHandle.current().pid()), "Thread.dump_to_file", "-format=json",
-                            directory.resolve("threads.json").toString())
-                            .redirectOutput(directory.resolve("jcmd-stdout.log").toFile())
-                            .redirectError(directory.resolve("jcmd-stderr.log").toFile()).start();
-                    if (dump.waitFor(5, TimeUnit.SECONDS)) evidence.put("thread_dump_exit_code", dump.exitValue());
-                    else {
-                        dump.destroyForcibly();
-                        evidence.put("thread_dump", "timed_out_after_5_seconds");
-                        failure.addSuppressed(new IllegalStateException("native_script_thread_dump_timed_out"));
-                    }
-                } catch (Exception diagnostic) {
-                    evidence.put("thread_dump", "unavailable_" + diagnostic.getClass().getSimpleName());
-                    failure.addSuppressed(diagnostic);
-                }
-                evidence.put("state_observed_at_monotonic_ns", System.nanoTime());
-                evidence.put("execution_work", execution.work().snapshot());
-                evidence.put("scope", execution.work().scope().snapshot());
-                evidence.put("runtime", fixture.runtime.snapshot());
-                evidence.put("completion_done", execution.completion().toCompletableFuture().isDone());
-                var state = new LinkedHashMap<String, Object>();
-                for (String field : List.of("status", "stopping", "guestExited", "began")) {
-                    state.put(field, timeoutField(execution, field, failure));
-                }
-                evidence.put("execution_state", state);
-                var session = fixture.adapter.session;
-                if (session == null) evidence.put("session", "not_created");
-                else {
-                    var sessionState = new LinkedHashMap<String, Object>();
-                    sessionState.put("description", session.describe());
-                    for (String field : List.of("closing", "closed", "contextClosed", "forced", "cleanupStarted", "nativeDisposed")) {
-                        sessionState.put(field, timeoutField(session, field, failure));
-                    }
-                    evidence.put("session", sessionState);
-                }
-                Files.writeString(directory.resolve("state.json"), json.writeValueAsString(evidence),
-                        StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
-                System.err.println("Native script timeout diagnostics: " + directory);
-            } catch (Exception diagnostic) { failure.addSuppressed(diagnostic); }
-            throw failure;
-        }
-    }
-
-    /** Read fixed scalar fields only for failure evidence; absent fields remain visibly unavailable. */
-    private static Object timeoutField(Object owner, String name, TimeoutException failure) {
-        try {
-            var field = owner.getClass().getDeclaredField(name);
-            field.setAccessible(true);
-            Object value = field.get(owner);
-            if (value instanceof AtomicBoolean flag) return flag.get();
-            if (value instanceof AtomicReference<?> reference) value = reference.get();
-            if (value == null) return "unset";
-            if (value instanceof Boolean || value instanceof Number || value instanceof Enum<?>) return value;
-            return "unavailable_non_scalar";
-        } catch (ReflectiveOperationException | RuntimeException diagnostic) {
-            failure.addSuppressed(diagnostic);
-            return "unavailable_" + diagnostic.getClass().getSimpleName();
-        }
+        assertClosed(fixture.closeContext(result.contextId()));
+        fixture.assertDrained();
     }
 
     @Test void parametersAreBoundAsDataWithoutChargingTheirSourceEscapingAgain() throws Exception {
