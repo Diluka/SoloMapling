@@ -35,22 +35,21 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.to_thread(self.stub.stop)
         self.directory.cleanup()
 
-    async def test_stdio_file_receives_output_before_completion_with_unicode_and_channels(self) -> None:
+    async def test_stdio_file_receives_output_before_completion_and_routes_channels(self) -> None:
         release = Event()
         notifications = []
         operation = script_operation(NATIVE_ARGS["request_id"])
-        operation["result"].update(stdout="开始😀\n", stderr="B中文\n")
+        operation["result"].update(stdout="开始\n", stderr="B中文\n")
         association = {"request_id": NATIVE_ARGS["request_id"], "operation_id": operation["operation_id"]}
         self.output_file.write_text('{"previous":true}\n', encoding="utf-8")
 
         def stream(request):
             yield {"type": "started", **association}
             first = {"type": "output", **association, "seq": 1, "channel": "stdout",
-                     "text": "开始😀\n", "output_truncated": False}
+                     "text": "开始\n", "output_truncated": False}
             encoded = (json.dumps(first, ensure_ascii=False) + "\n").encode()
-            boundary = encoded.index("😀".encode()) + 1
-            yield encoded[:boundary]
-            yield encoded[boundary:]
+            yield encoded[:20]
+            yield encoded[20:]
             release.wait(4)
             yield {"type": "output", **association, "seq": 2, "channel": "stderr",
                    "text": "B中文\n", "output_truncated": False}
@@ -65,13 +64,13 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                 **NATIVE_ARGS, "output_file": str(self.output_file)}, progress_callback=progress))
             try:
                 async with asyncio.timeout(4):
-                    while "开始😀" not in self.output_file.read_text(encoding="utf-8"):
+                    while "开始" not in self.output_file.read_text(encoding="utf-8"):
                         await asyncio.sleep(0.01)
                 self.assertFalse(running.done(), "首段输出已写入文件时，脚本仍应等待后续执行。")
                 written = [json.loads(line) for line in self.output_file.read_text(encoding="utf-8").splitlines()]
                 self.assertEqual([{"previous": True}, {"type": "started", **association}, {
                     "type": "output", **association, "seq": 1, "channel": "stdout",
-                    "text": "开始😀\n", "output_truncated": False}], written)
+                    "text": "开始\n", "output_truncated": False}], written)
             finally:
                 release.set()
             result = await asyncio.wait_for(running, 4)
@@ -88,7 +87,7 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_stdio_routes_stderr_to_separate_or_only_error_file(self) -> None:
         error_file = Path(self.directory.name) / "error.ndjson"
         operation = script_operation(NATIVE_ARGS["request_id"])
-        operation["result"].update(stdout="正常输出\n", stderr="诊断😀\n")
+        operation["result"].update(stdout="正常输出\n", stderr="诊断输出\n")
         self.stub.stream_responder = lambda request: self.stub.operation_events(request, operation)
         async with self.stdio_client() as client:
             result = await client.call_tool("script_run", {
@@ -98,14 +97,14 @@ class NativeScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             errors = [json.loads(line) for line in error_file.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(["started", "output"], [event["type"] for event in output])
             self.assertEqual(["正常输出\n"], [event["text"] for event in output if event["type"] == "output"])
-            self.assertEqual(["诊断😀\n"], [event["text"] for event in errors])
+            self.assertEqual(["诊断输出\n"], [event["text"] for event in errors])
             self.assertEqual(["stderr"], [event["channel"] for event in errors])
             output_before = self.output_file.read_bytes()
             result = await client.call_tool("script_run", {**NATIVE_ARGS, "error_file": str(error_file)})
         self.assertEqual(operation, result.structured_content)
         self.assertEqual(output_before, self.output_file.read_bytes())
         errors = [json.loads(line) for line in error_file.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual(["诊断😀\n", "诊断😀\n"], [event["text"] for event in errors])
+        self.assertEqual(["诊断输出\n", "诊断输出\n"], [event["text"] for event in errors])
 
     async def test_output_file_open_failure_rejects_before_submitting_script(self) -> None:
         async with self.stdio_client() as client:

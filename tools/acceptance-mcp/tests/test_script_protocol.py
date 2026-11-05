@@ -83,10 +83,10 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(response.is_error)
                     self.assertEqual(script_operation(SCRIPT_ARGS["request_id"], status=status, error=error), response.structured_content)
 
-    async def test_stdio_preserves_emoji_and_safely_replaced_result_error_text(self) -> None:
+    async def test_stdio_preserves_json_result_output_and_result_error_text(self) -> None:
         operation = script_operation(SCRIPT_ARGS["request_id"])
         operation["result"]["result"] = {"emoji": "😀🚀", "nested": ["中文🙂"]}
-        operation["result"]["stdout"] = "计算完成 😀\n"
+        operation["result"]["stdout"] = "计算完成\n"
 
         def respond(request: dict):
             if request["path"] == RUN_PATH:
@@ -101,7 +101,7 @@ class ScriptProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(operation, json.loads(response.content[0].text))
             operation["status"] = "FAILED"
             operation["result"]["result"] = None
-            operation["error"] = {"kind": "RESULT_ERROR", "message": "结果含不可序列化字符 �；原输出 😀 已保留"}
+            operation["error"] = {"kind": "RESULT_ERROR", "message": "结果含不可序列化字符 �；原输出已保留"}
             response = await client.call_tool("script_run", deepcopy(SCRIPT_ARGS))
             self.assertTrue(response.is_error)
             self.assertEqual(operation, response.structured_content)

@@ -147,7 +147,7 @@ public final class NativeScriptExecution {
             }
         }
     }
-    /** One encoder spans writes so a surrogate pair split by Graal stays a single character. */
+    /** Publish buffered UTF-8 on the script's flush and at invocation completion. */
     private final class OutputWriter extends Writer {
         private final String channel;
         private final ScriptValues.CapturedOutput captured;
@@ -161,27 +161,17 @@ public final class NativeScriptExecution {
         }
         @Override public synchronized void write(char[] text, int offset, int length) throws IOException {
             encoder.write(text, offset, length);
-            encoder.flush();
-            publish();
         }
         @Override public synchronized void flush() throws IOException { encoder.flush(); publish(); }
         @Override public synchronized void close() throws IOException { encoder.close(); publish(); }
 
         private void publish() {
             if (reportedTruncation) return;
-            while (true) {
-                var slice = captured.readFrom(emittedBytes, 4096);
-                if (slice.nextByteOffset() == emittedBytes) {
-                    if (slice.truncated() && !reportedTruncation) {
-                        reportedTruncation = true;
-                        output.accept(new Output(channel, "", true));
-                    }
-                    return;
-                }
-                output.accept(new Output(channel, slice.text(), slice.truncated()));
-                emittedBytes = slice.nextByteOffset();
-                reportedTruncation |= slice.truncated();
-            }
+            var slice = captured.readFrom(emittedBytes);
+            if (slice.nextByteOffset() == emittedBytes && !slice.truncated()) return;
+            output.accept(new Output(channel, slice.text(), slice.truncated()));
+            emittedBytes = slice.nextByteOffset();
+            reportedTruncation = slice.truncated();
         }
     }
     private void evaluate() {
