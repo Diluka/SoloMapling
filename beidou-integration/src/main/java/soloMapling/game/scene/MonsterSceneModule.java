@@ -100,8 +100,10 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         var owner = SceneRuntimeManager.find(monster.getController());
         if (owner == null || owner.scene() != scene || !hasDriver(monster, owner)) return null;
         var foothold = scene.environment().geometry().findBelow(new Point(position.x, position.y - 1));
-        var data = DataProviderFactory.getDataProvider(WZFiles.MOB).getData(String.format("%07d.img", monster.getId()));
-        double force = Math.max(0.2, (DataTool.getIntConvert("info/speed", data) + 100) * 0.001);
+        double force = Math.max(0.2, forces.computeIfAbsent(monster.getId(), id -> {
+            var data = DataProviderFactory.getDataProvider(WZFiles.MOB).getData(String.format("%07d.img", id));
+            return (DataTool.getIntConvert("info/speed", data) + 100) * 0.001;
+        }));
         // v'=0.8v+u+s*v²/90, |s|<=0.5: this invariant contains normal, stop and recoil branches.
         double maximumStep = 18.0 - Math.sqrt(324.0 - 180.0 * force);
         int radius = (int) Math.ceil((TICK_MS / PHYSICS_MS) * maximumStep * (1 + windowMs / TICK_MS)) + 1;
