@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.graalvm.polyglot.Value;
 
-import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -147,32 +147,39 @@ public final class ScriptValues {
     }
 
     public static final class CapturedOutput extends OutputStream {
+        public record Slice(String text, int nextByteOffset, boolean truncated) { }
         public CapturedOutput() { }
         public synchronized boolean isTruncated() { return truncated; }
-        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        private final ByteBuffer bytes = ByteBuffer.allocate(OUTPUT_LIMIT);
         private boolean truncated;
         @Override public synchronized void write(int value) {
-            if (bytes.size() < OUTPUT_LIMIT) bytes.write(value); else truncated = true;
+            if (bytes.hasRemaining()) bytes.put((byte) value); else truncated = true;
         }
         @Override public synchronized void write(byte[] data, int offset, int length) {
-            int accepted = Math.min(length, OUTPUT_LIMIT - bytes.size());
-            bytes.write(data, offset, accepted);
+            int accepted = Math.min(length, bytes.remaining());
+            bytes.put(data, offset, accepted);
             truncated |= accepted < length;
         }
         public synchronized String text() {
-            byte[] data = bytes.toByteArray();
-            int end = data.length;
-            // Output can be cut in the middle of one UTF-8 code point. Drop only that incomplete tail.
-            if (truncated && end > 0) {
-                int start = end - 1;
-                while (start >= 0 && (data[start] & 0xc0) == 0x80) start--;
-                if (start >= 0) {
-                    int lead = data[start] & 0xff;
-                    int needed = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
-                    if (end - start < needed) end = start;
-                }
+            int end = truncated ? completeEnd(0, bytes.position()) : bytes.position();
+            return new String(bytes.array(), 0, end, StandardCharsets.UTF_8);
+        }
+        /** The caller advances only with the returned complete UTF-8 byte offset. */
+        public synchronized Slice readFrom(int offset, int maximumBytes) {
+            int end = completeEnd(offset, Math.min(bytes.position(), offset + maximumBytes));
+            return new Slice(new String(bytes.array(), offset, end - offset, StandardCharsets.UTF_8), end, truncated);
+        }
+        private int completeEnd(int offset, int end) {
+            if (end == offset) return end;
+            byte[] data = bytes.array();
+            int start = end - 1;
+            while (start >= offset && (data[start] & 0xc0) == 0x80) start--;
+            if (start >= offset) {
+                int lead = data[start] & 0xff;
+                int needed = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+                if (end - start < needed) return start;
             }
-            return new String(data, 0, end, StandardCharsets.UTF_8);
+            return end;
         }
     }
 }

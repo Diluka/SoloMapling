@@ -242,6 +242,7 @@ class NativeScriptRuntimeTest {
                         "print('x'.repeat(16382) + '😀'); 'done'", Map.of(), 5000), fixture.adapter, observe);
         NativeScriptResult bounded = awaitOutput(boundedExecution, fixture, output, phases, lastOutput, began);
         assertOpen(bounded);
+        assertEquals("x".repeat(16382), bounded.stdout());
         assertEquals(bounded.stdout(), output.stream().map(NativeScriptExecution.Output::text)
                 .collect(java.util.stream.Collectors.joining()));
         assertTrue(output.stream().anyMatch(NativeScriptExecution.Output::truncated));

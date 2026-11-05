@@ -152,7 +152,7 @@ public final class NativeScriptExecution {
         private final String channel;
         private final ScriptValues.CapturedOutput captured;
         private final Writer encoder;
-        private int emitted;
+        private int emittedBytes;
         private boolean reportedTruncation;
 
         private OutputWriter(String channel, ScriptValues.CapturedOutput captured) {
@@ -169,24 +169,18 @@ public final class NativeScriptExecution {
 
         private void publish() {
             if (reportedTruncation) return;
-            String text = captured.text();
-            boolean truncated = captured.isTruncated();
-            while (emitted < text.length()) {
-                int end = emitted;
-                int bytes = 0;
-                while (end < text.length()) {
-                    int point = text.codePointAt(end);
-                    int size = point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
-                    if (bytes + size > 4096) break;
-                    bytes += size; end += Character.charCount(point);
+            while (true) {
+                var slice = captured.readFrom(emittedBytes, 4096);
+                if (slice.nextByteOffset() == emittedBytes) {
+                    if (slice.truncated() && !reportedTruncation) {
+                        reportedTruncation = true;
+                        output.accept(new Output(channel, "", true));
+                    }
+                    return;
                 }
-                output.accept(new Output(channel, text.substring(emitted, end), truncated));
-                emitted = end;
-                reportedTruncation |= truncated;
-            }
-            if (truncated && !reportedTruncation) {
-                reportedTruncation = true;
-                output.accept(new Output(channel, "", true));
+                output.accept(new Output(channel, slice.text(), slice.truncated()));
+                emittedBytes = slice.nextByteOffset();
+                reportedTruncation |= slice.truncated();
             }
         }
     }
