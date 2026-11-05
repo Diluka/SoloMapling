@@ -29,7 +29,10 @@ import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleCall;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
+import soloMapling.game.runtime.ModuleTask;
 import soloMapling.game.runtime.RoleBinding;
+import soloMapling.game.scene.SceneActionDispatch;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 import java.awt.Point;
 import java.time.Duration;
@@ -126,9 +129,7 @@ class NativePortalModuleTest {
             var call = CompletableFuture.runAsync(() -> fixture.caller.scope().runTracked(parent,
                     () -> result.set(fixture.caller.call(NativeActionModule.ENTER_PORTAL, new PortalRequest(17), parent).result())));
             try {
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-                while (fixture.runtime.snapshot().lane().pending() < 2 && System.nanoTime() < deadline) Thread.sleep(5);
-                assertEquals(2, fixture.runtime.snapshot().lane().pending());
+                fixture.awaitQueuedPortal();
                 fixture.caller.cancel(parent);
                 assertFalse(call.isDone());
             } finally { release.countDown(); }
@@ -137,6 +138,84 @@ class NativePortalModuleTest {
             assertFalse(result.get().dispatch().started());
             verify(fixture.actor, never()).changeMap(any(MapleMap.class), any(Portal.class));
             fixture.assertDrained();
+        }
+    }
+
+    @Test void anEquipmentIntentPreventsPortalDispatchAfterTheRoleHasReachedItsEntry() throws Exception {
+        try (var fixture = new Fixture()) {
+            assertEquals(fixture.outbound.getPosition(), fixture.actor.getPosition());
+            var dispatch = SceneRuntimeManager.current(fixture.server, fixture.actorRef).dispatch();
+            var admitted = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var decision = new AtomicReference<SceneActionDispatch.Decision>();
+            var equipment = new ModuleTask(fixture.caller, "equipment-before-portal", work -> {
+                var selected = dispatch.request(SceneActionDispatch.Priority.EQUIPMENT_PICKUP,
+                        fixture.caller, work, null, "equipment_pickup");
+                decision.set(selected);
+                admitted.countDown();
+                try { await(release); }
+                finally { dispatch.release(selected.arrangement(), "equipment_finished"); }
+            });
+            equipment.start();
+            try {
+                assertTrue(admitted.await(3, TimeUnit.SECONDS));
+                assertEquals(SceneActionDispatch.Status.GRANTED, decision.get().status());
+                var result = fixture.enter(17);
+                assertEquals(PortalResult.Outcome.BUSY, result.outcome());
+                assertFalse(result.dispatch().started());
+                assertSame(fixture.training, fixture.currentMap.get());
+                verify(fixture.actor, never()).changeMap(any(MapleMap.class), any(Portal.class));
+                fixture.assertDrained();
+            } finally { release.countDown(); equipment.await(); }
+        }
+    }
+
+    @Test void equipmentReplacingAnAlreadyQueuedPortalPreventsItsNativeTransferAndWaitsForExit() throws Exception {
+        try (var fixture = new Fixture()) {
+            var entered = new CountDownLatch(1);
+            var releaseLane = new CountDownLatch(1);
+            var blocker = fixture.caller.acceptWork();
+            fixture.caller.submit("interaction", blocker, () -> {}, () -> {
+                entered.countDown(); await(releaseLane);
+            }, () -> {});
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            var parent = fixture.caller.acceptWork();
+            var result = new AtomicReference<PortalResult>();
+            var call = CompletableFuture.runAsync(() -> fixture.caller.scope().runTracked(parent,
+                    () -> result.set(fixture.caller.call(NativeActionModule.ENTER_PORTAL, new PortalRequest(17), parent).result())));
+            var dispatch = SceneRuntimeManager.current(fixture.server, fixture.actorRef).dispatch();
+            var admitted = new CountDownLatch(1);
+            var releaseEquipment = new CountDownLatch(1);
+            var decision = new AtomicReference<SceneActionDispatch.Decision>();
+            ModuleTask equipment = null;
+            try {
+                fixture.awaitQueuedPortal();
+                equipment = new ModuleTask(fixture.caller, "equipment-replaces-portal", work -> {
+                    var selected = dispatch.request(SceneActionDispatch.Priority.EQUIPMENT_PICKUP,
+                            fixture.caller, work, null, "equipment_pickup");
+                    decision.set(selected);
+                    admitted.countDown();
+                    try { await(releaseEquipment); }
+                    finally { dispatch.release(selected.arrangement(), "equipment_finished"); }
+                });
+                equipment.start();
+                assertTrue(admitted.await(3, TimeUnit.SECONDS));
+                assertNotNull(decision.get().arrangement());
+                assertFalse(call.isDone(), "the replaced portal still owes its queued carrier exit");
+                releaseLane.countDown();
+                call.get(3, TimeUnit.SECONDS);
+                assertTrue(parent.isSettled());
+                assertEquals(PortalResult.Outcome.PREEMPTED, result.get().outcome());
+                assertFalse(result.get().dispatch().started());
+                assertTrue(decision.get().arrangement().current(), "equipment is ready after the old portal actually exits");
+                assertSame(fixture.training, fixture.currentMap.get());
+                verify(fixture.actor, never()).changeMap(any(MapleMap.class), any(Portal.class));
+                fixture.assertDrained();
+            } finally {
+                releaseLane.countDown();
+                releaseEquipment.countDown();
+                if (equipment != null) equipment.await();
+            }
         }
     }
 
@@ -232,15 +311,22 @@ class NativePortalModuleTest {
             when(actor.getPosition()).thenAnswer(call -> new Point(position.get()));
             when(actor.isChangingMaps()).thenAnswer(call -> changingMaps.get());
             when(actor.isAlive()).thenReturn(true);
+            when(actor.getJob()).thenReturn(Job.BEGINNER);
+            when(actor.getHp()).thenReturn(50);
+            when(actor.getMp()).thenReturn(10);
+            when(actor.getCurrentMaxHp()).thenReturn(50);
+            when(actor.getCurrentMaxMp()).thenReturn(10);
             when(actor.getBuffSource(BuffStat.HOMING_BEACON)).thenReturn(-1);
             var cashShop = mock(CashShop.class);
             when(actor.getCashShop()).thenReturn(cashShop);
             when(training.getId()).thenReturn(104040000);
             when(town.getId()).thenReturn(100000000);
-            when(training.getCharacterById(41)).thenReturn(actor);
-            when(town.getCharacterById(41)).thenReturn(actor);
+            when(training.getCharacterById(41)).thenAnswer(call -> currentMap.get() == training ? actor : null);
+            when(town.getCharacterById(41)).thenAnswer(call -> currentMap.get() == town ? actor : null);
             when(training.getMonsters()).thenReturn(List.of());
             when(town.getMonsters()).thenReturn(List.of());
+            when(training.getAllMonsters()).thenReturn(List.of());
+            when(town.getAllMonsters()).thenReturn(List.of());
             when(maps.getMap(104040000)).thenReturn(training);
             when(maps.getMap(100000000)).thenReturn(town);
             outbound.setId(17); outbound.setName("east00"); outbound.setPosition(new Point(100, 0));
@@ -251,16 +337,6 @@ class NativePortalModuleTest {
             when(training.getPortal("east00")).thenReturn(outbound);
             when(town.getPortal(20)).thenReturn(inbound);
             when(town.getPortal("west00")).thenReturn(inbound);
-            doAnswer(call -> {
-                assertSame(client, ThreadLocalUtil.getCurrentClient());
-                currentMap.set(call.getArgument(0));
-                position.set(new Point(((Portal) call.getArgument(1)).getPosition()));
-                changingMaps.set(true); onWarp.run(); return null;
-            }).when(actor).changeMap(any(MapleMap.class), any(Portal.class));
-            doAnswer(call -> {
-                assertSame(client, ThreadLocalUtil.getCurrentClient());
-                changingMaps.set(false); return null;
-            }).when(actor).setMapTransitionComplete();
             var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), command ->
                     new Thread(() -> {
                         ThreadLocalUtil.setCurrentClient(previousClient);
@@ -268,6 +344,18 @@ class NativePortalModuleTest {
                     }));
             runtime = new CharacterRuntime(WorldEpoch.snapshot().token(), new CharacterRuntime.Options(8, 1,
                     new ExecutionScope.Limits(16, 2, 16, 2)), lane);
+            doAnswer(call -> {
+                assertSame(client, ThreadLocalUtil.getCurrentClient());
+                currentMap.set(call.getArgument(0));
+                position.set(new Point(((Portal) call.getArgument(1)).getPosition()));
+                changingMaps.set(true);
+                runtime.refreshSceneMembership();
+                onWarp.run(); return null;
+            }).when(actor).changeMap(any(MapleMap.class), any(Portal.class));
+            doAnswer(call -> {
+                assertSame(client, ThreadLocalUtil.getCurrentClient());
+                changingMaps.set(false); return null;
+            }).when(actor).setMapTransitionComplete();
             actorRef = new GameContext.CharacterRef(runtime.acceptedEpoch(), actor, client, world, channel);
             var binding = new RoleBinding() {
                 @Override public String kind() { return "portal-test"; }
@@ -282,6 +370,7 @@ class NativePortalModuleTest {
             var opening = runtime.acceptOpeningWork();
             runtime.submitOpening(opening, () -> {
                 runtime.reserveOrigin(opening).adopt(binding); runtime.bindAdoptedOrigin();
+                runtime.initializeSceneMembership(server);
             }, () -> {});
             opening.completion().toCompletableFuture().join();
             caller = runtime.mount(McpControlModule.DEFINITION,
@@ -301,14 +390,27 @@ class NativePortalModuleTest {
         }
 
         void assertDrained() {
-            assertEquals(0, runtime.snapshot().lane().pending());
-            var nativeModule = runtime.snapshot().modules().stream()
-                    .filter(module -> module.instanceId().equals("native")).findFirst().orElseThrow();
-            if (nativeModule.scope() != null) {
-                assertEquals(0, nativeModule.scope().acceptedWork());
-                assertEquals(0, nativeModule.scope().runningBodies());
-                assertEquals(0, nativeModule.scope().outstandingResources());
+            var scope = nativeScope();
+            if (scope != null) {
+                assertEquals(0, scope.acceptedWork());
+                assertEquals(0, scope.runningBodies());
+                assertEquals(0, scope.pendingCarriers());
+                assertEquals(0, scope.outstandingResources());
             }
+        }
+
+        private ExecutionScope.ScopeSnapshot nativeScope() {
+            return runtime.snapshot().modules().stream().filter(module -> module.instanceId().equals("native"))
+                    .findFirst().orElseThrow().scope();
+        }
+
+        void awaitQueuedPortal() throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (nativeScope().diagnostics().stream().noneMatch(work -> work.carrierClaimed()
+                    && !work.queueDeparted() && work.bodyState() == ExecutionScope.BodyState.NOT_STARTED)
+                    && System.nanoTime() < deadline) Thread.sleep(5);
+            assertTrue(nativeScope().diagnostics().stream().anyMatch(work -> work.carrierClaimed()
+                    && !work.queueDeparted() && work.bodyState() == ExecutionScope.BodyState.NOT_STARTED));
         }
 
         @Override public void close() throws Exception {
@@ -317,6 +419,7 @@ class NativePortalModuleTest {
             var cleanup = runtime.acquireOriginCleanup();
             runtime.submitOriginCleanup(cleanup, () -> runtime.releaseOrigin(cleanup), () -> {});
             assertEquals(ExecutionScope.DrainResult.DRAINED, runtime.awaitClosed(Duration.ofSeconds(5)));
+            assertEquals(0, runtime.snapshot().lane().pending());
             ExecutionScope.tryBeginWorldStop();
         }
     }

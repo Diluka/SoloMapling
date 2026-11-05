@@ -71,19 +71,9 @@ public final class NativeContactDamageActions {
                         .thenComparingInt(Monster::getObjectId)).orElse(null);
         if (target == null) return null;
 
-        int defense;
-        var equipped = actor.getInventory(InventoryType.EQUIPPED);
-        equipped.lockInventory();
-        try {
-            defense = equipped.list().stream().filter(Equip.class::isInstance).map(Equip.class::cast)
-                    .mapToInt(Equip::getWdef).sum();
-        } finally { equipped.unlockInventory(); }
-        // Native buff/stat recomputation takes role locks before the inventory lock.
-        Integer buffDefense = actor.getBuffedValue(BuffStat.WDEF);
-        defense = Math.max(0, defense + (buffDefense == null ? 0 : buffDefense));
+        int defense = defense(actor).current();
         int physicalAttack = target.getPADamage();
-        // Explicit bounded policy, not the complete v83 client physical defence/avoid calculator.
-        int damage = Math.max(1, physicalAttack - defense / 2);
+        int damage = physicalDamage(physicalAttack, defense);
         int hpBefore = actor.getHp(), mpBefore = actor.getMp();
         var dispatched = new AtomicBoolean();
         boolean handlerError;
@@ -93,9 +83,7 @@ public final class NativeContactDamageActions {
                         .writeIntLE(damage).writeIntLE(target.getId()).writeIntLE(target.getObjectId())
                         .writeByte(target.getPosition().x > position.x ? 0 : 1),
                 () -> {
-                    if (work.cancelRequested()) {
-                        throw new CancellationException("contact_cancelled_before_dispatch");
-                    }
+                    if (work.cancelRequested()) throw new CancellationException("contact_cancelled_before_dispatch");
                     NativeContextChecks.requireSceneCurrent(server, scene);
                     if (!actor.isAlive() || actor.isHidden()
                             || scene.map().getMonsterByOid(target.getObjectId()) != target
@@ -112,12 +100,42 @@ public final class NativeContactDamageActions {
                 !actor.isAlive(), handlerError, work.cancelRequested());
     }
 
+    /** Shared by actual contact input and the scene's read-only loss bounds. */
+    public record Defense(int equipment, int buff) {
+        public int current() { return Math.max(0, equipment + buff); }
+        /** Positive temporary defence may expire inside the prediction window. */
+        public int conservative() { return Math.max(0, equipment + Math.min(0, buff)); }
+    }
+
+    public static Defense defense(Character actor) {
+        int defense;
+        var equipped = actor.getInventory(InventoryType.EQUIPPED);
+        equipped.lockInventory();
+        try {
+            defense = equipped.list().stream().filter(Equip.class::isInstance).map(Equip.class::cast)
+                    .mapToInt(Equip::getWdef).sum();
+        } finally { equipped.unlockInventory(); }
+        // Native buff/stat recomputation takes role locks before the inventory lock.
+        Integer buffDefense = actor.getBuffedValue(BuffStat.WDEF);
+        return new Defense(defense, buffDefense == null ? 0 : buffDefense);
+    }
+
+    public static int physicalDamage(int physicalAttack, int defense) {
+        // Explicit bounded policy, not the complete v83 client physical defence/avoid calculator.
+        return Math.max(1, physicalAttack - defense / 2);
+    }
+
     private static boolean touching(Character actor, Monster monster) {
-        var bounds = BotMobHitboxProvider.getMobBounds(monster);
-        if (bounds == null) return false;
-        int lowerHeight = Math.max(1, bounds.height / 2);
-        var lowerBody = new Rectangle(bounds.x, bounds.y + bounds.height - lowerHeight, bounds.width, lowerHeight);
+        var lowerBody = contactBody(monster);
+        if (lowerBody == null) return false;
         var point = actor.getPosition();
         return lowerBody.intersects(new Rectangle(point.x, point.y - 50, 1, 51));
+    }
+
+    public static Rectangle contactBody(Monster monster) {
+        var bounds = BotMobHitboxProvider.getMobBounds(monster);
+        if (bounds == null) return null;
+        int lowerHeight = Math.max(1, bounds.height / 2);
+        return new Rectangle(bounds.x, bounds.y + bounds.height - lowerHeight, bounds.width, lowerHeight);
     }
 }

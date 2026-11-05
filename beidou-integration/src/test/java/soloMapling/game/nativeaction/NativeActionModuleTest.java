@@ -13,6 +13,8 @@ import org.gms.net.server.channel.Channel;
 import org.gms.net.server.world.World;
 import org.gms.scripting.event.EventInstanceManager;
 import org.gms.server.CashShop;
+import org.gms.server.maps.MapItem;
+import org.gms.server.maps.MapObject;
 import org.gms.server.maps.MapleMap;
 import org.gms.soloacceptance.actor.McpControlModule;
 import org.gms.util.ThreadLocalUtil;
@@ -21,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.action.ReviveRequest;
 import soloMapling.game.action.ReviveResult;
+import soloMapling.game.action.PickupRequest;
+import soloMapling.game.action.PickupResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -31,6 +35,10 @@ import soloMapling.game.runtime.ModuleCall;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
+import soloMapling.game.runtime.RuntimeEvents;
+import soloMapling.game.scene.SceneActorBinding;
+import soloMapling.game.scene.SceneActionDispatch;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 import java.awt.Point;
 import java.nio.charset.StandardCharsets;
@@ -237,6 +245,60 @@ class NativeActionModuleTest {
             assertFalse(result.get().dispatch().started());
             verify(fixture.actor, never()).respawn(anyInt());
             assertEquals(0, fixture.hp.get());
+            fixture.assertDrained();
+        }
+    }
+
+    @Test void invalidatedEquipmentArrangementMapsRealQueuedPickupCancellationToPreempted() throws Exception {
+        try (var fixture = new Fixture(50)) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var blocker = fixture.caller.acceptWork();
+            fixture.caller.submit("interaction", blocker, () -> {}, () -> {
+                entered.countDown();
+                await(release);
+            }, () -> {});
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            var target = mock(MapItem.class);
+            when(target.getObjectId()).thenReturn(800001);
+            var binding = mock(SceneActorBinding.class);
+            when(binding.dispatch()).thenReturn(mock(SceneActionDispatch.class));
+            var arrangement = mock(SceneActionDispatch.Arrangement.class);
+            var current = new AtomicBoolean(true);
+            when(arrangement.valid()).thenAnswer(call -> current.get());
+            var equipment = fixture.caller.acceptWork();
+            var result = new AtomicReference<ModuleCall<PickupResult>>();
+            var call = CompletableFuture.runAsync(() -> {
+                try (var scenes = mockStatic(SceneRuntimeManager.class)) {
+                    scenes.when(() -> SceneRuntimeManager.current(any(Server.class), same(fixture.caller.characterRef())))
+                            .thenReturn(binding);
+                    fixture.caller.scope().runTracked(equipment, () -> result.set(fixture.caller.call(NativeActionModule.PICKUP,
+                            new PickupRequest(target.getObjectId(), new PickupRequest.Binding(target, false, arrangement)), equipment)));
+                }
+            });
+            try {
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                while (fixture.runtime.snapshot().lane().pending() < 2 && System.nanoTime() < deadline) Thread.sleep(5);
+                assertEquals(2, fixture.runtime.snapshot().lane().pending());
+                current.set(false);
+                fixture.caller.cancel(equipment);
+                assertTrue(equipment.cancelRequested());
+                assertFalse(equipment.isSettled());
+                assertFalse(call.isDone(), "the queued native carrier still owes its actual exit");
+            } finally { release.countDown(); }
+
+            call.get(3, TimeUnit.SECONDS);
+            assertTrue(equipment.isSettled());
+            assertEquals(ModuleCall.Status.SUCCEEDED, result.get().status());
+            assertEquals(PickupResult.Outcome.PREEMPTED, result.get().result().outcome());
+            assertEquals("CANCELLED", fixture.runtime.events().events().stream()
+                    .filter(event -> event.kind() == RuntimeEvents.Kind.ACTION_RESULT && "native".equals(event.moduleId()))
+                    .findFirst().orElseThrow().outcome(), "the native queued command settled as cancelled before projection");
+            assertTrue(result.get().result().cancelRequested());
+            assertFalse(result.get().result().dispatched());
+            assertEquals(0, result.get().result().inventoryQuantityDelta());
+            verify(fixture.actor, never()).pickupItem(any(MapObject.class));
+            verify(fixture.client, never()).sendPacket(any());
             fixture.assertDrained();
         }
     }

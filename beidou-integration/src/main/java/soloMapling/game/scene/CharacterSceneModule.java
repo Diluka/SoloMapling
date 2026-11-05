@@ -27,7 +27,12 @@ public final class CharacterSceneModule implements SceneRuntimeModule {
         var entry = context.acceptWork();
         try {
             binding.awaitWork(entry);
-            var submission = context.submit(SceneMembershipModule.CONTROL, entry, binding::requireCurrent, () -> {
+            var submission = context.submit(SceneMembershipModule.CONTROL, entry, () -> {
+                try { binding.requireCurrent(); }
+                catch (GameContext.Invalid | CharacterRuntime.Invalid ended) {
+                    if (binding.active() && !entry.cancelRequested()) throw ended;
+                }
+            }, () -> {
                 if (entry.cancelRequested()) return;
                 var character = binding.characterRef().character();
                 // Portal/revive may have completed this entry synchronously in the preceding lane body.

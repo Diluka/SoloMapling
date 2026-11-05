@@ -22,6 +22,14 @@ import org.gms.server.maps.FootholdTree;
 import org.gms.server.maps.MapleMap;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.gms.provider.DataProvider;
+import org.gms.provider.DataProviderFactory;
+import org.gms.provider.wz.WZFiles;
+import org.gms.provider.wz.XMLWZFile;
+import org.mockito.MockedStatic;
+import soloMapling.game.tactics.CombatTacticsControlModule;
+import java.nio.file.Path;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.beidou.InventoryMetadataTestContext;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackDriver;
@@ -56,8 +64,25 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class CombatActionModuleTest {
+    private MockedStatic<DataProviderFactory> timingMetadata;
     @BeforeEach void installNativeContext() throws Exception {
         CharacterTestContext.install(); InventoryMetadataTestContext.install(); Job.values();
+        try (var providers = mockStatic(DataProviderFactory.class)) {
+            providers.when(() -> DataProviderFactory.getDataProvider(any(WZFiles.class))).thenReturn(mock(DataProvider.class));
+            Class.forName(org.gms.client.SkillFactory.class.getName(), true, org.gms.client.SkillFactory.class.getClassLoader());
+        }
+        timingMetadata = realTimingMetadata();
+    }
+    @AfterEach void releaseTimingMetadata() { timingMetadata.close(); }
+
+    private static MockedStatic<DataProviderFactory> realTimingMetadata() {
+        var factory = mockStatic(DataProviderFactory.class, CALLS_REAL_METHODS);
+        for (var kind : List.of(WZFiles.CHARACTER, WZFiles.SKILL, WZFiles.MOB)) {
+            DataProvider data = new XMLWZFile(Path.of("upstream/BeiDou-Server/gms-server/wz", kind.name().charAt(0)
+                    + kind.name().substring(1).toLowerCase(java.util.Locale.ROOT) + ".wz"));
+            factory.when(() -> DataProviderFactory.getDataProvider(kind)).thenReturn(data);
+        }
+        return factory;
     }
     @Test void sharedEntryHitsOnlyTheRequestedTargetAndWaitsForTheLegacyStrike() throws Exception {
         try (var fixture = new Fixture()) {
@@ -91,12 +116,12 @@ class CombatActionModuleTest {
         }
     }
 
-    @Test void targetOutsideReachReportsMissingNavigationAndLeavesTheProviderDrained() throws Exception {
-        try (var fixture = new Fixture()) {
+    @Test void missingTacticsReturnsUnavailableWithoutStartingAnotherPursuit() throws Exception {
+        try (var fixture = new Fixture(false)) {
             when(fixture.target.getPosition()).thenReturn(new Point(300, 0));
             var result = (Map<?, ?>) fixture.caller.call("combat.engage", Map.of("target_oid", 91)).get("result");
             assertEquals("UNAVAILABLE", result.get("outcome"));
-            assertEquals("navigation_unavailable", result.get("reason"));
+            assertEquals("tactics_unavailable", result.get("reason"));
             verify(fixture.target, never()).damage(any(), anyInt(), anyBoolean());
             fixture.assertCombatDrained();
         }
@@ -178,10 +203,15 @@ class CombatActionModuleTest {
         final List<Throwable> laneFailures = new CopyOnWriteArrayList<>();
 
         Fixture() { this(Job.THIEF, 1332000); }
+        Fixture(boolean tactics) { this(Job.THIEF, 1332000, fixture -> {}, tactics); }
         Fixture(Consumer<Fixture> beforeOpen) { this(Job.THIEF, 1332000, beforeOpen); }
         Fixture(Job job, int weaponId) { this(job, weaponId, fixture -> {}); }
 
         Fixture(Job job, int weaponId, Consumer<Fixture> beforeOpen) {
+            this(job, weaponId, beforeOpen, true);
+        }
+
+        Fixture(Job job, int weaponId, Consumer<Fixture> beforeOpen, boolean tactics) {
             WorldEpoch.onWorldStarted();
             var world = mock(World.class);
             var channel = mock(Channel.class);
@@ -207,6 +237,7 @@ class CombatActionModuleTest {
                     .when(actor).setPosition(any());
             doAnswer(invocation -> { stance.set(invocation.getArgument(0)); return null; }).when(actor).setStance(anyInt());
             when(actor.getHp()).thenReturn(50);
+            when(actor.getCurrentMaxHp()).thenReturn(100);
             when(actor.isAlive()).thenReturn(true);
             when(actor.getChair()).thenReturn(-1);
             when(actor.getTotalMoveSpeedStat()).thenReturn(100);
@@ -252,7 +283,9 @@ class CombatActionModuleTest {
             // Configure the native collaborators before opening starts persistent scene readers.
             beforeOpen.accept(this);
             var lane = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), body -> {
-                var thread = new Thread(body, "combat-test-lane");
+                var thread = new Thread(() -> {
+                    try (var metadata = realTimingMetadata()) { body.run(); }
+                }, "combat-test-lane");
                 thread.setUncaughtExceptionHandler((worker, failure) -> laneFailures.add(failure));
                 return thread;
             });
@@ -275,6 +308,13 @@ class CombatActionModuleTest {
                 runtime.initializeSceneMembership(server);
             }, () -> {});
             opening.completion().toCompletableFuture().join();
+            if (tactics) {
+                var definition = new ModuleDefinition<CombatTacticsControlModule.Config, CombatTacticsControlModule>(
+                        CombatTacticsControlModule.DEFINITION.typeId(), CombatTacticsControlModule.DEFINITION.controls(),
+                        CombatTacticsControlModule.DEFINITION.limits(), config -> new CombatTacticsControlModule(config, server),
+                        CombatTacticsControlModule.DEFINITION.exports());
+                runtime.mount(definition, new ModuleSelection<>("tactics", CombatTacticsControlModule.DEFAULT_CONFIG, true));
+            }
             var combat = new ModuleDefinition<CombatActionModule.Config, CombatActionModule>(
                     CombatActionModule.DEFINITION.typeId(), CombatActionModule.DEFINITION.controls(),
                     CombatActionModule.DEFINITION.limits(), config -> new CombatActionModule(config, server),

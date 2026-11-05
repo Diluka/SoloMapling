@@ -73,12 +73,22 @@ public final class NativeBasicActions {
 
     /** Exactly one lane submission; callbacks and repeated submission never wait for the carrier. */
     public static NativeActionService.SubmissionReceipt submit(Handle source) {
+        return submit(source, false);
+    }
+
+    public static NativeActionService.SubmissionReceipt submitIfIdle(Handle source) {
+        return submit(source, true);
+    }
+
+    private static NativeActionService.SubmissionReceipt submit(Handle source, boolean immediate) {
         if (!(source instanceof CommandHandle handle)) throw new IllegalArgumentException("not_a_short_native_command");
         if (!handle.receipt.begin()) return handle.receipt;
         Pending pending = Objects.requireNonNull(handle.pending.get());
         CharacterCommandLane.Submission submission;
         try {
-            submission = pending.lane.submit(pending.work, pending.permit, () -> execute(handle), () -> settled(handle));
+            submission = immediate
+                    ? pending.lane.submitIfIdle(pending.work, pending.permit, () -> execute(handle), () -> settled(handle))
+                    : pending.lane.submit(pending.work, pending.permit, () -> execute(handle), () -> settled(handle));
         } catch (RuntimeException rejected) {
             handle.receipt.decide(REJECTED, EXECUTOR);
             finish(handle, fallback(handle, pending.work.cancelRequested(), "native_action_submission_failed"));
@@ -100,7 +110,7 @@ public final class NativeBasicActions {
         Pending pending = handle.pending.get();
         if (pending == null) return;
         Context context = new Context(pending.server, pending.scene, pending.work, handle.action,
-                () -> handle.dispatched = true);
+                () -> handle.dispatched = true, pending.permit::requireCurrent);
         NativeBasicResult result;
         try {
             context.requireCurrent();
@@ -155,6 +165,7 @@ public final class NativeBasicActions {
         private final ExecutionScope.WorkHandle work;
         private final String action;
         private final Runnable checkpoint;
+        private final Runnable admission;
         private boolean dispatched;
         private boolean handlerError;
 
@@ -162,7 +173,12 @@ public final class NativeBasicActions {
             this(server, scene, work, action, () -> { });
         }
         Context(Server server, GameContext.SceneRef scene, ExecutionScope.WorkHandle work, String action, Runnable checkpoint) {
-            this.server = server; this.scene = scene; this.work = work; this.action = action; this.checkpoint = checkpoint;
+            this(server, scene, work, action, checkpoint, () -> {});
+        }
+        Context(Server server, GameContext.SceneRef scene, ExecutionScope.WorkHandle work, String action,
+                Runnable checkpoint, Runnable admission) {
+            this.server = server; this.scene = scene; this.work = work; this.action = action;
+            this.checkpoint = checkpoint; this.admission = admission;
         }
         Server server() { return server; }
         GameContext.SceneRef scene() { return scene; }
@@ -173,6 +189,7 @@ public final class NativeBasicActions {
         void requireCurrent() {
             if (cancelled(work)) throw new Cancelled();
             NativeContextChecks.requireSceneCurrent(server, scene);
+            admission.run();
         }
         void dispatch(PacketHandler handler, ByteBuf packet) {
             handlerError |= NativePacketDispatch.dispatch(actor().client(), handler, packet, this::requireCurrent,

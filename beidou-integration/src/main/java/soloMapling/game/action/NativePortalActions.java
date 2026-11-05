@@ -20,7 +20,7 @@ public final class NativePortalActions {
 
     /** Runs only inside the provider's original short lane work. */
     public static PortalResult enterPortal(Server server, GameContext.SceneRef scene,
-                                            ExecutionScope.WorkHandle work, PortalRequest request) {
+                                            ExecutionScope.WorkHandle work, PortalRequest request, Runnable authorize) {
         var ref = scene.actor();
         if (NativeBasicActions.cancelled(work)) {
             return new PortalResult(PortalResult.Outcome.CANCELLED, ref.character().getId(), ref.epoch().value(),
@@ -82,6 +82,7 @@ public final class NativePortalActions {
                             .writeShortLE(portalName.length).writeBytes(portalName)
                             .writeByte(0).writeByte(0).writeByte(0),
                     () -> {
+                        authorize.run();
                         if (NativeBasicActions.cancelled(work)) throw new CancellationException();
                         NativeContextChecks.requireSceneCurrent(server, scene);
                         if (scene.map().getPortal(request.portalId()) != portal

@@ -8,7 +8,7 @@ public record PortalResult(Outcome outcome, int characterId, String epoch, int r
                            Endpoint exit, Endpoint entry, State before, State after,
                            Dispatch dispatch, Transition transition, Boolean sceneChanged,
                            boolean cancelRequested, String reason) {
-    public enum Outcome { ENTERED, NOT_ENTERED, UNSUPPORTED, UNKNOWN, CANCELLED }
+    public enum Outcome { ENTERED, NOT_ENTERED, UNSUPPORTED, UNKNOWN, CANCELLED, BUSY, PREEMPTED }
     public record Endpoint(int mapId, int portalId, String portalName, int x, int y) {
         public Map<String, Object> toMap() {
             var result = new LinkedHashMap<String, Object>();

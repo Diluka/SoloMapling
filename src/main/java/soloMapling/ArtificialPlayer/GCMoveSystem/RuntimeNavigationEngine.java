@@ -22,6 +22,9 @@ public final class RuntimeNavigationEngine {
 
     public record Frame(Point position, int velocityX, int velocityY, int stance,
                         int footholdId, int durationMs, boolean stable, Mode mode) { }
+    public record Prediction(List<Frame> frames, int elapsedMs, boolean arrived) {
+        public Prediction { frames = List.copyOf(frames); }
+    }
 
     public static final class Failure extends RuntimeException {
         private final String reason;
@@ -226,6 +229,21 @@ public final class RuntimeNavigationEngine {
 
         public Point target() { return new Point(target); }
         public int tickMs() { return BotPhysicsEngine.cfg.TICK_MS; }
+        /** Uses a separate projected session; the trusted execution session and native objects remain unchanged. */
+        public Prediction preview(int timeoutMs, Runnable checkpoint) {
+            var projected = new Session(actor, target, graph, motion.movementProfile, route,
+                    motion.climbing, groundPoint(actor.getMap(), actor.getPosition()));
+            var frames = new java.util.ArrayList<Frame>();
+            int elapsed = 0;
+            while (elapsed < timeoutMs) {
+                checkpoint.run();
+                var frame = projected.nextFrame(false);
+                frames.add(frame);
+                elapsed += frame.durationMs();
+                if (frame.stable() && frame.position().distance(target) <= 8) return new Prediction(frames, elapsed, true);
+            }
+            return new Prediction(frames, elapsed, false);
+        }
         public boolean attributesChanged() {
             return !motion.movementProfile.equals(BotMovementProfile.fromNativeCharacter(actor).forGround(actor.getMap()));
         }

@@ -2,6 +2,7 @@ package soloMapling.game.navigation;
 
 import org.gms.net.server.Server;
 import soloMapling.game.action.NativeMovementActions;
+import soloMapling.game.action.NativeActionService;
 import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.runtime.CharacterRuntime;
@@ -17,6 +18,16 @@ import java.util.Set;
 public final class NavigationActionModule implements ActionModule {
     public record Config(int arrivalTolerancePx, int timeoutMs, int stalledTimeoutMs) { }
     public static final Config DEFAULT_CONFIG = new Config(8, 30_000, 3_000);
+    public static final ModuleFunction<NavigationActionModule, MoveToRequest, NavigationPlan> PLAN = new ModuleFunction<>(
+            "navigation.plan", "只读规划当前场景路线，实际执行由角色场景组件承担。",
+            List.of(new ModuleFunction.Parameter("x", ModuleFunction.Type.INTEGER, true, "目标横坐标"),
+                    new ModuleFunction.Parameter("y", ModuleFunction.Type.INTEGER, true, "目标纵坐标"),
+                    new ModuleFunction.Parameter("timeout_ms", ModuleFunction.Type.INTEGER, false, "规划预算1..120000ms")),
+            "Java返回可信NavigationPlan，脚本仅返回值摘要，不输出原生引用或可执行句柄。",
+            "规划结束并释放本次原work，无运动输入。",
+            (module, args) -> new MoveToRequest(((Number) args.get("x")).intValue(), ((Number) args.get("y")).intValue(),
+                    ((Number) args.getOrDefault("timeout_ms", MoveToRequest.MAX_TIMEOUT_MS)).intValue()),
+            (module, context, work, input) -> module.plan(input, context, work), NavigationPlan::toMap);
     public static final ModuleFunction<NavigationActionModule, MoveToRequest, NavigationResult> MOVE_TO = new ModuleFunction<>(
             "navigation.moveTo", "在当前实际场景内规划并移动到指定坐标，等待抵达或失败及收尾。",
             List.of(new ModuleFunction.Parameter("x", ModuleFunction.Type.INTEGER, true, "目标横坐标"),
@@ -31,7 +42,7 @@ public final class NavigationActionModule implements ActionModule {
             (module, context, work, input) -> module.execute(input, context, work), NavigationResult::toMap);
     public static final ModuleDefinition<Config, NavigationActionModule> DEFINITION = new ModuleDefinition<>(
             "navigation", Set.of("movement"), new ExecutionScope.Limits(16, 2, 4, 2),
-            config -> new NavigationActionModule(config, Server.getInstance()), List.of(MOVE_TO));
+            config -> new NavigationActionModule(config, Server.getInstance()), List.of(PLAN, MOVE_TO));
 
     private final Config config;
     private final Server server;
@@ -57,6 +68,16 @@ public final class NavigationActionModule implements ActionModule {
     @Override public void onActivated(CharacterRuntime.ModuleContext context) { this.context = context; }
 
     public CharacterRuntime.ModuleContext context() { return context; }
+    public NavigationPlan plan(MoveToRequest input, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work) {
+        var actor = context.prepareNative("movement", work, () -> {}, (lane, permit, original, character) -> character);
+        var binding = SceneRuntimeManager.current(server, actor);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.min(config.timeoutMs(), input.timeoutMs()));
+        return NavigationPlan.prepare(binding, input, config, () -> {
+            binding.requireCurrent();
+            if (work.cancelRequested()) throw new java.util.concurrent.CancellationException("navigation_plan_cancelled");
+            if (System.nanoTime() >= deadline) throw new NativeActionService.Invalid("navigation_plan_timeout");
+        });
+    }
     public NativeMovementActions movement() {
         var binding = SceneRuntimeManager.current(server, context.characterRef());
         return binding.scene().characters().motion(binding).movement();

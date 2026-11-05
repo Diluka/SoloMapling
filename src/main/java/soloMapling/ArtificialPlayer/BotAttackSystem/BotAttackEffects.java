@@ -23,6 +23,7 @@ import org.gms.util.Randomizer;
 import java.awt.Point;
 import java.util.HashMap;
 import java.util.List;
+import soloMapling.game.scene.SceneRuntimeManager;
 import java.util.Map;
 
 /*
@@ -66,7 +67,7 @@ public final class BotAttackEffects {
         }
         Packet packet = PacketCreator.closeRangeAttack(bot, skillId, skillLevel, facingMask,
                 numAttackedAndDamage(hits), toTargets(hits, hitDelay), speed, bodyActionId, 0);
-        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement);
+        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement, skillId, bodyActionId, speed);
     }
 
     /* Ranged version (bow/crossbow/gun/claw): like melee, plus the flying projectile. */
@@ -84,7 +85,7 @@ public final class BotAttackEffects {
         }
         Packet packet = PacketCreator.rangedAttack(bot, skillId, skillLevel, facingMask,
                 numAttackedAndDamage(hits), projectile, toTargets(hits, hitDelay), speed, bodyActionId, 0);
-        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement);
+        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement, skillId, bodyActionId, speed);
     }
 
     /*
@@ -106,7 +107,7 @@ public final class BotAttackEffects {
         Packet packet = PacketCreator.magicAttack(bot, skillId, skillLevel, facingMask,
                 numAttackedAndDamage(hits), toTargets(hits, hitDelay),
                 BotAttackData.magicChargeFor(skillId), speed, bodyActionId, 0);
-        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement);
+        return broadcastAndApply(bot, packet, hits, hitDelay, nativeSettlement, skillId, bodyActionId, speed);
     }
 
     private static boolean notReady(Character bot, Map<Monster, List<Integer>> hits) {
@@ -130,8 +131,10 @@ public final class BotAttackEffects {
 
     /* Broadcast once, then apply each mob's summed damage + loot. True if any mob died. */
     private static boolean broadcastAndApply(Character bot, Packet packet,
-                                             Map<Monster, List<Integer>> hits, short hitDelay, boolean nativeSettlement) {
+                                             Map<Monster, List<Integer>> hits, short hitDelay, boolean nativeSettlement,
+                                             int skillId, int bodyActionId, int speed) {
         bot.getMap().broadcastMessage(bot, packet, /* repeatToSource */ false);
+        SceneRuntimeManager.attackAction(bot, skillId, bodyActionId, speed);
         GCMovement.markAlerted(bot); // hold the 5s ALERT pose so the bot's own idle/move broadcasts don't cancel it
         boolean anyKilled = false;
         for (Map.Entry<Monster, List<Integer>> hit : hits.entrySet()) {

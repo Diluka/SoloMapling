@@ -40,6 +40,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import org.gms.provider.DataProviderFactory;
+import org.gms.provider.wz.WZFiles;
+import org.gms.provider.wz.XMLWZFile;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -72,6 +76,50 @@ class SceneRuntimeTest {
         ExecutionScope.tryBeginWorldStop();
         assertTrue(SceneRuntimeManager.snapshots().isEmpty());
     }
+
+    @Test void consecutiveIntentPreemptionWaitsForTheOriginalCarrierAndItsLateNativeActionLock() throws Exception {
+        var actor = open(47, nativeMap());
+        var binding = SceneRuntimeManager.current(server, actor);
+        var context = binding.context();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var normal = context.acceptWork();
+        var first = binding.dispatch().request(SceneActionDispatch.Priority.NORMAL, context, normal, null, "normal_contract").arrangement();
+        context.submit(SceneMembershipModule.CONTROL, normal, first::requireCurrent,
+                () -> {
+                    entered.countDown();
+                    try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new AssertionError(interrupted); }
+                }, () -> {});
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            var equipment = context.acceptWork();
+            var second = binding.dispatch().request(SceneActionDispatch.Priority.EQUIPMENT_PICKUP, context, equipment,
+                    null, "equipment_contract").arrangement();
+            var escape = context.acceptWork();
+            var third = binding.dispatch().request(SceneActionDispatch.Priority.LETHAL_ESCAPE, context, escape,
+                    null, "escape_contract").arrangement();
+            assertFalse(first.valid()); assertFalse(second.valid()); assertFalse(third.current());
+            assertFalse(context.scope().runTracked(equipment, () -> fail("the replaced activity must not start")));
+            try (var data = mockStatic(DataProviderFactory.class, CALLS_REAL_METHODS)) {
+                data.when(() -> DataProviderFactory.getDataProvider(WZFiles.CHARACTER)).thenReturn(
+                        new XMLWZFile(Path.of("upstream/BeiDou-Server/gms-server/wz/Character.wz")));
+                assertEquals(699, SceneActionTiming.bodyDurationMs(0, 5, 4));
+                SceneRuntimeManager.attackAction(actor.character(), 0, 5, 4);
+            }
+            release.countDown();
+            normal.completion().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertTrue(normal.isSettled()); assertTrue(equipment.isSettled());
+            assertTrue(binding.dispatch().actionLockRemainingMs() > 0);
+            assertFalse(third.current(), "a lock recorded after the request still blocks its successor");
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (!third.current() && System.nanoTime() < until) Thread.sleep(5);
+            assertTrue(third.current());
+            assertTrue(context.scope().runTracked(escape, third::requireCurrent));
+            binding.dispatch().release(third, "escape_contract_complete");
+        } finally { release.countDown(); }
+    }
+
 
     @Test void actualMapIdentitySharesMembersAndKeepsDeathLocalUntilTheLastRoleLeaves() throws Exception {
         var map = nativeMap();

@@ -32,17 +32,22 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
         }
     }
 
-    public record HuntingSummary(long activityId, int kills, int lootCalls, int collectedObjects,
-                                 int collectedQuantity, String endReason) {
+    public record HuntingSummary(long activityId, int kills, String endReason) {
         public Map<String, Object> toMap() {
             var result = new LinkedHashMap<String, Object>();
             result.put("activity_id", activityId);
             result.put("kills", kills);
-            result.put("loot_calls", lootCalls);
-            result.put("collected_objects", collectedObjects);
-            result.put("collected_quantity", collectedQuantity);
             result.put("end_reason", endReason);
             return result;
+        }
+    }
+
+    public record LootSummary(long baselineSequence, long latestSequence, long collectedObjects,
+                               long collectedQuantity, boolean indeterminate) {
+        public Map<String, Object> toMap() {
+            return Map.of("baseline_sequence", baselineSequence, "latest_sequence", latestSequence,
+                    "collected_objects", collectedObjects, "collected_quantity", collectedQuantity,
+                    "indeterminate", indeterminate);
         }
     }
 
@@ -78,7 +83,7 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
     }
 
     public record Cycle(long index, InventorySummary huntingStarted, InventorySummary capacityTriggered,
-                        HuntingSummary hunting, InventorySummary beforeSale, InventorySummary afterSale,
+                        HuntingSummary hunting, LootSummary loot, InventorySummary beforeSale, InventorySummary afterSale,
                         InventorySummary returned, SaleSummary sale, List<PortalStep> portalSteps,
                         boolean portalStepsTruncated, boolean complete) {
         public Cycle { portalSteps = List.copyOf(portalSteps); }
@@ -89,6 +94,7 @@ public record TrainingScheduleStatus(State state, Stage stage, String reason, lo
             result.put("hunting_started", huntingStarted == null ? null : huntingStarted.toMap());
             result.put("capacity_triggered", capacityTriggered == null ? null : capacityTriggered.toMap());
             result.put("hunting", hunting == null ? null : hunting.toMap());
+            result.put("loot", loot == null ? null : loot.toMap());
             result.put("before_sale", beforeSale == null ? null : beforeSale.toMap());
             result.put("after_sale", afterSale == null ? null : afterSale.toMap());
             result.put("returned", returned == null ? null : returned.toMap());

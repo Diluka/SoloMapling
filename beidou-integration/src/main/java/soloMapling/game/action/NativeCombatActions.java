@@ -20,6 +20,7 @@ import soloMapling.beidou.NativeCombatEffects;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.scene.AbilitySceneModule;
 import soloMapling.game.scene.AbilitySceneModule.Plan;
+import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.context.NativeContextChecks;
 import soloMapling.game.execution.ExecutionScope;
 
@@ -174,7 +175,10 @@ public final class NativeCombatActions {
                         Unpooled.buffer(9).writeIntLE(0).writeIntLE(skillId).writeByte(level), () -> {
                             NativeContextChecks.requireSceneCurrent(server, scene);
                             requireAdmission(actor, skillId, level, effect, work);
-                        }, () -> dispatched[0] = true);
+                        }, () -> {
+                            dispatched[0] = true;
+                            SceneRuntimeManager.buffAction(actor, skillId);
+                        });
             } catch (AdmissionStopped stopped) {
                 return buffResult(stopped.outcome, stopped.getMessage(), false, false,
                         actor, skillId, level, hp, mp, effect.getDuration());

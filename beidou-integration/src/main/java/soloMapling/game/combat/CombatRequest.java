@@ -1,10 +1,15 @@
 package soloMapling.game.combat;
 
 import java.util.Set;
+import soloMapling.game.tactics.EngagementArea;
 
 /** One fixed target and the exact set of monsters this task may hit. */
-public record CombatRequest(int targetOid, Set<Integer> allowedTargetOids, Choice choice, int timeoutMs) {
+public record CombatRequest(int targetOid, Set<Integer> allowedTargetOids, Choice choice, int timeoutMs, EngagementArea activityArea) {
     public enum Choice { AUTO, SINGLE, AOE, ULTIMATE }
+
+    public CombatRequest(int targetOid, Set<Integer> allowedTargetOids, Choice choice, int timeoutMs) {
+        this(targetOid, allowedTargetOids, choice, timeoutMs, null);
+    }
 
     public CombatRequest {
         allowedTargetOids = Set.copyOf(allowedTargetOids);

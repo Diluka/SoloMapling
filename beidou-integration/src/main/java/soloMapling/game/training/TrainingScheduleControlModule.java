@@ -19,6 +19,8 @@ import soloMapling.game.inventory.CapacityRule;
 import soloMapling.game.inventory.InventoryFacts;
 import soloMapling.game.inventory.InventorySnapshot;
 import soloMapling.game.inventory.SaleRules;
+import soloMapling.game.loot.LootControlModule;
+import soloMapling.game.loot.LootStatus;
 import soloMapling.game.nativeaction.NativeActionModule;
 import soloMapling.game.navigation.MoveToRequest;
 import soloMapling.game.navigation.NavigationActionModule;
@@ -77,7 +79,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
     private static final int MAX_CYCLE_PORTALS = 8;
     private static final int MAX_SALE_FACTS = 8;
     private static final int MAX_QUANTITY_FACTS = 16;
-    private static final Set<String> COLLABORATORS = Set.of("hunting.start", "hunting.stop", "loot.collect",
+    private static final Set<String> COLLABORATORS = Set.of("hunting.start", "hunting.stop", "loot.start", "native.pickup",
             "travel.plan", "navigation.moveTo", "native.enterPortal", "native.revive", "shop.open", "shop.sell", "shop.close");
 
     private final Config config;
@@ -175,6 +177,8 @@ public final class TrainingScheduleControlModule implements ControlModule {
             return new TrainingScheduleStartResult(TrainingScheduleStartResult.Outcome.UNAVAILABLE, last);
         }
         var activity = new Activity(++runSequence, context);
+        activity.loot = context.provider(LootControlModule.START).orElse(null);
+        activity.lootRunBaseline = activity.loot == null ? 0 : activity.loot.snapshot().sequence();
         activity.task = new ModuleTask(context, "training-schedule", work -> run(activity, work));
         active = activity;
         activity.task.completion().whenComplete((ignored, failure) -> finished(activity));
@@ -223,6 +227,8 @@ public final class TrainingScheduleControlModule implements ControlModule {
         try {
             while (!work.cancelRequested()) {
                 var facts = observe(activity);
+                refreshLoot(activity);
+                if (activity.lootIndeterminate || activity.lootProviderChanged) stopHunting(activity);
                 synchronized (this) {
                     activity.currentMapId = facts.mapId();
                     if (facts.alive() && activity.deathObserved && activity.state != State.STOPPING
@@ -231,7 +237,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
                         activity.reviveAttempted = false;
                         activity.stage = Stage.STARTING;
                         activity.blockedOn = null;
-                        if (!activity.lootIndeterminate && !activity.saleIndeterminate && !activity.portalIndeterminate) {
+                        if (!activity.lootIndeterminate && !activity.lootProviderChanged && !activity.saleIndeterminate && !activity.portalIndeterminate) {
                             activity.state = State.RUNNING;
                             activity.reason = null;
                         }
@@ -240,7 +246,7 @@ public final class TrainingScheduleControlModule implements ControlModule {
                 }
                 var condition = condition(activity, facts);
                 synchronized (this) {
-                    if (activity.state == State.BLOCKED && (activity.lootIndeterminate || activity.saleIndeterminate || activity.portalIndeterminate || condition.equals(activity.blockedOn))) {
+                    if (activity.state == State.BLOCKED && (activity.lootIndeterminate || activity.lootProviderChanged || activity.saleIndeterminate || activity.portalIndeterminate || condition.equals(activity.blockedOn))) {
                         // Wait below without repeating routes or native shop calls against unchanged facts.
                     } else if (activity.state == State.BLOCKED) {
                         activity.state = State.RUNNING; activity.reason = null; activity.blockedOn = null;
@@ -250,7 +256,9 @@ public final class TrainingScheduleControlModule implements ControlModule {
                 if (activity.state != State.BLOCKED) {
                     String blocked;
                     if (!facts.alive()) blocked = recoverDeath(activity, work);
-                    else if (facts.changingMaps()) blocked = "map_transition_pending";
+                    else if (activity.lootIndeterminate || activity.lootProviderChanged) {
+                        blocked = activity.lootProviderChanged ? "loot_provider_changed" : "loot_indeterminate";
+                    } else if (facts.changingMaps()) blocked = "map_transition_pending";
                     else {
                         if (activity.stage == Stage.STARTING) {
                             stage(activity, config.capacity().evaluate(facts.inventory()).triggered()
@@ -363,10 +371,6 @@ public final class TrainingScheduleControlModule implements ControlModule {
             updateHunting(activity, current, current.state() == HuntingControlModule.State.IDLE);
             if (current.state() == HuntingControlModule.State.IDLE) {
                 activity.huntingActivityId = 0;
-                if (current.lootOutcome() == soloMapling.game.loot.LootResult.Outcome.INDETERMINATE) {
-                    activity.lootIndeterminate = true;
-                    return "loot_indeterminate";
-                }
             }
         }
         if (facts.mapId() != config.trainingMapId()) {
@@ -377,6 +381,12 @@ public final class TrainingScheduleControlModule implements ControlModule {
         if (config.capacity().evaluate(facts.inventory()).triggered()) {
             stopHunting(activity);
             if (activity.lootIndeterminate) return "loot_indeterminate";
+            if (activity.loot != null) {
+                var equipment = activity.loot.snapshot().equipmentActivityId();
+                if (equipment != 0) activity.loot.awaitEquipment(equipment, work);
+                refreshLoot(activity);
+                if (activity.lootIndeterminate) return "loot_indeterminate";
+            }
             var triggered = observe(activity);
             synchronized (this) {
                 if (activity.cycle != null) activity.cycle.capacityTriggered = summary(triggered);
@@ -384,20 +394,13 @@ public final class TrainingScheduleControlModule implements ControlModule {
             stage(activity, Stage.TO_SHOP);
             return null;
         }
-        if (!functionAvailable(activity.context, "loot.collect")) {
-            stopHunting(activity);
-            return "loot_unavailable";
-        }
+        if (activity.loot == null || !functionAvailable(activity.context, LootControlModule.START.name())
+                || activity.loot.snapshot().state() != LootStatus.State.RUNNING
+                || !functionAvailable(activity.context, NativeActionModule.PICKUP.name())) return "loot_unavailable";
         if (activity.huntingActivityId != 0) return null;
         var provider = activity.context.provider(HuntingControlModule.START);
         if (provider.isEmpty()) return "hunting_unavailable";
         activity.hunting = provider.get();
-        var call = activity.context.call(HuntingControlModule.START, new HuntingStartOptions(config.huntingStyle(), null), work);
-        if (call.status() == ModuleCall.Status.UNAVAILABLE) return "hunting_" + call.reason();
-        if (call.result().outcome() != HuntingStartResult.Outcome.STARTED) {
-            return "hunting_" + call.result().outcome().name().toLowerCase(java.util.Locale.ROOT);
-        }
-        activity.huntingActivityId = call.result().activity().activityId();
         synchronized (this) {
             if (activity.cycle != null && activity.cycle.afterSale != null) {
                 activity.cycle.returned = summary(facts);
@@ -407,8 +410,14 @@ public final class TrainingScheduleControlModule implements ControlModule {
                 }
                 activity.cycle = null;
             }
-            if (activity.cycle == null) activity.cycle = new Cycle(++cycleSequence, summary(facts));
+            if (activity.cycle == null) activity.cycle = new Cycle(++cycleSequence, summary(facts), activity.loot.snapshot());
         }
+        var call = activity.context.call(HuntingControlModule.START, new HuntingStartOptions(config.huntingStyle(), null), work);
+        if (call.status() == ModuleCall.Status.UNAVAILABLE) return "hunting_" + call.reason();
+        if (call.result().outcome() != HuntingStartResult.Outcome.STARTED) {
+            return "hunting_" + call.result().outcome().name().toLowerCase(java.util.Locale.ROOT);
+        }
+        activity.huntingActivityId = call.result().activity().activityId();
         updateHunting(activity, call.result().activity(), false);
         return null;
     }
@@ -418,9 +427,6 @@ public final class TrainingScheduleControlModule implements ControlModule {
         var stopped = activity.hunting.stop(activity.huntingActivityId);
         if (stopped.activity().activityId() == activity.huntingActivityId) {
             updateHunting(activity, stopped.activity(), true);
-            if (stopped.activity().lootOutcome() == soloMapling.game.loot.LootResult.Outcome.INDETERMINATE) {
-                activity.lootIndeterminate = true;
-            }
         }
         activity.huntingActivityId = 0;
     }
@@ -428,12 +434,35 @@ public final class TrainingScheduleControlModule implements ControlModule {
     private synchronized void updateHunting(Activity activity, HuntingSnapshot current, boolean finished) {
         if (activity.cycle == null) return;
         var cycle = activity.cycle;
-        cycle.hunting = new TrainingScheduleStatus.HuntingSummary(current.activityId(), cycle.kills + current.kills(),
-                cycle.lootCalls + current.lootCalls(), cycle.collectedObjects + current.collectedObjects(),
-                cycle.collectedQuantity + current.collectedQuantity(), current.endReason());
-        if (finished) {
-            cycle.kills += current.kills(); cycle.lootCalls += current.lootCalls();
-            cycle.collectedObjects += current.collectedObjects(); cycle.collectedQuantity += current.collectedQuantity();
+        cycle.hunting = new TrainingScheduleStatus.HuntingSummary(current.activityId(), cycle.kills + current.kills(), current.endReason());
+        if (finished) cycle.kills += current.kills();
+    }
+
+    private void refreshLoot(Activity activity) {
+        var provider = activity.context.provider(LootControlModule.START);
+        var current = provider.orElse(activity.loot);
+        if (current == null) return;
+        if (activity.loot != null && activity.loot != current) {
+            synchronized (this) {
+                activity.lootProviderChanged = true;
+                if (activity.state == State.BLOCKED) activity.reason = "loot_provider_changed";
+            }
+            return;
+        }
+        activity.loot = current;
+        var snapshot = current.snapshot();
+        synchronized (this) {
+            if (snapshot.indeterminateSequence() > activity.lootRunBaseline) {
+                activity.lootIndeterminate = true;
+                if (activity.state == State.BLOCKED) activity.reason = "loot_indeterminate";
+            }
+            if (activity.cycle == null) return;
+            var cycle = activity.cycle;
+            cycle.loot = new TrainingScheduleStatus.LootSummary(cycle.lootBaseline.sequence(), snapshot.sequence(),
+                    snapshot.collectedObjects() - cycle.lootBaseline.collectedObjects(),
+                    snapshot.collectedQuantity() - cycle.lootBaseline.collectedQuantity(),
+                    snapshot.indeterminateSequence() > cycle.lootBaseline.sequence());
+            if (cycle.loot.indeterminate()) activity.lootIndeterminate = true;
         }
     }
 
@@ -610,8 +639,10 @@ public final class TrainingScheduleControlModule implements ControlModule {
     private BlockedCondition condition(Activity activity, Observation facts) {
         var provider = activity.context.provider(HuntingControlModule.START);
         var hunting = provider.map(HuntingControlModule::snapshot).orElse(null);
+        var loot = activity.context.provider(LootControlModule.START).map(LootControlModule::snapshot).orElse(null);
         return new BlockedCondition(facts, providers(activity.context), hunting == null ? 0 : hunting.activityId(),
-                hunting == null ? null : hunting.state());
+                hunting == null ? null : hunting.state(), loot == null ? 0 : loot.sequence(),
+                loot == null ? 0 : loot.equipmentActivityId(), loot == null ? null : loot.state());
     }
 
     private static List<Provider> providers(CharacterRuntime.ModuleContext context) {
@@ -674,7 +705,8 @@ public final class TrainingScheduleControlModule implements ControlModule {
                                List<Disease> diseases, int chair, Integer riding, int speed, int jump, int shoesId,
                                int shoesFlag, List<PortalState> portals) { }
     private record BlockedCondition(Observation facts, List<Provider> providers, long huntingActivityId,
-                                    HuntingControlModule.State huntingState) { }
+                                    HuntingControlModule.State huntingState, long lootSequence,
+                                    long equipmentActivityId, LootStatus.State lootState) { }
     private record Journey(boolean arrived, String reason) { }
 
     private static final class Activity {
@@ -689,6 +721,9 @@ public final class TrainingScheduleControlModule implements ControlModule {
         BlockedCondition blockedOn;
         HuntingControlModule hunting;
         long huntingActivityId;
+        LootControlModule loot;
+        long lootRunBaseline;
+        boolean lootProviderChanged;
         ShopActionModule shop;
         long shopInteractionId;
         boolean lootIndeterminate;
@@ -706,12 +741,14 @@ public final class TrainingScheduleControlModule implements ControlModule {
         final TrainingScheduleStatus.InventorySummary huntingStarted;
         TrainingScheduleStatus.InventorySummary capacityTriggered;
         TrainingScheduleStatus.HuntingSummary hunting;
+        final LootStatus lootBaseline;
+        TrainingScheduleStatus.LootSummary loot;
         TrainingScheduleStatus.InventorySummary beforeSale;
         TrainingScheduleStatus.InventorySummary afterSale;
         TrainingScheduleStatus.InventorySummary returned;
         final ArrayDeque<TrainingScheduleStatus.PortalStep> portals = new ArrayDeque<>();
         boolean portalsTruncated;
-        int kills, lootCalls, collectedObjects, collectedQuantity;
+        int kills;
         int soldEntries, soldQuantity;
         Integer saleMesoBefore;
         int saleMesoAfter;
@@ -719,9 +756,12 @@ public final class TrainingScheduleControlModule implements ControlModule {
         String saleReason;
         final ArrayDeque<TrainingScheduleStatus.SaleFact> sales = new ArrayDeque<>();
         boolean salesTruncated;
-        Cycle(long index, TrainingScheduleStatus.InventorySummary started) { this.index = index; huntingStarted = started; }
+        Cycle(long index, TrainingScheduleStatus.InventorySummary started, LootStatus lootBaseline) {
+            this.index = index; huntingStarted = started; this.lootBaseline = lootBaseline;
+            loot = new TrainingScheduleStatus.LootSummary(lootBaseline.sequence(), lootBaseline.sequence(), 0, 0, false);
+        }
         TrainingScheduleStatus.Cycle snapshot(boolean complete) {
-            return new TrainingScheduleStatus.Cycle(index, huntingStarted, capacityTriggered, hunting, beforeSale, afterSale,
+            return new TrainingScheduleStatus.Cycle(index, huntingStarted, capacityTriggered, hunting, loot, beforeSale, afterSale,
                     returned, saleMesoBefore == null ? null : new TrainingScheduleStatus.SaleSummary(saleOutcome,
                     saleReason, soldEntries, soldQuantity, saleMesoBefore, saleMesoAfter, List.copyOf(sales), salesTruncated),
                     List.copyOf(portals), portalsTruncated, complete);

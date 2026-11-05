@@ -18,7 +18,7 @@ public record CombatResult(Outcome outcome, String reason, int initialJob, List<
                            List<NativeContactDamageActions.ContactResult> contactHits,
                            int nativeAttackAttempts, int nativeBuffAttempts, int contactHitCount) {
     public enum Outcome { TARGET_DEAD, TARGET_INVALID, UNREACHABLE, UNAVAILABLE, CANCELLED, TIMED_OUT,
-        CONTEXT_CHANGED, BUSY, NO_ATTACK, DEAD, INDETERMINATE }
+        CONTEXT_CHANGED, PREEMPTED, BUSY, NO_ATTACK, DEAD, INDETERMINATE }
     public record AttackUse(int providerJob, String kind, int skillId, String route, int count,
                             int skillLevel, String rules) { }
     public record Hit(int objectId, int monsterId, int hpBefore, int hpAfter, long rolledDamage, boolean killed) { }

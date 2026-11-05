@@ -1,6 +1,6 @@
 # 原生动作模块与普通复活
 
-本文描述 #275 首环的当前候选源码契约，尚未代表最终隔离验收或正式部署完成。`NativeActionModule` 以语义明确的操作封装有限原生请求及结果确认，供主控、其他模块和受管北斗脚本消费。首个操作为普通复活，后续操作按实际需求独立声明输入、结果和完成条件。
+本文描述 `NativeActionModule` 当前源码契约；源码、隔离与正式部署按各操作的交付记录分别确认。模块封装普通复活、普通门户和单次拾取，供主控、其他模块和受管北斗脚本消费，每项独立声明输入、结果和完成条件。
 
 ## 模块与操作
 
@@ -81,3 +81,17 @@ if (call.status() == ModuleCall.Status.SUCCEEDED) {
 死亡、事件裁决及消耗材料场景在专用 fixture 或独立副本准备，准备变化与本次操作效果分开归因。验收分别记录真实存活、HP/MP、地图/位置、标准及事件路径、取消前后事实、正常保存重开，以及源码、隔离、部署和真人客户端范围。
 
 源码入口为 [NativeActionModule](../../beidou-integration/src/main/java/soloMapling/game/nativeaction/NativeActionModule.java)、[NativeReviveActions](../../beidou-integration/src/main/java/soloMapling/game/action/NativeReviveActions.java)、[ReviveRequest](../../beidou-integration/src/main/java/soloMapling/game/action/ReviveRequest.java)、[ReviveResult](../../beidou-integration/src/main/java/soloMapling/game/action/ReviveResult.java) 和 [原生证据切面](../../beidou-integration/src/main/aspect/soloMapling/beidou/NativeReviveEvidenceAspect.aj)。共享操作的强类型接线见[模块参考](modules.md#共享函数声明与调用)。
+
+## 单次普通拾取
+
+`NativeActionModule.PICKUP` 声明 `PickupRequest → PickupResult`，脚本入口为 `native.pickup({object_id})`。它只在当前位置执行一个地物的原生拾取，不扫描或接近。Java控制可绑定精确MapItem、即时方式及已获准安排；目录仍由native-actions提供者接纳自己的work。
+
+新语义入口沿配套客户端正常拾取矩形复核距离，再共享既有 `NativeItemActions`、`ItemPickupHandler` 的库存增量、地物身份及移除确认。普通机会通过原lane原子无等待入口受理，繁忙时跳过；装备使用其具体安排。控制层原始自身归属与原生最终可拾资格分别判断。旧MCP基本pickup的声明范围继续独立。
+
+结果保留实际数量和派发事实，区分容量不足、繁忙、被替换及未知效果；取消后仍等待原短work实际结算，未知效果不重放。完整分类、正常范围、生命周期与冒烟见[自身掉落拾取控制](loot.md)。
+
+## 普通门户的安排资格
+
+`native.enterPortal` 在当前场景以其原提供者有限work申请 `NORMAL` 安排；更高优先级装备或避险意图存在时返回 `BUSY`，本次未派发。短命令受理及真正进入原 `ChangeMapHandler` 前分别重验同一安排，排队期间被替换时返回 `PREEMPTED`，原work真实结算。
+
+原生已经执行的换图及相应地图进入确认继续保留，后续安排失效不抹掉 `ENTERED` 或已有 `UNKNOWN` 事实。日程按当前实际地图、位置及协作者状态重新规划，不在每一段旅行增加诊断快照式补丁。

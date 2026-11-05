@@ -8,6 +8,7 @@ import org.gms.net.server.world.Party;
 import org.gms.server.StatEffect;
 import soloMapling.ArtificialPlayer.BotHelpers;
 import org.gms.util.PacketCreator;
+import soloMapling.game.scene.SceneRuntimeManager;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -43,6 +44,7 @@ public final class BotBuffEffects {
         // whether the StatEffect resolves, so the visual is never skipped.
         bot.getMap().broadcastMessage(bot,
                 PacketCreator.showBuffEffect(bot.getId(), skillId, CAST_EFFECT_ID), false);
+        SceneRuntimeManager.buffAction(bot, skillId);
 
         // The persistent aura needs the buff's stat list (cheap memoized lookup,
         // no applyTo). Skip silently if the skill has no stat ups.

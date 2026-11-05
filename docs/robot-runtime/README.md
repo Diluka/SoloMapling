@@ -4,15 +4,15 @@
 候选实现、源码测试、隔离验收及实际部署分别以对应 Issue 的记录为准。
 类型及初始人口配置见 [#263 的人口参考](population.md)，当前场景目标导航见
 [#122 的导航参考](navigation.md)，指定目标持续交战及职业范围见
-[战斗参考](combat.md)，普通复活见[原生动作参考](native-actions.md)，单次药效见[药剂参考](potions.md)，持续选怪和自动用药分别见[狩猎控制](hunting.md)与[恢复控制](recovery.md)。地图间计划、普通门户和背包商业操作见[旅行](travel.md)、[门户](portals.md)、[背包](inventory.md)、[拾取](loot.md)与[商店](shop.md)，固定狩猎售物循环见[基础练级日程](training-schedule.md)。
+[战斗参考](combat.md)，常驻追击和避险见[战术控制](tactics.md)，普通复活和单次拾取见[原生动作参考](native-actions.md)，单次药效见[药剂参考](potions.md)，持续选怪和自动用药分别见[狩猎控制](hunting.md)与[恢复控制](recovery.md)。地图间计划、普通门户和背包商业操作见[旅行](travel.md)、[门户](portals.md)、[背包](inventory.md)、[独立拾取控制](loot.md)与[商店](shop.md)，固定狩猎售物循环见[基础练级日程](training-schedule.md)。
 阶段入口为 [M1 #79](https://github.com/Diluka/SoloMapling/issues/79)，MCP 首环与次环分别为
 [#139](https://github.com/Diluka/SoloMapling/issues/139)、[#140](https://github.com/Diluka/SoloMapling/issues/140)。
 
-当前包含通用角色壳、MCP控制接入、配置装配、环境实例创建/移除、导航、战斗、原生动作、药剂、狩猎和恢复控制，以及训练场到杂货店的固定基础日程。旅行模块只生成静态门户路线，控制模块按实际场景逐段导航、过图和售物。完整选图、成长日程和跟随按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
+当前包含通用角色壳、MCP控制接入、配置装配、环境实例创建/移除、导航、战斗、原生动作、药剂、狩猎和恢复控制，以及训练场到杂货店的固定基础日程。#322/#323 候选接入独立常驻战术和拾取控制：场景统一裁决本次具体动作安排，交战保留选招与结果，狩猎保留选怪/交战/巡点，日程保留容量与回店流程。旅行模块只生成静态门户路线，控制模块按实际场景逐段导航、过图和售物。完整选图、成长日程和跟随按各自任务迁移。模块定义、装配方案和共享函数见[机器人模块参考](modules.md)；
 其中的最小示例仅说明协议接线。`RuntimeModule` 统一可装载模块生命周期；
 `ActionModule` 承担既定目标内的动作能力，`ControlModule` 选择任务目标与约束，安排任务顺序和动作模块调度，并决定继续或中断。
 动作可持续执行、组织步骤及组合其他动作；每项 `ModuleFunction<M, I, R>` 操作分别定义具体输入、结果和完成条件，同一模块可提供多项异构操作。
-`NavigationActionModule` 使用 `MoveToRequest → NavigationResult`，共享目录保留 `navigation.moveTo`。
+`NavigationActionModule` 使用 `MoveToRequest → NavigationResult`，共享目录保留 `navigation.moveTo`，并通过 `navigation.plan` 投影独立规划摘要；可信 Java 计划与场景执行共用现有规划/运动规则。
 
 ## 分工与迭代
 
@@ -76,7 +76,7 @@ SELF_WAIT、未证实创建/释放和失败债务不能当作关闭成功。
 机器人正常工作周期内保持该组合，已有模块的任务、状态和能力可用性随运行变化。
 
 MCP 来源绑定现有专用角色后，按固定类型名 `mcp_test` 从 `RobotPopulation.yaml` 装配。
-当前源码的默认组合为 MCP 控制、导航、战斗、原生动作、药剂和人口能力模块；新增非自主能力模块时更新该类型配置。
+默认组合包含 MCP 控制、导航、战斗、常驻战术、原生动作、药剂、独立拾取、狩猎、恢复、旅行、商店和人口能力；自动训练日程仅由专用训练类型装配。每项控制按自己的启动契约运行，结束狩猎不会停止常驻恢复、战术或拾取。自己的手工丢弃地物可能被后续拾回，手工 `drop/pickup` 专项按[模块说明](modules.md)显式停止并恢复拾取控制。
 `initial_population` 只用于本轮启动时创建环境实例，脚本通过 `robots.create/remove` 增减完整实例。
 已有 MCP 角色的账号、profile、当前位置和保存退出继续由其原来源管理。
 

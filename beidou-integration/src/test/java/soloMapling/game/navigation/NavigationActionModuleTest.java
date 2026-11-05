@@ -25,6 +25,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.beidou.InventoryMetadataTestContext;
+import soloMapling.game.action.NativeMovementAction;
+import soloMapling.game.action.NativeActionResult;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
@@ -35,6 +37,8 @@ import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleSelection;
 import soloMapling.game.runtime.RoleBinding;
 import soloMapling.game.runtime.RuntimeModule;
+import soloMapling.game.runtime.ModuleTask;
+import soloMapling.game.scene.SceneActionDispatch;
 import soloMapling.game.scene.SceneRuntimeManager;
 import soloMapling.game.scene.SceneActorBinding;
 
@@ -88,6 +92,190 @@ class NavigationActionModuleTest {
         savedEquipmentStats.forEach((item, stats) -> {
             if (stats == null) equipmentStats.remove(item); else equipmentStats.put(item, stats);
         });
+    }
+
+    @Test void basicDirectionMoveAndStopSettleTheSceneOwnedClockAndOriginalWork() throws Exception {
+        var fixture = fixture(98_982_136, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of());
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        var movement = fixture.module.movement();
+        var boundedWork = context.acceptWork();
+        var bounded = movement.prepareMove(fixture.server, context, boundedWork, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 300), () -> {});
+        movement.submitMove(bounded);
+        var completed = bounded.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        boundedWork.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(NativeActionResult.Outcome.SUCCEEDED, completed.outcome(), completed.toString());
+        assertTrue(fixture.position.get().x > 0);
+        assertEquals(true, completed.facts().get("native_idle_observed"));
+        assertEquals(true, completed.facts().get("completed_duration"));
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+
+        var moved = new CountDownLatch(1);
+        doAnswer(call -> { moved.countDown(); return null; })
+                .when(fixture.map).movePlayer(eq(fixture.character), any());
+        var moveWork = context.acceptWork();
+        var moving = movement.prepareMove(fixture.server, context, moveWork, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 3000), () -> {});
+        movement.submitMove(moving);
+        assertTrue(moved.await(3, TimeUnit.SECONDS));
+        assertTrue(fixture.position.get().x > 0);
+        int releasedAt = fixture.position.get().x;
+        var stopWork = context.acceptWork();
+        var stopped = movement.prepareStop(fixture.server, context, stopWork, binding.nativeScene(), () -> {});
+        movement.submitMove(stopped);
+
+        var stop = stopped.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        var move = moving.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        moveWork.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        stopWork.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(NativeActionResult.Outcome.SUCCEEDED, stop.outcome());
+        assertEquals(NativeActionResult.Outcome.CANCELLED, move.outcome());
+        assertEquals(true, stop.facts().get("native_idle_observed"));
+        assertTrue(fixture.position.get().x >= releasedAt);
+        assertEquals(4, fixture.stance.get() & ~1);
+        assertTrue(moveWork.isSettled());
+        assertTrue(stopWork.isSettled());
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+    }
+
+    @Test void higherPriorityArrangementDrainsAQueuedBasicTickAndItsRetainedMotion() throws Exception {
+        var moved = new CountDownLatch(1);
+        var heldLane = new CountDownLatch(1);
+        var releaseLane = new CountDownLatch(1);
+        var fixture = fixture(98_982_137, new Point(0, 0),
+                List.of(foothold(-300, 0, 400, 0, 1)), List.of(), configured -> {
+                    when(configured.map.getFootholdSpeed()).thenReturn(0.2f);
+                    doAnswer(call -> { moved.countDown(); return null; })
+                            .when(configured.map).movePlayer(eq(configured.character), any());
+                });
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        var movement = fixture.module.movement();
+        var moveWork = context.acceptWork();
+        var moving = movement.prepareMove(fixture.server, context, moveWork, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 3000), () -> {});
+        movement.submitMove(moving);
+        assertTrue(moved.await(3, TimeUnit.SECONDS));
+        var blocker = context.acceptWork();
+        context.submit("movement", blocker, () -> {}, () -> {
+            heldLane.countDown();
+            try { assertTrue(releaseLane.await(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException interrupted) { throw new AssertionError(interrupted); }
+        }, () -> {});
+        var decision = new AtomicReference<SceneActionDispatch.Decision>();
+        var requested = new CountDownLatch(1);
+        ModuleTask replacement;
+        try {
+            assertTrue(heldLane.await(3, TimeUnit.SECONDS));
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (context.scope().snapshot().diagnostics().stream().noneMatch(work ->
+                    work.id() != moveWork.snapshot().id() && work.id() != blocker.snapshot().id()
+                            && work.bodyState() == ExecutionScope.BodyState.NOT_STARTED && work.carrierClaimed())
+                    && System.nanoTime() < until) Thread.sleep(5);
+            assertTrue(context.scope().snapshot().diagnostics().stream().anyMatch(work ->
+                    work.id() != moveWork.snapshot().id() && work.id() != blocker.snapshot().id()
+                            && work.bodyState() == ExecutionScope.BodyState.NOT_STARTED && work.carrierClaimed()),
+                    "the original movement's next native tick was actually admitted behind the held body");
+            replacement = new ModuleTask(context, "replacement-scene-arrangement", work -> {
+                var next = binding.dispatch().request(SceneActionDispatch.Priority.LETHAL_ESCAPE,
+                        context, work, null, "lethal_escape");
+                decision.set(next);
+                requested.countDown();
+                moveWork.completion().toCompletableFuture().join();
+            });
+            replacement.start();
+            assertTrue(requested.await(3, TimeUnit.SECONDS));
+            assertNotNull(decision.get().arrangement());
+            assertFalse(decision.get().arrangement().current());
+            assertFalse(moveWork.isSettled());
+        } finally { releaseLane.countDown(); }
+
+        var result = moving.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        moveWork.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        replacement.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        binding.dispatch().release(decision.get().arrangement(), "replacement_finished");
+        assertEquals(NativeActionResult.Outcome.CANCELLED, result.outcome());
+        assertEquals(true, result.facts().get("native_idle_observed"));
+        assertEquals(4, fixture.stance.get() & ~1);
+        assertTrue(fixture.position.get().x > 0);
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+    }
+
+    @Test void pausingBasicDirectionInputWaitsForTheDispatchedNativeBodyAndClock() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var fixture = fixture(98_982_138, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
+                        doAnswer(call -> {
+                            entered.countDown();
+                            assertTrue(release.await(5, TimeUnit.SECONDS));
+                            return null;
+                        }).when(configured.map).movePlayer(eq(configured.character), any()));
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        var movement = fixture.module.movement();
+        var work = context.acceptWork();
+        var moving = movement.prepareMove(fixture.server, context, work, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 3000), () -> {});
+        movement.submitMove(moving);
+        CharacterRuntime.ModuleStop paused;
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            paused = fixture.runtime.stop(context.reference(), CharacterRuntime.StopMode.PAUSE);
+            assertFalse(paused.complete());
+            assertFalse(work.isSettled());
+            assertFalse(moving.result().toCompletableFuture().isDone());
+        } finally { release.countDown(); }
+        assertEquals(ExecutionScope.DrainResult.DRAINED, paused.await(Duration.ofSeconds(5)));
+        var result = moving.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(NativeActionResult.Outcome.CANCELLED, result.outcome());
+        assertEquals(true, result.facts().get("native_idle_observed"));
+        assertTrue(work.isSettled());
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+    }
+
+    @Test void basicDirectionInputRejectsNativeSlowWithoutAFrameOrClockDebt() throws Exception {
+        var fixture = fixture(98_982_139, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
+                        when(configured.character.hasDisease(Disease.SLOW)).thenReturn(true));
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        var movement = fixture.module.movement();
+        var work = context.acceptWork();
+        var moving = movement.prepareMove(fixture.server, context, work, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 1000), () -> {});
+        movement.submitMove(moving);
+        var result = moving.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(NativeActionResult.Outcome.FAILED, result.outcome());
+        assertEquals("movement_slow_unsupported", result.fixedReason());
+        assertFalse(moving.dispatchStarted());
+        assertEquals(new Point(0, 0), fixture.position.get());
+        verify(fixture.map, never()).movePlayer(eq(fixture.character), any());
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
+    }
+
+    @Test void completedBasicDirectionInputWithoutNativeDisplacementIsNotSuccess() throws Exception {
+        var fixture = fixture(98_982_140, new Point(0, 0),
+                List.of(foothold(-200, 0, 300, 0, 1)), List.of(), configured ->
+                        when(configured.character.getTotalMoveSpeedStat()).thenReturn(1));
+        var context = fixture.module.context();
+        var binding = SceneRuntimeManager.current(fixture.server, context.characterRef());
+        var movement = fixture.module.movement();
+        var work = context.acceptWork();
+        var moving = movement.prepareMove(fixture.server, context, work, binding.nativeScene(),
+                new NativeMovementAction("RIGHT", 100), () -> {});
+        movement.submitMove(moving);
+        var result = moving.result().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        work.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertTrue(moving.dispatchStarted());
+        assertEquals(true, result.facts().get("completed_duration"));
+        assertEquals(NativeActionResult.Outcome.FAILED, result.outcome());
+        assertEquals(new Point(0, 0), fixture.position.get());
+        assertEquals(true, result.facts().get("native_idle_observed"));
+        assertEquals(0, context.scope().resources().snapshot().outstanding());
     }
 
     @Test void nativeWalkingJumpingDroppingAndClimbingArriveThroughTheSharedModuleEntry() {

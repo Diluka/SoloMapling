@@ -6,6 +6,7 @@ import org.gms.server.maps.MapleMap;
 import soloMapling.ArtificialPlayer.BotSpotClaims;
 import soloMapling.ArtificialPlayer.GCMoveSystem.GCMovement;
 import soloMapling.game.combat.CombatActionModule;
+import soloMapling.game.tactics.EngagementArea;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -85,6 +86,13 @@ public final class HuntingPlanner {
     }
 
     public GrindStyle style() { return style; }
+
+    /** Capture the real assignment; target keep and tactical positions consume the same existing geometry. */
+    public EngagementArea activityArea() {
+        var selectedSpot = spot;
+        var selectedStack = stack;
+        return position -> acceptsStickyPosition(position, selectedSpot, selectedStack);
+    }
 
     public Decision decide(long now) {
         if (phase == Phase.RELEASED) return decision(Kind.WAIT, null, null, "released");
@@ -397,19 +405,22 @@ public final class HuntingPlanner {
     private boolean acceptsSticky(Monster monster) {
         if (!SpotFinder.isHostile(monster)) return false;
         var enemy = monster.getPosition();
-        if (enemy == null) return false;
+        return enemy != null && acceptsStickyPosition(enemy, spot, stack);
+    }
+
+    private boolean acceptsStickyPosition(Point enemy, Spot selectedSpot, SpotStack selectedStack) {
         if (style == GrindStyle.ROAM) {
             var position = actor.getPosition();
             int dy = Math.abs(enemy.y - position.y);
             return Math.abs(enemy.x - position.x) <= 900
                     && (dy <= 140 || dy <= 400 && SpotFinder.sameStack(profile, map, position, enemy));
         }
-        if (stack != null) {
-            return enemy.x >= stack.x0() - ACQUIRE_MARGIN && enemy.x <= stack.x1() + ACQUIRE_MARGIN
-                    && enemy.y >= stack.topY() - 60 && enemy.y <= stack.bottomY() + 60;
+        if (selectedStack != null) {
+            return enemy.x >= selectedStack.x0() - ACQUIRE_MARGIN && enemy.x <= selectedStack.x1() + ACQUIRE_MARGIN
+                    && enemy.y >= selectedStack.topY() - 60 && enemy.y <= selectedStack.bottomY() + 60;
         }
-        return Math.abs(enemy.x - spot.anchor().x) <= spot.radius() + ACQUIRE_MARGIN
-                && !GCMovement.onDifferentLedge(map, spot.anchor().x, spot.anchor().y, enemy.x, enemy.y);
+        return Math.abs(enemy.x - selectedSpot.anchor().x) <= selectedSpot.radius() + ACQUIRE_MARGIN
+                && !GCMovement.onDifferentLedge(map, selectedSpot.anchor().x, selectedSpot.anchor().y, enemy.x, enemy.y);
     }
 
     private boolean acceptsAdditional(Monster monster) {

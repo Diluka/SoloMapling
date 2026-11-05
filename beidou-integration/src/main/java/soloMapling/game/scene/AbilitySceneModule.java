@@ -56,10 +56,14 @@ public final class AbilitySceneModule implements SceneRuntimeModule {
 
     NativeBasicActions.CommandHandle prepareBasic(Server server, SceneActorBinding binding,
             CharacterCommandLane lane, CharacterCommandLane.ControlPermit permit,
-            ExecutionScope.WorkHandle work, NativeAttackAction action) {
+            ExecutionScope.WorkHandle work, NativeAttackAction action, SceneActionDispatch.Arrangement arrangement) {
         binding.requireCurrent();
         return NativeAttackActions.prepareAttack(server, lane, permit, work, binding.nativeScene(), action,
-                facingLeft -> scene.presentation().faceAttack(binding, work, facingLeft));
+                facingLeft -> {
+                    if (arrangement == null) throw new NativeActionService.Invalid("scene_arrangement_busy");
+                    arrangement.requireCurrent();
+                    scene.presentation().faceAttack(binding, work, facingLeft);
+                });
     }
 
     BotAttackDriver.StrikeResult strikeLegacy(SceneActorBinding binding, ExecutionScope.WorkHandle work,

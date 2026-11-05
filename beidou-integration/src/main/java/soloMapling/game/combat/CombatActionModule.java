@@ -9,7 +9,6 @@ import org.gms.server.life.Monster;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotAttackDriver;
 import soloMapling.ArtificialPlayer.BotAttackSystem.BotBuffEffects;
 import soloMapling.ArtificialPlayer.BotCommandsPack.BotAttack;
-import soloMapling.ArtificialPlayer.GCMoveSystem.RuntimeNavigationEngine;
 import soloMapling.game.combat.CombatJobTree.AttackKind;
 import soloMapling.game.combat.CombatJobTree.AttackPlan;
 import soloMapling.game.combat.CombatResult.Outcome;
@@ -21,13 +20,12 @@ import soloMapling.game.runtime.ActionModule;
 import soloMapling.game.runtime.CharacterRuntime;
 import soloMapling.game.runtime.ModuleDefinition;
 import soloMapling.game.runtime.ModuleFunction;
-import soloMapling.game.runtime.ModuleCall;
 import soloMapling.game.scene.AbilitySceneModule;
 import soloMapling.game.scene.SceneCharacterState;
 import soloMapling.game.scene.SceneRuntimeManager;
-import soloMapling.game.navigation.NavigationActionModule;
-import soloMapling.game.navigation.NavigationResult;
-import soloMapling.game.navigation.MoveToRequest;
+import soloMapling.game.scene.SceneActionDispatch;
+import soloMapling.game.scene.SceneActionTiming;
+import soloMapling.game.tactics.*;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -140,38 +138,21 @@ public final class CombatActionModule implements ActionModule {
                 outcome = Outcome.TARGET_INVALID;
             } else {
                 task.sceneState = SceneRuntimeManager.current(server, actor).characterState();
+                task.sceneBinding = SceneRuntimeManager.current(server, actor);
                 task.contactsBefore = task.sceneState.contactSnapshot().count();
+                task.tactics = context.provider(CombatTacticsControlModule.ASSESS).orElse(null);
+                if (task.tactics == null) return result(task, Outcome.UNAVAILABLE, "tactics_unavailable");
+                task.engagement = task.tactics.attachEngagement(new EngagementContext(
+                        new EngagementCandidate(task.scene, task.target, input.allowedTargetOids(), input.activityArea()), work));
+                if (task.engagement == null) return result(task, Outcome.UNAVAILABLE, "tactics_unavailable");
                 while (true) {
                     checkpoint(task);
                     var tick = tick(task);
                     if (tick.outcome() != null) { outcome = tick.outcome(); reason = tick.reason(); break; }
-                    if (tick.approach() != null) {
-                        task.navigationCalls++;
-                        var navigation = context.call(NavigationActionModule.MOVE_TO,
-                                new MoveToRequest(tick.approach().x, tick.approach().y,
-                                        Math.max(1, task.input.timeoutMs() - (int) TimeUnit.NANOSECONDS.toMillis(
-                                                System.nanoTime() - task.started))), work);
-                        checkpoint(task);
-                        if (navigation.status() == ModuleCall.Status.UNAVAILABLE) {
-                            outcome = Outcome.UNAVAILABLE; reason = "navigation_unavailable"; break;
-                        }
-                        var navigationResult = navigation.result();
-                        if (navigationResult.outcome() != NavigationResult.Outcome.ARRIVED) {
-                            outcome = switch (navigationResult.outcome()) {
-                                case CANCELLED -> Outcome.CANCELLED;
-                                case TIMED_OUT -> Outcome.TIMED_OUT;
-                                default -> Outcome.UNREACHABLE;
-                            };
-                            reason = "navigation_" + (navigationResult.reason() == null ? navigationResult.outcome().name()
-                                    : navigationResult.reason()).toLowerCase(java.util.Locale.ROOT);
-                            break;
-                        }
-                    } else {
-                        try { Thread.sleep(50); }
-                        catch (InterruptedException interrupted) {
-                            task.interrupted = true;
-                            throw new Halt(Outcome.CANCELLED, "combat_cancelled");
-                        }
+                    try { Thread.sleep(50); }
+                    catch (InterruptedException interrupted) {
+                        task.interrupted = true;
+                        throw new Halt(Outcome.CANCELLED, "combat_cancelled");
                     }
                 }
             }
@@ -183,6 +164,7 @@ public final class CombatActionModule implements ActionModule {
         } catch (GameContext.Invalid changed) {
             outcome = Outcome.CONTEXT_CHANGED; reason = changed.reason().name();
         } finally {
+            if (task.engagement != null) task.tactics.detachEngagement(task.engagement);
             synchronized (this) { active = null; }
             if (task.interrupted) Thread.currentThread().interrupt();
         }
@@ -214,16 +196,16 @@ public final class CombatActionModule implements ActionModule {
     private Tick tick(Task task) {
         var value = new AtomicReference<Tick>();
         var failure = new AtomicReference<Throwable>();
-        var step = task.context.acceptWork();
+        var step = task.context.acceptWork(task.work);
         Runnable body = () -> {
             try {
                 checkpoint(task);
-                if (!task.target.isAlive()) { value.set(new Tick(Outcome.TARGET_DEAD, null, null)); return; }
+                if (!task.target.isAlive()) { value.set(new Tick(Outcome.TARGET_DEAD, null)); return; }
                 if (task.scene.map().getMonsterByOid(task.input.targetOid()) != task.target) {
-                    value.set(new Tick(Outcome.TARGET_INVALID, "target_replaced_or_removed", null)); return;
+                    value.set(new Tick(Outcome.TARGET_INVALID, "target_replaced_or_removed")); return;
                 }
                 var actor = task.actor;
-                if (!actor.isAlive()) { value.set(new Tick(Outcome.DEAD, "actor_dead", null)); return; }
+                if (!actor.isAlive()) { value.set(new Tick(Outcome.DEAD, "actor_dead")); return; }
                 if (actor.getJob() != treeJob) {
                     treeJob = actor.getJob();
                     tree = new CombatJobTree(treeJob);
@@ -235,33 +217,6 @@ public final class CombatActionModule implements ActionModule {
                 boolean nativeRules = CombatJobTree.nativeMode(actor);
                 task.usedNative |= nativeRules;
                 task.usedLegacy |= !nativeRules;
-                var availableBuffs = tree.buffs(actor);
-                if (now >= nextBuff) {
-                    var due = availableBuffs.stream().filter(skill -> now >= nextBuffAt.getOrDefault(skill, 0L)).findFirst();
-                    if (due.isPresent()) {
-                        int skill = due.get();
-                        int duration;
-                        boolean applied;
-                        if (nativeRules) {
-                            checkpoint(task);
-                            var binding = SceneRuntimeManager.current(server, task.scene.actor());
-                            var buff = binding.scene().characters().attack(binding).buff(server, task.work, skill);
-                            task.nativeBuffAttempts++;
-                            task.nativeBuffs.put(skill, buff);
-                            if (buff.handlerError()) throw new Halt(Outcome.INDETERMINATE, "native_buff_handler_failed");
-                            applied = buff.outcome() == NativeCombatActions.Outcome.APPLIED;
-                            duration = buff.durationMs();
-                        } else {
-                            duration = BotBuffEffects.castBuff(actor, skill);
-                            applied = true;
-                        }
-                        if (applied) {
-                            task.buffsCast.add(skill);
-                            nextBuffAt.put(skill, now + TimeUnit.MILLISECONDS.toNanos(duration > 0 ? duration * 9L / 10 : 60_000));
-                        }
-                        nextBuff = now + TimeUnit.MILLISECONDS.toNanos(750);
-                    }
-                }
                 WeaponType weapon = BotAttack.resolveEquippedWeaponType(actor);
                 boolean facingLeft = task.target.getPosition().x < actor.getPosition().x;
                 var single = tree.resolve(AttackKind.SINGLE, weapon, false, actor);
@@ -279,28 +234,58 @@ public final class CombatActionModule implements ActionModule {
                         else selected = single.isPresent() ? single : (aoe.isPresent() ? aoe : ultimate);
                     }
                 }
-                if (selected.isEmpty()) { value.set(new Tick(Outcome.NO_ATTACK, "attack_category_unavailable", null)); return; }
+                if (selected.isEmpty()) { value.set(new Tick(Outcome.NO_ATTACK, "attack_category_unavailable")); return; }
                 var plan = selected.get();
                 var targets = targets(task, plan, weapon, facingLeft);
-                if (!targets.contains(task.target)) {
-                    int offset = Math.max(10, Math.min(plan.reachX() / 2, 160));
-                    var targetPosition = task.target.getPosition();
-                    for (int distance : List.of(offset, 0)) {
-                        int x = targetPosition.x + (actor.getPosition().x > targetPosition.x ? distance : -distance);
-                        Point ground = RuntimeNavigationEngine.groundPoint(task.scene.map(), new Point(x, targetPosition.y));
-                        if (ground == null) ground = RuntimeNavigationEngine.groundPoint(task.scene.map(),
-                                new Point(x, targetPosition.y - plan.reachY()));
-                        if (ground != null && Math.abs(ground.y - targetPosition.y) <= plan.reachY()
-                                && (plan.nativeRules() ? AbilitySceneModule.canHit(actor, task.target, plan.nativePlan(), ground)
-                                : BotAttackDriver.canHitFrom(actor, task.target, plan.profile(), weapon, ground))) {
-                            value.set(new Tick(null, null, ground)); return;
-                        }
-                    }
-                    value.set(new Tick(Outcome.UNREACHABLE, "target_outside_attack_geometry", null));
-                    return;
+                int actionDuration = SceneActionTiming.proposalDurationMs(plan, weapon);
+                task.tactics.updateAttackProposal(task.engagement, new AttackProposal(plan, nextAttack, actionDuration, now));
+                var directive = task.tactics.directive(task.engagement);
+                if ("tactics_unavailable".equals(directive.reason())) {
+                    value.set(new Tick(Outcome.UNAVAILABLE, "tactics_unavailable")); return;
                 }
-                if (now < nextAttack || plan.kind() == AttackKind.ULTIMATE && now < nextUltimate) {
-                    value.set(new Tick(null, null, null)); return;
+                if (directive.action() == TacticalDirective.Action.DISENGAGE) {
+                    value.set(new Tick(Outcome.PREEMPTED, directive.reason())); return;
+                }
+                if (directive.action() != TacticalDirective.Action.ATTACK || !targets.contains(task.target)
+                        || now < nextAttack || plan.kind() == AttackKind.ULTIMATE && now < nextUltimate) {
+                    value.set(new Tick(null, directive.reason())); return;
+                }
+                var sceneBinding = SceneRuntimeManager.current(server, task.scene.actor());
+                var admitted = sceneBinding.dispatch().request(SceneActionDispatch.Priority.NORMAL, task.context,
+                        step, task.target, "combat_attack");
+                if (admitted.arrangement() == null || !admitted.arrangement().current()) {
+                    value.set(new Tick(sceneBinding.dispatch().currentPriority() == SceneActionDispatch.Priority.EQUIPMENT_PICKUP
+                            ? Outcome.PREEMPTED : null, admitted.reason())); return;
+                }
+                task.arrangement = admitted.arrangement();
+                task.arrangement.requireCurrent();
+                var availableBuffs = tree.buffs(actor);
+                if (now >= nextBuff) {
+                    var due = availableBuffs.stream().filter(skill -> now >= nextBuffAt.getOrDefault(skill, 0L)).findFirst();
+                    if (due.isPresent()) {
+                        int skill = due.get();
+                        int duration;
+                        boolean applied;
+                        if (nativeRules) {
+                            checkpoint(task);
+                            var binding = SceneRuntimeManager.current(server, task.scene.actor());
+                            var buff = binding.scene().characters().attack(binding).buff(server, step, skill);
+                            task.nativeBuffAttempts++;
+                            task.nativeBuffs.put(skill, buff);
+                            if (buff.handlerError()) throw new Halt(Outcome.INDETERMINATE, "native_buff_handler_failed");
+                            applied = buff.outcome() == NativeCombatActions.Outcome.APPLIED;
+                            duration = buff.durationMs();
+                        } else {
+                            duration = BotBuffEffects.castBuff(actor, skill);
+                            applied = true;
+                        }
+                        if (applied) {
+                            task.buffsCast.add(skill);
+                            nextBuffAt.put(skill, now + TimeUnit.MILLISECONDS.toNanos(duration > 0 ? duration * 9L / 10 : 60_000));
+                        }
+                        nextBuff = now + TimeUnit.MILLISECONDS.toNanos(750);
+                        value.set(new Tick(null, "buff_dispatched")); return;
+                    }
                 }
                 List<BotAttackDriver.HitFact> hitFacts;
                 int skillId, skillLevel;
@@ -309,18 +294,18 @@ public final class CombatActionModule implements ActionModule {
                     checkpoint(task);
                     var binding = SceneRuntimeManager.current(server, task.scene.actor());
                     var strike = binding.scene().characters().attack(binding)
-                            .strike(server, task.work, plan.nativePlan(), targets, facingLeft);
+                            .strike(server, step, plan.nativePlan(), targets, facingLeft);
                     task.nativeAttackAttempts++;
                     task.nativeAttacks.put(strike.skillId(), strike);
                     if (strike.handlerError()) throw new Halt(Outcome.INDETERMINATE, "native_attack_handler_failed");
                     nextAttack = now + TimeUnit.MILLISECONDS.toNanos(plan.nativePlan().intervalMs());
-                    if (!strike.dispatched()) { value.set(new Tick(null, strike.reason(), null)); return; }
+                    if (!strike.dispatched()) { value.set(new Tick(null, strike.reason())); return; }
                     hitFacts = strike.hits();
                     skillId = strike.skillId(); skillLevel = strike.skillLevel();
                     route = plan.nativePlan().route().name(); rule = strike.policy();
                 } else {
                     var binding = SceneRuntimeManager.current(server, task.scene.actor());
-                    var strike = binding.scene().characters().attack(binding).strikeLegacy(task.work, plan.profile(),
+                    var strike = binding.scene().characters().attack(binding).strikeLegacy(step, plan.profile(),
                             targets, weapon, facingLeft, tree.buffs().contains(Hermit.SHADOW_PARTNER));
                     nextAttack = now + TimeUnit.MILLISECONDS.toNanos(plan.profile().cooldownMs);
                     hitFacts = strike.hits(); skillId = strike.skillId(); skillLevel = plan.profile().skillLevel;
@@ -334,8 +319,14 @@ public final class CombatActionModule implements ActionModule {
                     if (old == null) task.hits.put(hit.objectId(), new HitTotal(hit));
                     else { old.hpAfter = hit.hpAfter(); old.rolledDamage += hit.rolledDamage(); old.killed |= hit.killed(); }
                 }
-                value.set(new Tick(task.target.isAlive() ? null : Outcome.TARGET_DEAD, null, null));
+                value.set(new Tick(task.target.isAlive() ? null : Outcome.TARGET_DEAD, null));
             } catch (RuntimeException | Error stopped) { failure.set(stopped); }
+            finally {
+                if (task.arrangement != null) {
+                    task.sceneBinding.dispatch().release(task.arrangement, "combat_step_finished");
+                    task.arrangement = null;
+                }
+            }
         };
         try { task.context.submit("combat-action", step, () -> {}, body, () -> {}); }
         catch (RuntimeException rejected) { step.reject(); throw rejected; }
@@ -358,6 +349,7 @@ public final class CombatActionModule implements ActionModule {
     }
 
     private void checkpoint(Task task) {
+        if (task.engagement != null && !task.engagement.attached()) throw new Halt(Outcome.UNAVAILABLE, "tactics_unavailable");
         if (Thread.interrupted()) { task.interrupted = true; task.stopRequested = true; }
         if (task.stopRequested || task.work.cancelRequested()) throw new Halt(Outcome.CANCELLED, "combat_cancelled");
         if (System.nanoTime() >= task.deadline) {
@@ -366,7 +358,7 @@ public final class CombatActionModule implements ActionModule {
         NativeContextChecks.requireSceneCurrent(server, task.scene);
     }
 
-    private record Tick(Outcome outcome, String reason, Point approach) { }
+    private record Tick(Outcome outcome, String reason) { }
     private record AttackKey(int providerJob, String kind, int skillId, String route, int skillLevel, String rules) { }
     private static final class Halt extends RuntimeException {
         final Outcome outcome;
@@ -399,6 +391,10 @@ public final class CombatActionModule implements ActionModule {
         final Map<Integer, NativeCombatActions.StrikeResult> nativeAttacks = new LinkedHashMap<>();
         final Map<Integer, NativeCombatActions.BuffResult> nativeBuffs = new LinkedHashMap<>();
         SceneCharacterState sceneState;
+        soloMapling.game.scene.SceneActorBinding sceneBinding;
+        CombatTacticsControlModule tactics;
+        EngagementBinding engagement;
+        SceneActionDispatch.Arrangement arrangement;
         long contactsBefore;
         GameContext.SceneRef scene;
         Monster target;

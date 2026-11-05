@@ -11,6 +11,8 @@ import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 import soloMapling.game.execution.ScopeResources;
 import soloMapling.game.runtime.CharacterRuntime;
+import soloMapling.game.scene.SceneActorBinding;
+import soloMapling.game.scene.SceneActionDispatch;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -24,8 +26,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.LongSupplier;
-import java.util.function.Consumer;
 
 import static soloMapling.game.action.NativeActionResult.Dispatch.*;
 import static soloMapling.game.action.NativeActionResult.Outcome.*;
@@ -35,16 +35,13 @@ import static soloMapling.game.action.NativeActionService.SubmissionStatus.*;
 /** Module-owned bounded movement. Timers only wake; every native write uses the original character lane. */
 public final class NativeMovementActions {
     public static final int TICK_MS = 50;
-    @FunctionalInterface interface Wakeups { void schedule(Runnable body, int delayMs); }
     private static final class TimerHolder {
         private static final ScheduledThreadPoolExecutor TIMER = new ScheduledThreadPoolExecutor(1, task -> {
             Thread thread = new Thread(task, "native-movement-clock"); thread.setDaemon(true); return thread;
         });
     }
     private final Object monitor = new Object();
-    private final Wakeups wakeups;
-    private final LongSupplier nanos;
-    private final Consumer<ExecutionScope.WorkHandle> awaitWork;
+    private final SceneActorBinding binding;
     private Job active;
     private boolean sceneLeft;
     private boolean navigating;
@@ -64,8 +61,8 @@ public final class NativeMovementActions {
                 Map.entry("clock_cancel_is_drain_proof", false));
     }
 
-    public NativeMovementActions(Consumer<ExecutionScope.WorkHandle> awaitWork) {
-        this((body, delay) -> TimerHolder.TIMER.schedule(body, delay, TimeUnit.MILLISECONDS), System::nanoTime, awaitWork);
+    public NativeMovementActions(SceneActorBinding binding) {
+        this.binding = Objects.requireNonNull(binding);
     }
 
     /** A departed scene cannot send further frames; the original work still waits for its clock to exit. */
@@ -92,8 +89,8 @@ public final class NativeMovementActions {
     public static boolean dispatchNavigationFrame(Server server, GameContext.SceneRef scene,
                                                    ExecutionScope.WorkHandle work, Point position,
                                                    int velocityX, int velocityY, int stance,
-                                                   int footholdId, int durationMs) {
-        var context = new NativeBasicActions.Context(server, scene, work, "navigation");
+                                                   int footholdId, int durationMs, Runnable admission) {
+        var context = new NativeBasicActions.Context(server, scene, work, "navigation", () -> {}, admission);
         ByteBuf packet = Unpooled.buffer(24).writeZero(9).writeByte(1).writeByte(0)
                 .writeShortLE(position.x).writeShortLE(position.y)
                 .writeShortLE(velocityX).writeShortLE(velocityY).writeShortLE(footholdId)
@@ -101,16 +98,9 @@ public final class NativeMovementActions {
         context.dispatch(new MovePlayerHandler(), packet);
         return !context.handlerError();
     }
-    NativeMovementActions(Wakeups wakeups, LongSupplier nanos) {
-        this(wakeups, nanos, ignored -> { });
-    }
-    private NativeMovementActions(Wakeups wakeups, LongSupplier nanos, Consumer<ExecutionScope.WorkHandle> awaitWork) {
-        this.wakeups = Objects.requireNonNull(wakeups); this.nanos = Objects.requireNonNull(nanos);
-        this.awaitWork = Objects.requireNonNull(awaitWork);
-    }
-
     private record Pending(Server server, CharacterRuntime.ModuleContext context, ExecutionScope.WorkHandle work,
-                           GameContext.SceneRef scene, NativeMovementAction action, Runnable preflight) { }
+                           GameContext.SceneRef scene, NativeMovementAction action, Runnable preflight,
+                           SceneActionDispatch.Arrangement arrangement) { }
 
     public static final class MoveHandle implements NativeBasicActions.Handle {
         private final String action;
@@ -153,6 +143,7 @@ public final class NativeMovementActions {
         int initialX, initialY, lastX, lastY;
         long started;
         boolean initialized, stopRequested, idleRequested, idleObserved, finishing, finished, retryCleanup;
+        boolean durationCompleted;
         boolean handlerError, stopUnverified;
         String reason;
         Job(MoveHandle primary, Pending input) {
@@ -194,8 +185,12 @@ public final class NativeMovementActions {
             }
             return null;
         });
-        awaitWork.accept(work);
-        return new MoveHandle(new Pending(server, context, work, scene, action, preflight), stop);
+        binding.awaitWork(work);
+        var admitted = stop ? null : binding.dispatch().request(SceneActionDispatch.Priority.NORMAL, context, work, null, "basic_move");
+        var arrangement = admitted == null ? null : admitted.arrangement();
+        if (arrangement != null) work.completion().whenComplete((ignored, failure) ->
+                binding.dispatch().release(arrangement, "basic_move_settled"));
+        return new MoveHandle(new Pending(server, context, work, scene, action, preflight, arrangement), stop);
     }
 
     /** The parent carrier represents the whole clock/tick lifecycle, rather than a second native queue. */
@@ -213,6 +208,10 @@ public final class NativeMovementActions {
             boolean entered = input.context.scope().runTracked(input.work, () -> {
                 input.preflight.run();
                 NativeContextChecks.requireSceneCurrent(input.server, input.scene);
+                if ("move".equals(handle.action)) {
+                    if (input.arrangement == null) throw new NativeActionService.Invalid("scene_arrangement_busy");
+                    input.arrangement.requireCurrent();
+                }
                 input.context.prepareNative("movement", input.work, input.preflight, (lane, permit, work, actor) -> null);
                 synchronized (monitor) {
                     if (sceneLeft) throw new NativeActionService.Invalid("movement_scene_left");
@@ -236,7 +235,7 @@ public final class NativeMovementActions {
                 Point position = input.scene.actor().character().getPosition();
                 synchronized (monitor) {
                     job.initialX = job.lastX = position.x; job.initialY = job.lastY = position.y;
-                    job.started = nanos.getAsLong();
+                    job.started = System.nanoTime();
                     job.spawning = "move".equals(handle.action) && NativeMovementGeometry.needsSpawnSettle(
                             input.scene.actor().character(), input.scene.map());
                     job.walkingStarted = job.spawning ? 0 : job.started;
@@ -285,7 +284,7 @@ public final class NativeMovementActions {
                     || job.stopRequested && (!job.idleRequested || job.idleObserved || !sameWorld(job.input))) return;
             job.wakeups++;
         }
-        try { wakeups.schedule(() -> wake(job), TICK_MS); }
+        try { TimerHolder.TIMER.schedule(() -> wake(job), TICK_MS, TimeUnit.MILLISECONDS); }
         catch (Throwable failure) {
             synchronized (monitor) { job.wakeups--; job.stopRequested = true; job.reason = "movement_clock_unavailable"; }
             maybeFinish(job);
@@ -295,7 +294,8 @@ public final class NativeMovementActions {
         synchronized (monitor) { job.wakeups--; job.callbacks++; }
         try {
             Pending input = job.input;
-            if (input.work.cancelRequested()) requestStop(job, "movement_cancelled", job.primary.dispatched);
+            if (input.arrangement != null && !input.arrangement.valid()) requestStop(job, "scene_arrangement_preempted", job.primary.dispatched);
+            else if (input.work.cancelRequested()) requestStop(job, "movement_cancelled", job.primary.dispatched);
             else if (!input.context.scope().isActive() || !sameWorld(input)) requestStop(job, "movement_context_expired", false);
             else drive(job);
         } finally {
@@ -318,7 +318,7 @@ public final class NativeMovementActions {
                     clockedStop = !job.idleObserved && job.callbacks == 0 && (job.motion != null || job.spawning && job.primary.dispatched);
                 }
             } else {
-                long realElapsed = Math.max(0, TimeUnit.NANOSECONDS.toMillis(nanos.getAsLong() - job.walkingStarted));
+                long realElapsed = Math.max(0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.walkingStarted));
                 elapsed = job.spawning ? TICK_MS
                         : (int) Math.min(TICK_MS, Math.min(job.input.action.durationMs(), realElapsed) - job.simulatedMs);
                 if (elapsed < 1) return;
@@ -339,10 +339,12 @@ public final class NativeMovementActions {
         }
         try {
             step.cleanup = idle ? job.registration.acquireCleanup() : null;
-            ExecutionScope.WorkHandle work = step.cleanup == null ? input.context.acceptWork() : step.cleanup.work();
+            ExecutionScope.WorkHandle work = step.cleanup == null ? input.context.acceptWork(input.work) : step.cleanup.work();
             step.work = work;
             work.completion().whenComplete((fact, failure) -> stepSettled(job, step));
-            if (step.cleanup == null) input.context.submit("movement", work, input.preflight, () -> runStep(job, step), () -> {});
+            if (step.cleanup == null) input.context.submit("movement", work, () -> {
+                input.preflight.run(); input.arrangement.requireCurrent();
+            }, () -> runStep(job, step), () -> {});
             else input.context.submitCleanup(step.cleanup, () -> runStep(job, step), () -> {});
         } catch (Throwable failure) {
             synchronized (monitor) {
@@ -368,7 +370,7 @@ public final class NativeMovementActions {
                     for (MoveHandle stop : job.stops) stop.dispatched = true;
                 } else job.primary.dispatched = true;
             }
-        });
+        }, () -> { if (!step.idle && input.arrangement != null) input.arrangement.requireCurrent(); });
         try {
             if (step.cleanup != null) step.cleanup.permit().requireExecuting(job);
             synchronized (monitor) { if (sceneLeft) return; }
@@ -377,7 +379,8 @@ public final class NativeMovementActions {
                     if (job.stopRequested || input.work.cancelRequested()) return;
                     long deadlineStart = job.spawning ? job.started : job.walkingStarted;
                     int deadlineMs = job.spawning ? 200 : input.action.durationMs();
-                    if (nanos.getAsLong() - deadlineStart > TimeUnit.MILLISECONDS.toNanos(deadlineMs + TICK_MS)) {
+                    if (System.nanoTime() - deadlineStart > TimeUnit.MILLISECONDS.toNanos(deadlineMs + TICK_MS)) {
+                        if (!job.spawning) job.durationCompleted = true;
                         job.reason = "movement_duration_elapsed"; job.stopRequested = true; job.idleRequested = job.primary.dispatched; return;
                     }
                 }
@@ -448,7 +451,7 @@ public final class NativeMovementActions {
                     job.reason = "native_movement_outcome_unknown"; job.stopRequested = true; job.idleRequested = false;
                 } else if (settling) {
                     job.spawnFrames++; job.verticalVelocity = vertical; job.spawnFoothold = foothold;
-                    if (landed) { job.spawning = false; job.walkingStarted = nanos.getAsLong(); }
+                    if (landed) { job.spawning = false; job.walkingStarted = System.nanoTime(); }
                 } else {
                     if (job.motion != null) job.motion.acceptFrame();
                     if (step.idle) job.idleObserved = stable;
@@ -460,7 +463,8 @@ public final class NativeMovementActions {
                         } else {
                             job.simulatedMs += step.elapsedMs;
                             if (job.simulatedMs >= input.action.durationMs()
-                                    || nanos.getAsLong() - job.walkingStarted >= TimeUnit.MILLISECONDS.toNanos(input.action.durationMs())) {
+                                    || System.nanoTime() - job.walkingStarted >= TimeUnit.MILLISECONDS.toNanos(input.action.durationMs())) {
+                                job.durationCompleted = true;
                                 job.stopRequested = true; job.idleRequested = true;
                             }
                         }
@@ -486,7 +490,10 @@ public final class NativeMovementActions {
                 if (job.step != step) return;
                 job.step = null;
                 if (!step.entered || step.work.snapshot().rejected()) {
-                    job.reason = "movement_tick_not_dispatched"; job.stopRequested = true; job.idleRequested = false;
+                    job.reason = job.input.arrangement != null && !job.input.arrangement.valid()
+                            ? "scene_arrangement_preempted" : "movement_tick_not_dispatched";
+                    job.stopRequested = true;
+                    job.idleRequested = job.primary.dispatched && sameWorld(job.input) && !sceneLeft;
                 }
                 next = !job.stopRequested;
             }
@@ -541,7 +548,7 @@ public final class NativeMovementActions {
         synchronized (monitor) { job.finished = true; }
         Map<String, Object> facts = facts(job);
         boolean moved = job.initialX != job.lastX || job.initialY != job.lastY;
-        boolean completed = job.input.action != null && job.simulatedMs >= job.input.action.durationMs();
+        boolean completed = job.input.action != null && job.durationCompleted;
         boolean interrupted = job.input.work.cancelRequested() || !job.stops.isEmpty() || !sameWorld(job.input);
         NativeActionResult.Outcome outcome = "native_movement_outcome_unknown".equals(job.reason) ? INDETERMINATE
                 : "stop".equals(job.primary.action) ? job.idleObserved ? SUCCEEDED : FAILED
@@ -568,9 +575,9 @@ public final class NativeMovementActions {
         facts.put("channel_id", job.channelId);
         facts.put("movement_steps", job.steps); facts.put("simulated_duration_ms", job.simulatedMs);
         facts.put("requested_duration_ms", job.input.action == null ? 0 : job.input.action.durationMs());
-        facts.put("actual_elapsed_ms", Math.max(0, TimeUnit.NANOSECONDS.toMillis(nanos.getAsLong() - job.started)));
+        facts.put("actual_elapsed_ms", Math.max(0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.started)));
         facts.put("spawn_settlement_ticks", job.spawnFrames);
-        facts.put("completed_duration", job.input.action != null && job.simulatedMs >= job.input.action.durationMs());
+        facts.put("completed_duration", job.input.action != null && job.durationCompleted);
         facts.put("moving", !job.idleObserved && job.primary.dispatched && sameWorld(job.input));
         facts.put("movement_stopped", job.idleObserved || !job.primary.dispatched);
         facts.put("native_idle_observed", job.idleObserved);
