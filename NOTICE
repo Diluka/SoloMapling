@@ -61,17 +61,20 @@ The complete corresponding source for a distributed or network-served build
 includes the integration sources, weaving and build rules, and the exact
 BeiDou submodule revision used for that build.
 
-Limited monster ground reference policy
---------------------------------------
-MonsterSceneModule adapts the ground force integration, stance identifiers and
-roaming/recoil timing from the continued Journey MMORPG / HeavenClient project:
+Limited monster scene reference policy
+-------------------------------------
+MonsterSceneModule adapts ground and airborne integration, stance identifiers,
+roaming/recoil and jump choices, and connected-foothold/landing logic from the
+continued Journey MMORPG / HeavenClient project:
 https://github.com/ryantpayton/MapleStory-Client
 Revision: cbb0fe27cf9683a12eca0a569121d8033cdc2a4d
 Files: Gameplay/MapleMap/Mob.cpp, Gameplay/MapleMap/Mob.h,
-Gameplay/Physics/Physics.cpp and Constants.h.
+Gameplay/Physics/Physics.cpp, Gameplay/Physics/FootholdTree.cpp and Constants.h.
 Copyright (C) 2015-2019 Daniel Allendorf, Ryan Payton.
 These sources are licensed under AGPL version 3 or later; this integration is
 distributed under AGPL version 3, consistently with LICENSE.
+Vertical jump parameters are calibrated separately against the matched BeiDou
+V17 client samples recorded in docs/scene-runtime/monster-client-samples.md.
 The policy is a bounded reference implementation, not a claim of equivalence
 with the official v83 client. Its supported species and missing behavior are
 documented in docs/scene-runtime/monster-driver.md.

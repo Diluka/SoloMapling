@@ -23,6 +23,8 @@ import org.gms.provider.DataProviderFactory;
 import org.gms.provider.wz.WZFiles;
 import org.gms.server.life.Monster;
 import org.gms.server.life.MonsterStats;
+import org.gms.server.maps.Foothold;
+import org.gms.server.maps.FootholdTree;
 import org.gms.server.maps.MapleMap;
 import org.gms.util.PacketCreator;
 import org.gms.util.ThreadLocalUtil;
@@ -272,10 +274,13 @@ class NativeContactDamageActionsTest {
         assertTrue(work.isSettled());
     }
 
-    @Test void aManagedLegacyRoleTakesNativeContactAndForecastsOnlyTheUnprotectedPartOfItsPath() throws Exception {
+    @Test void aManagedLegacyRoleTakesNativeContactAndForecastsTheSharedUnprotectedContactSlots() throws Exception {
         lane.close(); lane = null;
         doReturn(Job.BOWMAN).when(actor).getJob();
         when(map.getFootholdSpeed()).thenReturn(1.0f);
+        var geometry = new FootholdTree(new Point(-200, -100), new Point(200, 100));
+        geometry.insert(new Foothold(new Point(-200, 0), new Point(200, 0), 1));
+        when(map.getFootholds()).thenReturn(geometry);
         var original = target;
         target = new Monster(1210100, original.getStats());
         target.setObjectId(501); target.setPosition(new Point(0, 0)); target.setMap(map);
@@ -322,7 +327,7 @@ class NativeContactDamageActionsTest {
                     new IncomingDamageEstimate.PathSample(new Point(100, 0), 1000),
                     new IncomingDamageEstimate.PathSample(new Point(100, 0), 5000),
                     new IncomingDamageEstimate.PathSample(new Point(0, 0), 5001)));
-            assertEquals(0, leaving.hpLossUpper(), "a protected entry point is not revisited inside the queried window");
+            assertEquals(180, leaving.hpLossUpper(), "a moving pig may reach the path after protection expires");
             assertEquals(1, binding.characterState().contactSnapshot().count(), "forecasting never consumes another contact slot");
             assertEquals(10, actor.getHp()); assertEquals(50, actor.getMp()); assertEquals(mesos, actor.getMeso());
             assertSame(armor, actor.getInventory(InventoryType.EQUIPPED).getItem((short) -5));

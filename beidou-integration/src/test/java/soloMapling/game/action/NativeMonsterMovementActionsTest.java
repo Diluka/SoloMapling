@@ -2,6 +2,8 @@ package soloMapling.game.action;
 
 import org.gms.client.Character;
 import org.gms.client.Client;
+import org.gms.net.opcodes.SendOpcode;
+import org.gms.net.packet.Packet;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
@@ -14,12 +16,15 @@ import org.gms.util.PacketCreator;
 import org.gms.util.ThreadLocalUtil;
 import org.gms.util.DatabaseConnection;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import soloMapling.beidou.CharacterTestContext;
 import soloMapling.game.context.GameContext;
 import soloMapling.game.context.WorldEpoch;
 import soloMapling.game.execution.ExecutionScope;
 
 import java.awt.Point;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -72,14 +77,14 @@ class NativeMonsterMovementActionsTest {
         when(connection.prepareStatement(anyString())).thenReturn(statement);
         when(statement.executeQuery()).thenReturn(mock(ResultSet.class));
         try (var database = mockStatic(DatabaseConnection.class);
-             var packets = mockStatic(PacketCreator.class)) {
+             var packets = mockStatic(PacketCreator.class, CALLS_REAL_METHODS)) {
             // The native singleton loads global drops once; keep that JDBC collaborator in memory.
             database.when(DatabaseConnection::getConnection).thenReturn(connection);
             MonsterInformationProvider.getInstance();
             var work = scope.acceptWork();
             when(actor.isChangingMaps()).thenReturn(true);
             var pending = NativeMonsterMovementActions.move(server, scene, work, monster,
-                    (short) 1, new Point(5, 0), 50, 2, 1, 100);
+                    (short) 1, new Point(14, -77), 50, -15, new Point(50, -555), 7, 0, 270);
             assertFalse(pending.mapReady());
             assertFalse(pending.dispatched());
             assertFalse(pending.handlerError());
@@ -90,30 +95,53 @@ class NativeMonsterMovementActionsTest {
             // The scene owner completes entry; the movement edge only reads the native readiness fact.
             when(actor.isChangingMaps()).thenReturn(false);
             var result = NativeMonsterMovementActions.move(server, scene, work, monster,
-                    (short) 1, new Point(5, 0), 50, 2, 1, 100);
+                    (short) 1, new Point(14, -77), 50, -15, new Point(50, -555), 7, 0, 270);
 
             assertTrue(result.mapReady());
             assertTrue(result.dispatched());
             assertFalse(result.handlerError());
             assertTrue(result.positionConfirmed());
-            assertEquals(new Point(5, 0), monster.getPosition());
-            verify(map).moveMonster(monster, new Point(5, 0));
+            assertEquals(new Point(14, -77), monster.getPosition());
+            assertEquals(7, monster.getStance());
+            verify(map).moveMonster(monster, new Point(14, -77));
             packets.verify(() -> PacketCreator.moveMonster(eq(501), anyBoolean(), anyInt(), anyInt(), anyInt(),
                     anyInt(), eq(new Point(0, 0)), any(), anyLong()));
+            var output = ArgumentCaptor.forClass(Packet.class);
+            verify(map).broadcastMessage(eq(actor), output.capture(), eq(new Point(0, 0)));
+            var movement = ByteBuffer.wrap(output.getValue().getBytes()).order(ByteOrder.LITTLE_ENDIAN);
+            assertEquals(SendOpcode.MOVE_MONSTER.getValue(), Short.toUnsignedInt(movement.getShort()));
+            assertEquals(501, movement.getInt());
+            movement.position(movement.position() + 7); // movement marker and native activity/skill header
+            assertEquals(0, movement.getShort());
+            assertEquals(0, movement.getShort()); // handler removes the start-position wire offset
+            assertEquals(2, movement.get());
+            assertEquals(1, movement.get());
+            assertEquals(50, movement.getShort());
+            assertEquals(-555, movement.getShort());
+            assertEquals(7, movement.get());
+            assertEquals(0, movement.getShort());
+            assertEquals(0, movement.get());
+            assertEquals(14, movement.getShort());
+            assertEquals(-75, movement.getShort()); // absolute fragment retains destination.y + 2
+            assertEquals(50, movement.getShort());
+            assertEquals(-15, movement.getShort());
+            assertEquals(0, movement.getShort());
+            assertEquals(7, movement.get());
+            assertEquals(270, movement.getShort());
 
             // A transition between initial admission and final dispatch remains a known, unstarted frame.
             when(actor.isChangingMaps()).thenReturn(false, true);
             var notDispatched = NativeMonsterMovementActions.move(server, scene, work, monster,
-                    (short) 2, new Point(10, 0), 50, 2, 1, 100);
+                    (short) 2, new Point(28, -9), 50, 525, null, 7, 0, 270);
             assertFalse(notDispatched.mapReady());
             assertFalse(notDispatched.dispatched());
             assertFalse(notDispatched.handlerError());
-            assertEquals(new Point(5, 0), monster.getPosition());
+            assertEquals(new Point(14, -77), monster.getPosition());
 
             when(actor.isChangingMaps()).thenReturn(false);
             doThrow(new IllegalStateException("native_handler_failure")).when(map).getMapObject(501);
             var failedHandler = NativeMonsterMovementActions.move(server, scene, work, monster,
-                    (short) 3, new Point(10, 0), 50, 2, 1, 100);
+                    (short) 3, new Point(28, -9), 50, 525, null, 7, 0, 270);
             assertTrue(failedHandler.mapReady());
             assertTrue(failedHandler.dispatched());
             assertTrue(failedHandler.handlerError());
@@ -122,8 +150,8 @@ class NativeMonsterMovementActionsTest {
 
             doReturn(null).when(monster).getController();
             assertThrows(NativeActionService.Invalid.class, () -> NativeMonsterMovementActions.move(server, scene,
-                    scope.acceptWork(), monster, (short) 2, new Point(10, 0), 50, 2, 1, 100));
-            assertEquals(new Point(5, 0), monster.getPosition());
+                    scope.acceptWork(), monster, (short) 2, new Point(28, -9), 50, 525, null, 7, 0, 270));
+            assertEquals(new Point(14, -77), monster.getPosition());
         } finally {
             ThreadLocalUtil.removeCurrentClient();
             ExecutionScope.tryBeginWorldStop();

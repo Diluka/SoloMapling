@@ -152,7 +152,7 @@ class SceneRuntimeTest {
         geometry.insert(new Foothold(new Point(-100, 0), new Point(100, 0), 1));
         when(map.getFootholds()).thenReturn(geometry);
         var monster = mock(Monster.class);
-        when(monster.getId()).thenReturn(100101);
+        when(monster.getId()).thenReturn(1210100);
         when(monster.getMap()).thenReturn(map);
         when(monster.getPosition()).thenReturn(new Point(0, 0));
         var changing = new AtomicBoolean(true);

@@ -4,11 +4,13 @@
 
 原生 MCP 与 V2 环境角色的装配在来源绑定后调用 `CharacterRuntime.initializeSceneMembership(Server)`，接入相同的私有 `scene-client` 生命周期模块；场景后台短命令使用该模块作用域及角色原有 lane。正常换图只替换本次入场绑定，接触受击冷却和有界结果保留在角色级。场景组件读取原生 HP、位置、装备、怪物和地物，不维护第二份游戏档案。
 
+换图的新入场ACK不代表旧绑定已排空，旧驱动与运动可能仍持有各自资源。`scene-client` 沿现有16项工作准入提供16项资源额度：当前每项驱动/运动工作至多持有一份资源，并在释放后才退出原工作；清理工作仍使用独立额度及原lane，不在lane内等待旧清理。
+
 | 模块 | 当前源码职责 |
 | --- | --- |
 | `EnvironmentSceneModule` | 复用原生地形和对象视图，供导航、观察和场景驱动读取。 |
 | `CharacterSceneModule` | 每次入场的运动、攻击入口与常驻接触受击；导航保留目标和路线编排。 |
-| `MonsterSceneModule` | 有效控制者协调及三种怪物的有限地面运动策略。 |
+| `MonsterSceneModule` | 有效控制者协调、四种怪物的连续地面活动、原生仇恨追击及1210100跳跃。 |
 | `AbilitySceneModule` | 已适配技能资格、有限命中参数与共同原生执行；职业选招仍归业务模块。 |
 | `PresentationSceneModule` | 合法攻击朝向及真实死亡、恢复姿态，复用原生输出。 |
 
@@ -24,6 +26,6 @@
 
 `scene_snapshot`、`scene_record` 提供无需角色会话的只读场景数据帧和事件记录，可按固定实际地图保存JSON或NDJSON证据。采集只读取已经存在的模拟宿主；字段来源、记录限制与真实停止语义见[场景采集格式](../mcp-acceptance/scene-capture.md)。
 
-详见[客户端行为矩阵](client-behavior-matrix.md)、[怪物资料调查](monster-data-report.md)、[有限怪物驱动](monster-driver.md)和[呈现边界](presentation.md)。环境触发、召唤物和宠物驱动分别由 #315、#316、#317 继续覆盖。
+详见[客户端行为矩阵](client-behavior-matrix.md)、[怪物资料调查](monster-data-report.md)、[有限怪物驱动](monster-driver.md)、[有界怪物冒烟](monster-driver-smoke.md)和[呈现边界](presentation.md)。环境触发、召唤物和宠物驱动分别由 #315、#316、#317 继续覆盖。
 
 本目录描述源码支持范围，实际交付以 #305 及各子项的冻结提交和验收证据为准。真实图形客户端使用部署工作区的 `client/maple` 操作，短暂动作结合原生场景记录与带时间戳的真实画面核对。源码、自动化、隔离交互、实际部署和画面播放分别记录，不能相互代替。

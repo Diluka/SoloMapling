@@ -14,8 +14,9 @@ import java.util.Set;
 public final class SceneMembershipModule implements RuntimeModule {
     public static final String CONTROL = "scene-client";
     public record Config(CharacterRuntime runtime, Server server, GameContext.CharacterRef character) { }
+    // Each admitted driver/motion work owns at most one resource, including bindings still draining.
     public static final ModuleDefinition<Config, SceneMembershipModule> DEFINITION = new ModuleDefinition<>(
-            "scene-client", Set.of(CONTROL), new ExecutionScope.Limits(16, 2, 8, 2),
+            "scene-client", Set.of(CONTROL), new ExecutionScope.Limits(16, 16, 8, 2),
             SceneMembershipModule::new, List.of());
 
     private final CharacterRuntime runtime;
