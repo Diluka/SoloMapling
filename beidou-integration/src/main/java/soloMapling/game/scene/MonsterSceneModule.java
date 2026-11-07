@@ -85,8 +85,8 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         return binding != null && binding.scene().monsters().hasDriver(monster, binding);
     }
 
-    /** Conservative reach of the actual finite driver, including its batched clock and recoil input. */
-    record ContactReach(Rectangle area, String model) { }
+    /** Contact bounds distinguish a known movement envelope from an unknown native-client trajectory. */
+    record ContactReach(Rectangle area, String model, boolean positionUnbounded) { }
 
     ContactReach contactReach(Monster monster, int windowMs) {
         var body = NativeContactDamageActions.contactBody(monster);
@@ -96,8 +96,19 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         // This ordinary-map object has no legal headless input producer and no autonomous native motion loop.
         // Its body still damages a role entering it; jump AI remains unimplemented rather than zero-risk.
         if (monster.getId() == 1210100 && monster.getController() == null && scene.map().getEventInstance() == null
-                && scene.map().getFootholdSpeed() == 1.0f) return new ContactReach(body, "undriven_stationary_body_v1");
-        var owner = SceneRuntimeManager.find(monster.getController());
+                && scene.map().getFootholdSpeed() == 1.0f) return new ContactReach(body, "undriven_stationary_body_v1", false);
+        var controller = monster.getController();
+        int id = monster.getId();
+        // These WZ templates have bodyAttack but no attackN/skillN. Unknown movement can widen
+        // contact exposure without removing the role's shared contact interval or damage bound.
+        if (controller != null && !MonsterControlCoordinator.isHeadless(controller)
+                && MonsterControlCoordinator.canControl(monster, controller)
+                && (id == 100101 || id == 120100 || id == 130101 || id == 1210100)
+                && scene.map().getFootholdSpeed() == 1.0f
+                && !monster.isBuffed(MonsterStatus.SPEED) && !monster.isBuffed(MonsterStatus.DOOM)) {
+            return new ContactReach(body, "native_controller_contact_upper_bound_v1", true);
+        }
+        var owner = SceneRuntimeManager.find(controller);
         if (owner == null || owner.scene() != scene || !hasDriver(monster, owner)) return null;
         var foothold = scene.environment().geometry().findBelow(new Point(position.x, position.y - 1));
         double force = Math.max(0.2, forces.computeIfAbsent(monster.getId(), id -> {
@@ -111,7 +122,7 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         int right = Math.min(Math.max(foothold.getX1(), foothold.getX2()), position.x + radius);
         var first = new Rectangle(body); first.translate(left - position.x, footing(foothold, left) - position.y);
         var last = new Rectangle(body); last.translate(right - position.x, footing(foothold, right) - position.y);
-        return new ContactReach(first.union(last), POLICY_ID);
+        return new ContactReach(first.union(last), POLICY_ID, false);
     }
 
     private boolean hasDriver(Monster monster, SceneActorBinding binding) {
