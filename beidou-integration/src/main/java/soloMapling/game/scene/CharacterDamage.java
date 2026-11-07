@@ -59,8 +59,9 @@ public final class CharacterDamage {
                         .union(new Rectangle(end.x, end.y - 50, 1, 51));
                 var reach = binding.scene().monsters().contactReach(monster, high);
                 if (reach == null) { missing.add("monster_motion_changed_" + monster.getObjectId()); break; }
-                if (!reach.area().intersects(corridor)) continue;
-                possible = possible == null ? reach.area() : possible.union(reach.area());
+                if (!reach.positionUnbounded() && !reach.area().intersects(corridor)) continue;
+                var contactArea = reach.positionUnbounded() ? corridor : reach.area();
+                possible = possible == null ? contactArea : possible.union(contactArea);
                 if (firstPossible < 0) firstPossible = low;
             }
             if (possible == null) continue;

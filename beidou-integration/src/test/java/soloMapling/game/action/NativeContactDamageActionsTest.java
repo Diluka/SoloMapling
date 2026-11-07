@@ -15,6 +15,8 @@ import org.gms.net.packet.Packet;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
+import org.gms.net.server.services.task.channel.OverallService;
+import org.gms.net.server.services.type.ChannelServices;
 import org.gms.net.server.world.World;
 import org.gms.provider.DataProvider;
 import org.gms.provider.DataProviderFactory;
@@ -22,6 +24,7 @@ import org.gms.provider.wz.WZFiles;
 import org.gms.server.life.Monster;
 import org.gms.server.life.MonsterStats;
 import org.gms.server.maps.MapleMap;
+import org.gms.util.PacketCreator;
 import org.gms.util.ThreadLocalUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -324,6 +327,45 @@ class NativeContactDamageActionsTest {
             assertEquals(10, actor.getHp()); assertEquals(50, actor.getMp()); assertEquals(mesos, actor.getMeso());
             assertSame(armor, actor.getInventory(InventoryType.EQUIPPED).getItem((short) -5));
             assertEquals(1, armor.getQuantity());
+
+            var viewer = mock(Character.class);
+            when(viewer.getClient()).thenReturn(mock(Client.class));
+            when(viewer.getMap()).thenReturn(map);
+            when(viewer.isLoggedInWorld()).thenReturn(true);
+            var channel = server.getWorld(0).getChannel(1);
+            when(map.getChannelServer()).thenReturn(channel);
+            when(channel.getServiceAccess(ChannelServices.OVERALL)).thenReturn(mock(OverallService.class));
+            var jumping = new Monster(1210100, original.getStats());
+            jumping.setObjectId(502); jumping.setPosition(new Point(10000, -700)); jumping.setMap(map);
+            var ground = new Monster(100101, original.getStats());
+            ground.setObjectId(503); ground.setPosition(new Point(-10000, 700)); ground.setMap(map);
+            bodies.when(() -> BotMobHitboxProvider.getMobBounds(jumping))
+                    .thenReturn(new Rectangle(9990, -720, 20, 20));
+            bodies.when(() -> BotMobHitboxProvider.getMobBounds(ground))
+                    .thenReturn(new Rectangle(-10010, 680, 20, 20));
+            try (var packets = mockStatic(PacketCreator.class)) {
+                jumping.aggroSwitchController(viewer, false);
+                ground.aggroSwitchController(viewer, false);
+                when(map.getAllMonsters()).thenReturn(List.of(jumping, ground));
+
+                var nativeRisk = damage.estimateIncoming(5000, actor.getPosition());
+                assertEquals(IncomingDamageEstimate.Coverage.SUPPORTED, nativeRisk.coverage());
+                assertEquals(180, nativeRisk.hpLossUpper(), "unknown trajectories share the role's two contact slots");
+                assertEquals(2, nativeRisk.threats().size());
+                assertTrue(nativeRisk.threats().stream().allMatch(threat ->
+                        threat.motionModel().equals("native_controller_contact_upper_bound_v1")));
+                assertEquals(0, damage.estimateIncoming(1000, actor.getPosition()).hpLossUpper());
+                assertSame(viewer, jumping.getController()); assertSame(viewer, ground.getController());
+                assertEquals(1, binding.characterState().contactSnapshot().count());
+                assertEquals(10, actor.getHp()); assertEquals(50, actor.getMp());
+
+                bodies.when(() -> BotMobHitboxProvider.getMobBounds(jumping)).thenReturn(null);
+                when(map.getAllMonsters()).thenReturn(List.of(jumping));
+                var unavailable = damage.estimateIncoming(5000, actor.getPosition());
+                assertEquals(IncomingDamageEstimate.Coverage.UNKNOWN, unavailable.coverage());
+                assertEquals(List.of("uncovered_monster_502"), unavailable.missing());
+                assertSame(viewer, jumping.getController());
+            }
         } finally {
             runtime.beginClose(Optional.empty());
             runtime.whenModulesDrained().toCompletableFuture().get(5, TimeUnit.SECONDS);
