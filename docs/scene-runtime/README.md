@@ -8,7 +8,7 @@
 | --- | --- |
 | `EnvironmentSceneModule` | 复用原生地形和对象视图，供导航、观察和场景驱动读取。 |
 | `CharacterSceneModule` | 每次入场的运动、攻击入口与常驻接触受击；导航保留目标和路线编排。 |
-| `MonsterSceneModule` | 有效控制者协调及三种怪物的有限地面运动策略。 |
+| `MonsterSceneModule` | 有效控制者协调、四种怪物的连续地面活动、原生仇恨追击及1210100跳跃。 |
 | `AbilitySceneModule` | 已适配技能资格、有限命中参数与共同原生执行；职业选招仍归业务模块。 |
 | `PresentationSceneModule` | 合法攻击朝向及真实死亡、恢复姿态，复用原生输出。 |
 
