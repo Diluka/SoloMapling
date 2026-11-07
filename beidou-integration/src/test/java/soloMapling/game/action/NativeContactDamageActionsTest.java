@@ -15,6 +15,8 @@ import org.gms.net.packet.Packet;
 import org.gms.net.server.PlayerStorage;
 import org.gms.net.server.Server;
 import org.gms.net.server.channel.Channel;
+import org.gms.net.server.services.task.channel.OverallService;
+import org.gms.net.server.services.type.ChannelServices;
 import org.gms.net.server.world.World;
 import org.gms.provider.DataProvider;
 import org.gms.provider.DataProviderFactory;
@@ -330,6 +332,9 @@ class NativeContactDamageActionsTest {
             when(viewer.getClient()).thenReturn(mock(Client.class));
             when(viewer.getMap()).thenReturn(map);
             when(viewer.isLoggedInWorld()).thenReturn(true);
+            var channel = server.getWorld(0).getChannel(1);
+            when(map.getChannelServer()).thenReturn(channel);
+            when(channel.getServiceAccess(ChannelServices.OVERALL)).thenReturn(mock(OverallService.class));
             var jumping = new Monster(1210100, original.getStats());
             jumping.setObjectId(502); jumping.setPosition(new Point(10000, -700)); jumping.setMap(map);
             var ground = new Monster(100101, original.getStats());
