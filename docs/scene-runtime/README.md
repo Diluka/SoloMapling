@@ -26,6 +26,6 @@
 
 `scene_snapshot`、`scene_record` 提供无需角色会话的只读场景数据帧和事件记录，可按固定实际地图保存JSON或NDJSON证据。采集只读取已经存在的模拟宿主；字段来源、记录限制与真实停止语义见[场景采集格式](../mcp-acceptance/scene-capture.md)。
 
-详见[客户端行为矩阵](client-behavior-matrix.md)、[怪物资料调查](monster-data-report.md)、[有限怪物驱动](monster-driver.md)和[呈现边界](presentation.md)。环境触发、召唤物和宠物驱动分别由 #315、#316、#317 继续覆盖。
+详见[客户端行为矩阵](client-behavior-matrix.md)、[怪物资料调查](monster-data-report.md)、[有限怪物驱动](monster-driver.md)、[有界怪物冒烟](monster-driver-smoke.md)和[呈现边界](presentation.md)。环境触发、召唤物和宠物驱动分别由 #315、#316、#317 继续覆盖。
 
 本目录描述源码支持范围，实际交付以 #305 及各子项的冻结提交和验收证据为准。真实图形客户端使用部署工作区的 `client/maple` 操作，短暂动作结合原生场景记录与带时间戳的真实画面核对。源码、自动化、隔离交互、实际部署和画面播放分别记录，不能相互代替。
