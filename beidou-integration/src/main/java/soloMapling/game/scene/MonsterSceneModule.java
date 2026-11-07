@@ -98,12 +98,12 @@ public final class MonsterSceneModule implements SceneRuntimeModule {
         if (monster.getId() == 1210100 && monster.getController() == null && scene.map().getEventInstance() == null
                 && scene.map().getFootholdSpeed() == 1.0f) return new ContactReach(body, "undriven_stationary_body_v1", false);
         var controller = monster.getController();
-        int id = monster.getId();
+        int monsterId = monster.getId();
         // These WZ templates have bodyAttack but no attackN/skillN. Unknown movement can widen
         // contact exposure without removing the role's shared contact interval or damage bound.
         if (controller != null && !MonsterControlCoordinator.isHeadless(controller)
                 && MonsterControlCoordinator.canControl(monster, controller)
-                && (id == 100101 || id == 120100 || id == 130101 || id == 1210100)
+                && (monsterId == 100101 || monsterId == 120100 || monsterId == 130101 || monsterId == 1210100)
                 && scene.map().getFootholdSpeed() == 1.0f
                 && !monster.isBuffed(MonsterStatus.SPEED) && !monster.isBuffed(MonsterStatus.DOOM)) {
             return new ContactReach(body, "native_controller_contact_upper_bound_v1", true);
