@@ -77,7 +77,7 @@ class NativeMonsterMovementActionsTest {
         when(connection.prepareStatement(anyString())).thenReturn(statement);
         when(statement.executeQuery()).thenReturn(mock(ResultSet.class));
         try (var database = mockStatic(DatabaseConnection.class);
-             var packets = mockStatic(PacketCreator.class)) {
+             var packets = mockStatic(PacketCreator.class, CALLS_REAL_METHODS)) {
             // The native singleton loads global drops once; keep that JDBC collaborator in memory.
             database.when(DatabaseConnection::getConnection).thenReturn(connection);
             MonsterInformationProvider.getInstance();
@@ -94,8 +94,6 @@ class NativeMonsterMovementActionsTest {
 
             // The scene owner completes entry; the movement edge only reads the native readiness fact.
             when(actor.isChangingMaps()).thenReturn(false);
-            packets.when(() -> PacketCreator.moveMonster(anyInt(), anyBoolean(), anyInt(), anyInt(), anyInt(),
-                    anyInt(), any(), any(), anyLong())).thenCallRealMethod();
             var result = NativeMonsterMovementActions.move(server, scene, work, monster,
                     (short) 1, new Point(14, -77), 50, -15, new Point(50, -555), 7, 0, 270);
 

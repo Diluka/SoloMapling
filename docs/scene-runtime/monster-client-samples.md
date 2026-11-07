@@ -48,6 +48,14 @@ OID `1000000038` 在UTC `05:43:33.528295055` 的同一个转发序列包含下�
 
 ## 画面与追加样本
 
-现有两段PNG录制保留在上述GUI运行目录，实际画面、视野内模板与关键帧仍按专项审查记录追加。受击后的追击/停止、合法攻击后的控制权保持、真人离开后的headless接续、多成员及最后成员离场排空尚未由本报告初稿认证。后续结果须注明对应冻结版本和窗口，不能把不同轮次合并成一次全量通过。
+两段PNG录制已完成只读帧审查，详情及路线原件入口见 [GUI-BASELINE-REPORT.md](/mnt/data/game-servers/beidou-ms/.backups/20261107-311-monster-scene/gui-samples/GUI-BASELINE-REPORT.md)。
+
+- 地面录制的镜头和屋顶角色保持固定，[帧0](/mnt/data/game-servers/beidou-ms/client/runtime/runs/20261107T054033.956479Z/record-normal-ground-client/frame-000000.png) 至 [帧46](/mnt/data/game-servers/beidou-ms/client/runtime/runs/20261107T054033.956479Z/record-normal-ground-client/frame-000046.png) 可见蓝蜗牛、蘑菇仔、红蜗牛的水平位置变化。
+- 猪在 [帧34](/mnt/data/game-servers/beidou-ms/client/runtime/runs/20261107T054033.956479Z/record-normal-ground-client/frame-000034.png) 贴草面，[帧38](/mnt/data/game-servers/beidou-ms/client/runtime/runs/20261107T054033.956479Z/record-normal-ground-client/frame-000038.png) 跃出画面顶边，[帧40](/mnt/data/game-servers/beidou-ms/client/runtime/runs/20261107T054033.956479Z/record-normal-ground-client/frame-000040.png) 清楚腾空并呈跳跃姿态，[帧42](/mnt/data/game-servers/beidou-ms/client/runtime/runs/20261107T054033.956479Z/record-normal-ground-client/frame-000042.png) 回到草面。关键窗口为上海时间13:42:36.930～13:42:38.235；画外部分保留为视野缺口。
+- 原图能识别种类，不能独立辨认OID。该跳跃早于60秒原生窗口，不能与上文OID `1000000038` 拼成同一次轨迹。猪专项录制的帧0/30也已审查，但角色爬楼使镜头上下移动，不能用屏幕Y差计算跳高。
+
+随后尝试接近猪层以采存活单击后的追击。持续身体接触及击退使GUI角色跌落，有限用药和撤离尝试后实际死亡，隔离EXP由4556降至3209；本阶段未发出攻击，追击、到达停止和受击转向仍未覆盖。结论限定为隔离GUI采样路线失败，新增headless驱动另验。角色已正常复活回地图 `100000000`，HP50/883、EXP3209，并正常关闭至 `STOPPED`、容器Pid0；装备及用药变化保留在专项报告中。
+
+合法攻击后的控制权保持、真人离开后的headless接续、多成员及最后成员离场排空尚未由本报告初稿认证。后续结果须注明对应冻结版本和窗口，不能把不同轮次合并成一次全量通过。
 
 有限实现的实际支持、来源与限制见[怪物驱动](monster-driver.md)；静态资料覆盖见[怪物资料调查](monster-data-report.md)。
